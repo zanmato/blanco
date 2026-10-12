@@ -273,6 +273,59 @@ pub struct InboundForeignKey {
     pub constraint_name: Option<String>,
 }
 
+/// One foreign key constraint declared on a table, as listed in the structure
+/// tab. Unlike [`ForeignKeyInfo`], which describes a single column, this keeps
+/// composite keys together and carries the referential actions.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct ForeignKeyConstraint {
+    pub name: String,
+    /// Referencing columns on this table, in key order.
+    pub columns: Vec<String>,
+    /// Schema of the referenced table when the backend has schemas.
+    pub referenced_schema: Option<String>,
+    pub referenced_table: String,
+    /// Referenced columns, paired by position with `columns`.
+    pub referenced_columns: Vec<String>,
+    /// Action as the catalog spells it (`CASCADE`, `NO ACTION`, ...).
+    pub on_update: String,
+    pub on_delete: String,
+}
+
+impl ForeignKeyConstraint {
+    /// Fold catalog rows into constraints. Each row is one key column:
+    /// `(name, referenced_schema, referenced_table, column, referenced_column,
+    /// on_update, on_delete)`, ordered by constraint and then key position, so
+    /// consecutive rows with the same name belong to one constraint. Drivers
+    /// share this so their queries only differ in how they read the catalog.
+    pub fn from_column_rows(rows: &[Vec<Option<String>>]) -> Vec<Self> {
+        let mut constraints: Vec<Self> = Vec::new();
+        for row in rows {
+            let get = |i: usize| row.get(i).cloned().flatten();
+            let (Some(name), Some(referenced_table), Some(column)) = (get(0), get(2), get(3))
+            else {
+                continue;
+            };
+            let referenced_column = get(4).unwrap_or_default();
+            match constraints.last_mut() {
+                Some(last) if last.name == name => {
+                    last.columns.push(column);
+                    last.referenced_columns.push(referenced_column);
+                }
+                _ => constraints.push(Self {
+                    name,
+                    columns: vec![column],
+                    referenced_schema: get(1).filter(|schema| !schema.is_empty()),
+                    referenced_table,
+                    referenced_columns: vec![referenced_column],
+                    on_update: get(5).unwrap_or_else(|| "NO ACTION".to_string()),
+                    on_delete: get(6).unwrap_or_else(|| "NO ACTION".to_string()),
+                }),
+            }
+        }
+        constraints
+    }
+}
+
 /// Information about a database index
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct IndexInfo {
@@ -691,6 +744,16 @@ pub trait Connection: Send + Sync {
         Ok(Vec::new())
     }
 
+    /// Foreign key constraints declared on a table, one entry per constraint.
+    /// Defaults to empty for backends without foreign keys.
+    async fn get_foreign_keys_for_table(
+        &self,
+        _table_name: &str,
+        _schema: Option<&str>,
+    ) -> Result<Vec<ForeignKeyConstraint>, anyhow::Error> {
+        Ok(Vec::new())
+    }
+
     /// Extract the primary table name from a SQL query
     /// Returns None if no table can be extracted (e.g., for complex queries or parsing errors)
     fn extract_table_name_from_query(
@@ -837,7 +900,7 @@ pub trait ConnectionFactory: Send + Sync {
 
 #[cfg(test)]
 mod tests {
-    use super::{ColumnInfo, ForeignKeyInfo};
+    use super::{ColumnInfo, ForeignKeyConstraint, ForeignKeyInfo};
 
     #[test]
     fn foreign_key_from_parts_requires_table_and_column() {
@@ -917,5 +980,55 @@ mod tests {
             ..column("longtext")
         };
         assert_eq!(longtext.display_type(), "longtext");
+    }
+
+    #[test]
+    fn foreign_key_rows_fold_into_composite_constraints() {
+        let row = |values: [Option<&str>; 7]| {
+            values
+                .iter()
+                .map(|v| v.map(str::to_string))
+                .collect::<Vec<_>>()
+        };
+        let rows = vec![
+            row([
+                Some("a_fk"),
+                Some("app"),
+                Some("r"),
+                Some("x"),
+                Some("id"),
+                Some("CASCADE"),
+                None,
+            ]),
+            row([
+                Some("a_fk"),
+                Some("app"),
+                Some("r"),
+                Some("y"),
+                Some("region"),
+                Some("CASCADE"),
+                None,
+            ]),
+            row([
+                Some("b_fk"),
+                Some(""),
+                Some("s"),
+                Some("z"),
+                Some("id"),
+                None,
+                Some("SET NULL"),
+            ]),
+            // Rows without a referenced table are not foreign keys.
+            row([Some("c_fk"), None, None, Some("w"), None, None, None]),
+        ];
+        let constraints = ForeignKeyConstraint::from_column_rows(&rows);
+        assert_eq!(constraints.len(), 2);
+        assert_eq!(constraints[0].columns, vec!["x", "y"]);
+        assert_eq!(constraints[0].referenced_columns, vec!["id", "region"]);
+        assert_eq!(constraints[0].referenced_schema.as_deref(), Some("app"));
+        assert_eq!(constraints[0].on_update, "CASCADE");
+        assert_eq!(constraints[0].on_delete, "NO ACTION");
+        assert_eq!(constraints[1].referenced_schema, None);
+        assert_eq!(constraints[1].on_delete, "SET NULL");
     }
 }

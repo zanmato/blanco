@@ -167,6 +167,17 @@ impl Dialect {
         }
     }
 
+    /// Whether the backend has foreign keys to list in the structure tab.
+    pub fn supports_foreign_keys(&self) -> bool {
+        self.supports_sql() && !matches!(self.0, DatabaseType::ClickHouse)
+    }
+
+    /// Whether foreign keys can be added and dropped in place. SQLite only
+    /// declares them in CREATE TABLE.
+    pub fn supports_foreign_key_ddl(&self) -> bool {
+        self.supports_foreign_keys() && !matches!(self.0, DatabaseType::SQLite)
+    }
+
     // ----- sidebar / editor facts -----
 
     /// Display label for the sidebar folder that groups a connection's primary

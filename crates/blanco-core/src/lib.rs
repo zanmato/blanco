@@ -18,10 +18,10 @@ pub mod write_guard;
 // Re-export main types for convenience
 pub use connection_trait::{
     BatchFailure, BatchOutcome, ColumnInfo, ColumnType, Connection, ConnectionFactory,
-    DatabaseSchemaResult, EntityType, ForeignKeyInfo, FunctionSignatureInfo, InboundForeignKey,
-    IndexInfo, KeyValueResult, ObjectComments, PaginationInfo, QueryResult, QueryableEntity,
-    RedisType, RedisValue, ResultPayload, RoutineKind, TableMetadata, TableSchemaInfo,
-    WriteOperation,
+    DatabaseSchemaResult, EntityType, ForeignKeyConstraint, ForeignKeyInfo, FunctionSignatureInfo,
+    InboundForeignKey, IndexInfo, KeyValueResult, ObjectComments, PaginationInfo, QueryResult,
+    QueryableEntity, RedisType, RedisValue, ResultPayload, RoutineKind, TableMetadata,
+    TableSchemaInfo, WriteOperation,
 };
 
 pub use connection_context::{ConnectionContext, EnvironmentType};

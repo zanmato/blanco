@@ -152,6 +152,66 @@ impl IndexOperation {
     }
 }
 
+/// What happens to referencing rows when the referenced row is updated or
+/// deleted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ReferentialAction {
+    #[default]
+    NoAction,
+    Restrict,
+    Cascade,
+    SetNull,
+    SetDefault,
+}
+
+impl ReferentialAction {
+    pub const ALL: [ReferentialAction; 5] = [
+        ReferentialAction::NoAction,
+        ReferentialAction::Restrict,
+        ReferentialAction::Cascade,
+        ReferentialAction::SetNull,
+        ReferentialAction::SetDefault,
+    ];
+
+    /// The clause keyword, also how catalogs report the action.
+    pub fn sql(&self) -> &'static str {
+        match self {
+            ReferentialAction::NoAction => "NO ACTION",
+            ReferentialAction::Restrict => "RESTRICT",
+            ReferentialAction::Cascade => "CASCADE",
+            ReferentialAction::SetNull => "SET NULL",
+            ReferentialAction::SetDefault => "SET DEFAULT",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ForeignKeyOperation {
+    Create {
+        /// Constraint name; `None` lets the server pick one.
+        name: Option<String>,
+        columns: Vec<String>,
+        /// Schema of the referenced table; `None` means the table's own.
+        referenced_schema: Option<String>,
+        referenced_table: String,
+        referenced_columns: Vec<String>,
+        on_update: ReferentialAction,
+        on_delete: ReferentialAction,
+    },
+    Drop {
+        name: String,
+    },
+}
+
+impl ForeignKeyOperation {
+    pub fn label(&self) -> &'static str {
+        match self {
+            ForeignKeyOperation::Create { .. } => "Create foreign key",
+            ForeignKeyOperation::Drop { .. } => "Drop foreign key",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DdlError {
     /// The backend has no statement for this operation.
@@ -455,6 +515,104 @@ pub fn index_operation_sql(
                 DatabaseType::Redis => {
                     return Err(DdlError::Unsupported("Redis has no indexes".to_string()));
                 }
+            }])
+        }
+    }
+}
+
+/// Statements for `operation` on the foreign keys of `table`.
+pub fn foreign_key_operation_sql(
+    db_type: DatabaseType,
+    schema: Option<&str>,
+    table: &str,
+    operation: &ForeignKeyOperation,
+) -> Result<Vec<String>, DdlError> {
+    let dialect = db_type.dialect();
+    if !dialect.supports_foreign_key_ddl() {
+        return Err(DdlError::Unsupported(match db_type {
+            DatabaseType::SQLite => {
+                "SQLite cannot add or drop a foreign key in place; recreate the table in a query"
+                    .to_string()
+            }
+            _ => format!("{} has no foreign keys", db_type.as_str()),
+        }));
+    }
+    let target = dialect.quote_qualified(schema, table);
+    let column_list = |columns: &[String]| {
+        columns
+            .iter()
+            .map(|column| dialect.quote_identifier(column.trim()))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    match operation {
+        ForeignKeyOperation::Create {
+            name,
+            columns,
+            referenced_schema,
+            referenced_table,
+            referenced_columns,
+            on_update,
+            on_delete,
+        } => {
+            require_name(referenced_table, "referenced table")?;
+            if columns.is_empty() {
+                return Err(DdlError::Invalid(
+                    "a foreign key needs at least one column".to_string(),
+                ));
+            }
+            if columns.len() != referenced_columns.len() {
+                return Err(DdlError::Invalid(
+                    "each column needs one referenced column".to_string(),
+                ));
+            }
+            if columns
+                .iter()
+                .chain(referenced_columns)
+                .any(|column| column.trim().is_empty())
+            {
+                return Err(DdlError::Invalid(
+                    "column name must not be empty".to_string(),
+                ));
+            }
+            if db_type == DatabaseType::MsSql
+                && (*on_update == ReferentialAction::Restrict
+                    || *on_delete == ReferentialAction::Restrict)
+            {
+                return Err(DdlError::Unsupported(
+                    "SQL Server has no RESTRICT; NO ACTION refuses the change the same way"
+                        .to_string(),
+                ));
+            }
+            let mut sql = format!("ALTER TABLE {target} ADD ");
+            if let Some(name) = name.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
+                sql.push_str(&format!("CONSTRAINT {} ", dialect.quote_identifier(name)));
+            }
+            let referenced_schema = referenced_schema
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .or(schema);
+            sql.push_str(&format!(
+                "FOREIGN KEY ({}) REFERENCES {} ({})",
+                column_list(columns),
+                dialect.quote_qualified(referenced_schema, referenced_table.trim()),
+                column_list(referenced_columns)
+            ));
+            // NO ACTION is every backend's default, so leave it out.
+            for (clause, action) in [("UPDATE", on_update), ("DELETE", on_delete)] {
+                if *action != ReferentialAction::NoAction {
+                    sql.push_str(&format!(" ON {clause} {}", action.sql()));
+                }
+            }
+            Ok(vec![sql])
+        }
+        ForeignKeyOperation::Drop { name } => {
+            require_name(name, "foreign key")?;
+            let name = dialect.quote_identifier(name.trim());
+            Ok(vec![match db_type {
+                DatabaseType::MySQL => format!("ALTER TABLE {target} DROP FOREIGN KEY {name}"),
+                _ => format!("ALTER TABLE {target} DROP CONSTRAINT {name}"),
             }])
         }
     }
@@ -768,5 +926,114 @@ mod tests {
             ),
             Err(DdlError::Invalid(_))
         ));
+    }
+
+    #[test]
+    fn foreign_key_operations_per_backend() {
+        let create = |name: Option<&str>, on_update, on_delete| ForeignKeyOperation::Create {
+            name: name.map(str::to_string),
+            columns: vec!["customer_id".to_string(), "region".to_string()],
+            referenced_schema: None,
+            referenced_table: "customers".to_string(),
+            referenced_columns: vec!["id".to_string(), "region".to_string()],
+            on_update,
+            on_delete,
+        };
+        let cascade = create(
+            Some("orders_customer_fk"),
+            ReferentialAction::NoAction,
+            ReferentialAction::Cascade,
+        );
+        assert_eq!(
+            foreign_key_operation_sql(DatabaseType::PostgreSQL, Some("app"), "orders", &cascade),
+            Ok(vec![
+                "ALTER TABLE \"app\".\"orders\" ADD CONSTRAINT \"orders_customer_fk\" FOREIGN KEY (\"customer_id\", \"region\") REFERENCES \"app\".\"customers\" (\"id\", \"region\") ON DELETE CASCADE".to_string()
+            ])
+        );
+        let unnamed = create(
+            None,
+            ReferentialAction::SetNull,
+            ReferentialAction::Restrict,
+        );
+        assert_eq!(
+            foreign_key_operation_sql(DatabaseType::MySQL, None, "orders", &unnamed),
+            Ok(vec![
+                "ALTER TABLE `orders` ADD FOREIGN KEY (`customer_id`, `region`) REFERENCES `customers` (`id`, `region`) ON UPDATE SET NULL ON DELETE RESTRICT".to_string()
+            ])
+        );
+        assert!(matches!(
+            foreign_key_operation_sql(DatabaseType::MsSql, Some("dbo"), "orders", &unnamed),
+            Err(DdlError::Unsupported(_))
+        ));
+        let other_schema = ForeignKeyOperation::Create {
+            name: None,
+            columns: vec!["a".to_string()],
+            referenced_schema: Some("ref".to_string()),
+            referenced_table: "r".to_string(),
+            referenced_columns: vec!["b".to_string()],
+            on_update: ReferentialAction::NoAction,
+            on_delete: ReferentialAction::NoAction,
+        };
+        assert_eq!(
+            foreign_key_operation_sql(DatabaseType::MsSql, Some("dbo"), "t", &other_schema),
+            Ok(vec![
+                "ALTER TABLE [dbo].[t] ADD FOREIGN KEY ([a]) REFERENCES [ref].[r] ([b])"
+                    .to_string()
+            ])
+        );
+
+        let drop = ForeignKeyOperation::Drop {
+            name: "fk".to_string(),
+        };
+        assert_eq!(
+            foreign_key_operation_sql(DatabaseType::MySQL, None, "t", &drop),
+            Ok(vec!["ALTER TABLE `t` DROP FOREIGN KEY `fk`".to_string()])
+        );
+        assert_eq!(
+            foreign_key_operation_sql(DatabaseType::PostgreSQL, Some("app"), "t", &drop),
+            Ok(vec![
+                "ALTER TABLE \"app\".\"t\" DROP CONSTRAINT \"fk\"".to_string()
+            ])
+        );
+        for db_type in [DatabaseType::SQLite, DatabaseType::ClickHouse] {
+            assert!(matches!(
+                foreign_key_operation_sql(db_type, None, "t", &drop),
+                Err(DdlError::Unsupported(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn foreign_key_create_is_validated() {
+        let create = |columns: &[&str], referenced: &[&str], table: &str| {
+            foreign_key_operation_sql(
+                DatabaseType::PostgreSQL,
+                None,
+                "t",
+                &ForeignKeyOperation::Create {
+                    name: None,
+                    columns: columns.iter().map(|c| c.to_string()).collect(),
+                    referenced_schema: None,
+                    referenced_table: table.to_string(),
+                    referenced_columns: referenced.iter().map(|c| c.to_string()).collect(),
+                    on_update: ReferentialAction::NoAction,
+                    on_delete: ReferentialAction::NoAction,
+                },
+            )
+        };
+        assert!(matches!(create(&[], &[], "r"), Err(DdlError::Invalid(_))));
+        assert!(matches!(
+            create(&["a", "b"], &["x"], "r"),
+            Err(DdlError::Invalid(_))
+        ));
+        assert!(matches!(
+            create(&["a"], &[" "], "r"),
+            Err(DdlError::Invalid(_))
+        ));
+        assert!(matches!(
+            create(&["a"], &["x"], " "),
+            Err(DdlError::Invalid(_))
+        ));
+        assert!(create(&["a"], &["x"], "r").is_ok());
     }
 }

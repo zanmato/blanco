@@ -5,7 +5,7 @@ use gpui::{
     Styled, Subscription, WeakEntity, Window, div, prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
-    ActiveTheme, Icon, IconName, Sizable as _, StyledExt, WindowExt as _,
+    ActiveTheme, Icon, IconName, IndexPath, Sizable as _, StyledExt, WindowExt as _,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
     dialog::{DialogAction, DialogClose, DialogFooter},
@@ -14,6 +14,7 @@ use gpui_component::{
     menu::{PopupMenu, PopupMenuItem},
     notification::NotificationType,
     scroll::ScrollableElement,
+    select::{SearchableVec, Select, SelectEvent, SelectState},
     table::{Column, ColumnSort, DataTable, TableDelegate, TableState},
     v_flex,
 };
@@ -21,8 +22,10 @@ use gpui_component::{
 use crate::result_ext::ResultExt as _;
 use crate::status_bar::ActivityReporter;
 use blanco_core::ConnectionContext;
-use blanco_core::ddl::{ColumnOperation, ColumnSpec, IndexOperation};
-use blanco_core::{ColumnInfo, IndexInfo};
+use blanco_core::ddl::{
+    ColumnOperation, ColumnSpec, ForeignKeyOperation, IndexOperation, ReferentialAction,
+};
+use blanco_core::{ColumnInfo, ForeignKeyConstraint, IndexInfo};
 use blanco_ui::{SqlView, SqlViewMessage};
 
 pub struct TableStructureTab {
@@ -31,8 +34,10 @@ pub struct TableStructureTab {
     pub table_name: String,
     columns: Vec<ColumnInfo>,
     indexes: Vec<IndexInfo>,
+    foreign_keys: Vec<ForeignKeyConstraint>,
     columns_table_state: Entity<TableState<ColumnsTableDelegate>>,
     indexes_table_state: Entity<TableState<IndexesTableDelegate>>,
+    foreign_keys_table_state: Entity<TableState<ForeignKeysTableDelegate>>,
     focus_handle: FocusHandle,
     loading: bool,
     error: Option<String>,
@@ -67,7 +72,10 @@ impl TableStructureTab {
         let tab = cx.entity().downgrade();
         let columns_table_state =
             Self::columns_table(columns.clone(), false, tab.clone(), window, cx);
-        let indexes_table_state = Self::indexes_table(indexes.clone(), false, tab, window, cx);
+        let indexes_table_state =
+            Self::indexes_table(indexes.clone(), false, tab.clone(), window, cx);
+        let foreign_keys_table_state =
+            Self::foreign_keys_table(Vec::new(), &context, false, tab, window, cx);
 
         let column_search = cx.new(|cx| InputState::new(window, cx).placeholder("Search columns"));
         let search_subscription =
@@ -88,8 +96,10 @@ impl TableStructureTab {
             table_name,
             columns,
             indexes,
+            foreign_keys: Vec::new(),
             columns_table_state,
             indexes_table_state,
+            foreign_keys_table_state,
             focus_handle: cx.focus_handle(),
             loading: false,
             error: None,
@@ -136,6 +146,29 @@ impl TableStructureTab {
         })
     }
 
+    fn foreign_keys_table(
+        foreign_keys: Vec<ForeignKeyConstraint>,
+        context: &ConnectionContext,
+        editable: bool,
+        tab: WeakEntity<Self>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<TableState<ForeignKeysTableDelegate>> {
+        let delegate =
+            ForeignKeysTableDelegate::new(foreign_keys, context.schema_name.clone(), editable, tab);
+        cx.new(|cx| {
+            TableState::new(delegate, window, cx)
+                .row_selectable(false)
+                .cell_selectable(true)
+                .col_selectable(false)
+        })
+    }
+
+    /// Whether the backend has foreign keys to list. ClickHouse has none.
+    fn shows_foreign_keys(&self) -> bool {
+        self.context.dialect().supports_foreign_keys()
+    }
+
     /// Whether this driver can produce a `CREATE TABLE` statement. MSSQL has no
     /// implementation, so the button is hidden rather than surfacing an error.
     fn supports_table_ddl(&self) -> bool {
@@ -148,8 +181,8 @@ impl TableStructureTab {
         self.context.dialect().supports_column_ddl() && !self.read_only
     }
 
-    /// Fetch columns, indexes and the read-only flag from the server and
-    /// rebuild both grids. Also invalidates the CREATE statement panel so it
+    /// Fetch columns, indexes, foreign keys and the read-only flag from the
+    /// server and rebuild the grids. Also invalidates the CREATE statement panel so it
     /// refetches after a DDL change.
     pub fn reload(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.loading = true;
@@ -161,6 +194,7 @@ impl TableStructureTab {
         let database_name = self.context.database_name.clone();
         let schema_name = self.context.schema_name.clone();
         let table_name = self.table_name.clone();
+        let shows_foreign_keys = self.shows_foreign_keys();
         let activity = ActivityReporter::global(cx).begin(format!(
             "{}: loading structure",
             self.context.connection_name
@@ -183,17 +217,25 @@ impl TableStructureTab {
                 let indexes = connection
                     .get_indexes_for_table(&table_name, schema_name.as_deref())
                     .await?;
-                Ok((columns, indexes, read_only))
+                let foreign_keys = if shows_foreign_keys {
+                    connection
+                        .get_foreign_keys_for_table(&table_name, schema_name.as_deref())
+                        .await?
+                } else {
+                    Vec::new()
+                };
+                Ok((columns, indexes, foreign_keys, read_only))
             })
             .await;
 
             this.update_in(cx, |this, window, cx| {
                 this.loading = false;
                 match result {
-                    Ok((columns, indexes, read_only)) => {
+                    Ok((columns, indexes, foreign_keys, read_only)) => {
                         this.read_only = read_only;
                         this.set_columns(columns, window, cx);
                         this.set_indexes(indexes, window, cx);
+                        this.set_foreign_keys(foreign_keys, window, cx);
                         this.ddl_loaded = false;
                         if this.ddl_visible {
                             this.ddl_visible = false;
@@ -307,6 +349,25 @@ impl TableStructureTab {
         self.indexes = indexes.clone();
         self.indexes_table_state =
             Self::indexes_table(indexes, self.can_edit_structure(), tab, window, cx);
+        cx.notify();
+    }
+
+    fn set_foreign_keys(
+        &mut self,
+        foreign_keys: Vec<ForeignKeyConstraint>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let tab = cx.entity().downgrade();
+        self.foreign_keys = foreign_keys.clone();
+        self.foreign_keys_table_state = Self::foreign_keys_table(
+            foreign_keys,
+            &self.context,
+            self.can_edit_structure(),
+            tab,
+            window,
+            cx,
+        );
         cx.notify();
     }
 
@@ -489,6 +550,34 @@ impl TableStructureTab {
         );
     }
 
+    pub fn confirm_drop_foreign_key(
+        &mut self,
+        row: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(foreign_key) = self.foreign_keys.get(row).cloned() else {
+            return;
+        };
+        let description = format!(
+            "Foreign key \"{}\" will be dropped{}. Rows in \"{}\" are kept, but no longer checked against \"{}\".",
+            foreign_key.name,
+            self.prod_note(),
+            self.table_name,
+            foreign_key.referenced_table
+        );
+        self.confirm_danger(
+            format!("Drop foreign key \"{}\"?", foreign_key.name),
+            description,
+            self.confirm_label("Drop"),
+            DdlRequest::ForeignKey(ForeignKeyOperation::Drop {
+                name: foreign_key.name,
+            }),
+            window,
+            cx,
+        );
+    }
+
     fn confirm_danger(
         &mut self,
         title: String,
@@ -526,6 +615,10 @@ impl TableStructureTab {
                                                 DdlRequest::Index(operation) => {
                                                     this.run_index_operation(operation, window, cx)
                                                 }
+                                                DdlRequest::ForeignKey(operation) => this
+                                                    .run_foreign_key_operation(
+                                                        operation, window, cx,
+                                                    ),
                                             })
                                             .log_err();
                                     }),
@@ -581,6 +674,55 @@ impl TableStructureTab {
         });
     }
 
+    pub fn open_foreign_key_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let column_names: Vec<String> = self.columns.iter().map(|c| c.name.clone()).collect();
+        let context = self.context.clone();
+        let form = cx.new(|cx| ForeignKeyForm::new(context, column_names, window, cx));
+        let title = format!("Add foreign key to \"{}\"", self.table_name);
+        let description = format!(
+            "The foreign key is created immediately{}. Existing rows must already match the referenced table.",
+            self.prod_note()
+        );
+        let confirm_label = self.confirm_label("Create");
+        let is_prod = self.context.is_prod();
+        let this_handle = cx.entity().downgrade();
+
+        window.open_dialog(cx, move |dialog, _, _| {
+            let form = form.clone();
+            let this_handle = this_handle.clone();
+            dialog
+                .title(title.clone())
+                .w(px(520.))
+                .child(div().text_sm().child(description.clone()))
+                .child(form.clone())
+                .footer(
+                    DialogFooter::new()
+                        .child(
+                            DialogClose::new()
+                                .child(Button::new("foreign-key-cancel").label("Cancel").outline()),
+                        )
+                        .child(
+                            DialogAction::new().child(
+                                Button::new("foreign-key-confirm")
+                                    .when(is_prod, |this| this.danger())
+                                    .when(!is_prod, |this| this.primary())
+                                    .label(confirm_label.clone())
+                                    .on_click(move |_, window, cx| {
+                                        let operation = form.read(cx).operation(cx);
+                                        this_handle
+                                            .update(cx, |this, cx| {
+                                                this.run_foreign_key_operation(
+                                                    operation, window, cx,
+                                                );
+                                            })
+                                            .log_err();
+                                    }),
+                            ),
+                        ),
+                )
+        });
+    }
+
     fn run_column_operation(
         &mut self,
         operation: ColumnOperation,
@@ -603,6 +745,21 @@ impl TableStructureTab {
         cx: &mut Context<Self>,
     ) {
         let statements = blanco_core::ddl::index_operation_sql(
+            self.context.db_type,
+            self.context.schema_name.as_deref(),
+            &self.table_name,
+            &operation,
+        );
+        self.run_ddl(operation.label(), statements, window, cx);
+    }
+
+    fn run_foreign_key_operation(
+        &mut self,
+        operation: ForeignKeyOperation,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let statements = blanco_core::ddl::foreign_key_operation_sql(
             self.context.db_type,
             self.context.schema_name.as_deref(),
             &self.table_name,
@@ -686,6 +843,7 @@ impl TableStructureTab {
 enum DdlRequest {
     Column(ColumnOperation),
     Index(IndexOperation),
+    ForeignKey(ForeignKeyOperation),
 }
 
 /// The add/edit column dialog body.
@@ -840,6 +998,316 @@ impl Render for IndexForm {
     }
 }
 
+/// One referencing column and the column it points at.
+struct ColumnPair {
+    column: Entity<SelectState<Vec<String>>>,
+    referenced: Entity<SelectState<Vec<String>>>,
+}
+
+/// The add foreign key dialog body. Referenced tables are the ones in the
+/// tab's own schema; picking one loads its columns into every pair and
+/// prefills them with its primary key.
+struct ForeignKeyForm {
+    context: ConnectionContext,
+    columns: Vec<String>,
+    name: Entity<InputState>,
+    table: Entity<SelectState<SearchableVec<String>>>,
+    referenced_columns: Vec<String>,
+    referenced_primary_key: Vec<String>,
+    pairs: Vec<ColumnPair>,
+    on_update: Entity<SelectState<Vec<String>>>,
+    on_delete: Entity<SelectState<Vec<String>>>,
+    load_error: Option<String>,
+    _subscriptions: Vec<gpui::Subscription>,
+}
+
+impl ForeignKeyForm {
+    fn new(
+        context: ConnectionContext,
+        columns: Vec<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let name = cx.new(|cx| InputState::new(window, cx).placeholder("Generated by the server"));
+        let table = cx.new(|cx| {
+            SelectState::new(SearchableVec::new(Vec::<String>::new()), None, window, cx)
+                .searchable(true)
+        });
+        let actions: Vec<String> = ReferentialAction::ALL
+            .iter()
+            .map(|action| action.sql().to_string())
+            .collect();
+        let on_update =
+            cx.new(|cx| SelectState::new(actions.clone(), Some(IndexPath::new(0)), window, cx));
+        let on_delete = cx.new(|cx| SelectState::new(actions, Some(IndexPath::new(0)), window, cx));
+        let subscription = cx.subscribe_in(
+            &table,
+            window,
+            |this, _, event: &SelectEvent<SearchableVec<String>>, window, cx| {
+                let SelectEvent::Confirm(Some(table)) = event else {
+                    return;
+                };
+                this.load_referenced_columns(table.clone(), window, cx);
+            },
+        );
+        let mut form = Self {
+            context,
+            columns,
+            name,
+            table,
+            referenced_columns: Vec::new(),
+            referenced_primary_key: Vec::new(),
+            pairs: Vec::new(),
+            on_update,
+            on_delete,
+            load_error: None,
+            _subscriptions: vec![subscription],
+        };
+        form.add_pair(window, cx);
+        form.load_tables(window, cx);
+        form
+    }
+
+    fn add_pair(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let position = self.pairs.len();
+        let referenced_ix = self
+            .referenced_primary_key
+            .get(position)
+            .and_then(|key| self.referenced_columns.iter().position(|c| c == key))
+            .map(IndexPath::new);
+        let columns = self.columns.clone();
+        let referenced_columns = self.referenced_columns.clone();
+        self.pairs.push(ColumnPair {
+            column: cx.new(|cx| SelectState::new(columns, None, window, cx)),
+            referenced: cx
+                .new(|cx| SelectState::new(referenced_columns, referenced_ix, window, cx)),
+        });
+        cx.notify();
+    }
+
+    fn remove_pair(&mut self, ix: usize, cx: &mut Context<Self>) {
+        if self.pairs.len() > 1 && ix < self.pairs.len() {
+            self.pairs.remove(ix);
+            cx.notify();
+        }
+    }
+
+    fn load_tables(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let db_service = database::DatabaseService::global(cx).clone();
+        let connection_id = self.context.connection_id;
+        let database_name = self.context.database_name.clone();
+        let schema_name = self.context.schema_name.clone();
+        cx.spawn_in(window, async move |this, cx| {
+            let result = gpui_tokio::Tokio::spawn_result(cx, async move {
+                let connection = db_service
+                    .get_or_create_connection(connection_id, Some(&database_name))
+                    .await?;
+                connection.get_tables(schema_name.as_deref()).await
+            })
+            .await;
+            this.update_in(cx, |this, window, cx| {
+                match result {
+                    Ok(tables) => this.table.update(cx, |select, cx| {
+                        select.set_items(SearchableVec::new(tables), window, cx)
+                    }),
+                    Err(error) => this.load_error = Some(format!("{error:#}")),
+                }
+                cx.notify();
+            })
+            .log_err();
+        })
+        .detach();
+    }
+
+    fn load_referenced_columns(
+        &mut self,
+        table: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let db_service = database::DatabaseService::global(cx).clone();
+        let connection_id = self.context.connection_id;
+        let database_name = self.context.database_name.clone();
+        let schema_name = self.context.schema_name.clone();
+        cx.spawn_in(window, async move |this, cx| {
+            let result = gpui_tokio::Tokio::spawn_result(cx, async move {
+                let connection = db_service
+                    .get_or_create_connection(connection_id, Some(&database_name))
+                    .await?;
+                connection
+                    .get_columns_for_table(&table, schema_name.as_deref())
+                    .await
+            })
+            .await;
+            this.update_in(cx, |this, window, cx| {
+                match result {
+                    Ok(columns) => {
+                        this.load_error = None;
+                        this.referenced_primary_key = columns
+                            .iter()
+                            .filter(|column| column.is_primary_key)
+                            .map(|column| column.name.clone())
+                            .collect();
+                        this.referenced_columns =
+                            columns.into_iter().map(|column| column.name).collect();
+                        // A different table invalidates every earlier pick, so
+                        // reset the pairs to its primary key.
+                        for (position, pair) in this.pairs.iter().enumerate() {
+                            let ix = this
+                                .referenced_primary_key
+                                .get(position)
+                                .and_then(|key| {
+                                    this.referenced_columns.iter().position(|c| c == key)
+                                })
+                                .map(IndexPath::new);
+                            let items = this.referenced_columns.clone();
+                            pair.referenced.update(cx, |select, cx| {
+                                select.set_items(items, window, cx);
+                                select.set_selected_index(ix, window, cx);
+                            });
+                        }
+                    }
+                    Err(error) => this.load_error = Some(format!("{error:#}")),
+                }
+                cx.notify();
+            })
+            .log_err();
+        })
+        .detach();
+    }
+
+    fn operation(&self, cx: &App) -> ForeignKeyOperation {
+        let selected = |select: &Entity<SelectState<Vec<String>>>| {
+            select
+                .read(cx)
+                .selected_value()
+                .cloned()
+                .unwrap_or_default()
+        };
+        let action = |select: &Entity<SelectState<Vec<String>>>| {
+            let selected = selected(select);
+            ReferentialAction::ALL
+                .into_iter()
+                .find(|action| action.sql() == selected)
+                .unwrap_or_default()
+        };
+        let name = self.name.read(cx).value().trim().to_string();
+        ForeignKeyOperation::Create {
+            name: (!name.is_empty()).then_some(name),
+            columns: self
+                .pairs
+                .iter()
+                .map(|pair| selected(&pair.column))
+                .collect(),
+            referenced_schema: None,
+            referenced_table: self
+                .table
+                .read(cx)
+                .selected_value()
+                .cloned()
+                .unwrap_or_default(),
+            referenced_columns: self
+                .pairs
+                .iter()
+                .map(|pair| selected(&pair.referenced))
+                .collect(),
+            on_update: action(&self.on_update),
+            on_delete: action(&self.on_delete),
+        }
+    }
+}
+
+impl Render for ForeignKeyForm {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let can_remove = self.pairs.len() > 1;
+        v_flex()
+            .gap_3()
+            .py_2()
+            .child(labeled("Name", Input::new(&self.name)))
+            .child(
+                v_flex()
+                    .gap_1()
+                    .child(div().text_sm().child("Referenced Table"))
+                    .child(Select::new(&self.table).placeholder("Choose a table")),
+            )
+            .when_some(self.load_error.clone(), |this, error| {
+                this.child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().danger_foreground)
+                        .child(error),
+                )
+            })
+            .child(
+                h_flex()
+                    .gap_2()
+                    .child(div().flex_1().text_sm().child("Column"))
+                    .child(div().flex_1().text_sm().child("Referenced Column"))
+                    .when(can_remove, |this| this.child(div().w(px(24.)))),
+            )
+            .child(
+                v_flex()
+                    .gap_2()
+                    .children(self.pairs.iter().enumerate().map(|(ix, pair)| {
+                        h_flex()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .child(Select::new(&pair.column).placeholder("Column")),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .child(Select::new(&pair.referenced).placeholder("Column")),
+                            )
+                            .when(can_remove, |this| {
+                                this.child(
+                                    Button::new(("foreign-key-remove-pair", ix))
+                                        .ghost()
+                                        .xsmall()
+                                        .icon(IconName::Close)
+                                        .tooltip("Remove Column")
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.remove_pair(ix, cx);
+                                        })),
+                                )
+                            })
+                    })),
+            )
+            .child(
+                h_flex().child(
+                    Button::new("foreign-key-add-pair")
+                        .ghost()
+                        .small()
+                        .icon(IconName::Plus)
+                        .label("Add Column")
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.add_pair(window, cx);
+                        })),
+                ),
+            )
+            .child(
+                h_flex()
+                    .gap_2()
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .gap_1()
+                            .child(div().text_sm().child("On Update"))
+                            .child(Select::new(&self.on_update)),
+                    )
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .gap_1()
+                            .child(div().text_sm().child("On Delete"))
+                            .child(Select::new(&self.on_delete)),
+                    ),
+            )
+    }
+}
+
 fn labeled(label: &'static str, input: Input) -> impl IntoElement {
     v_flex()
         .gap_1()
@@ -923,6 +1391,24 @@ impl Render for TableStructureTab {
                                                     this.open_index_editor(window, cx);
                                                 })),
                                         )
+                                        .when(
+                                            self.shows_foreign_keys(),
+                                            |this| {
+                                                this.child(
+                                                    Button::new("add-foreign-key")
+                                                        .outline()
+                                                        .small()
+                                                        .label("Add Foreign Key")
+                                                        .on_click(cx.listener(
+                                                            |this, _, window, cx| {
+                                                                this.open_foreign_key_editor(
+                                                                    window, cx,
+                                                                );
+                                                            },
+                                                        )),
+                                                )
+                                            },
+                                        )
                                     })
                                     .when(self.read_only, |this| {
                                         this.child(
@@ -999,6 +1485,33 @@ impl Render for TableStructureTab {
                                             ),
                                     ),
                             )
+                            .when(self.shows_foreign_keys(), |this| {
+                                this.child(
+                                    v_flex()
+                                        .flex_grow(1.)
+                                        .flex_basis(px(150.))
+                                        .min_h(px(80.))
+                                        .gap_2()
+                                        .child(
+                                            div()
+                                                .text_lg()
+                                                .font_semibold()
+                                                .text_color(theme.foreground)
+                                                .child("Foreign Keys"),
+                                        )
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .border_1()
+                                                .border_color(theme.border)
+                                                .overflow_hidden()
+                                                .child(
+                                                    DataTable::new(&self.foreign_keys_table_state)
+                                                        .bordered(false),
+                                                ),
+                                        ),
+                                )
+                            })
                             .when(self.ddl_visible, |this| {
                                 let editor_bg = theme
                                     .highlight_theme
@@ -1465,6 +1978,144 @@ impl TableDelegate for IndexesTableDelegate {
             .child(value)
     }
 }
+
+#[derive(Clone)]
+pub struct ForeignKeysTableDelegate {
+    foreign_keys: Vec<ForeignKeyConstraint>,
+    /// The tab's schema; references into it are shown without a prefix.
+    schema: Option<String>,
+    column_defs: Vec<Column>,
+    editable: bool,
+    tab: WeakEntity<TableStructureTab>,
+}
+
+impl ForeignKeysTableDelegate {
+    pub fn new(
+        foreign_keys: Vec<ForeignKeyConstraint>,
+        schema: Option<String>,
+        editable: bool,
+        tab: WeakEntity<TableStructureTab>,
+    ) -> Self {
+        let column = |name: &'static str, width: f32| Column {
+            name: name.into(),
+            width: px(width),
+            ..Default::default()
+        };
+        Self {
+            foreign_keys,
+            schema,
+            column_defs: vec![
+                column("Name", 200.),
+                column("Columns", 150.),
+                column("References", 220.),
+                column("On Update", 100.),
+                column("On Delete", 100.),
+            ],
+            editable,
+            tab,
+        }
+    }
+
+    fn references(&self, foreign_key: &ForeignKeyConstraint) -> String {
+        let table = match foreign_key.referenced_schema.as_deref() {
+            Some(schema) if Some(schema) != self.schema.as_deref() => {
+                format!("{schema}.{}", foreign_key.referenced_table)
+            }
+            _ => foreign_key.referenced_table.clone(),
+        };
+        // SQLite leaves the column out when the reference names only the
+        // table's primary key.
+        if foreign_key.referenced_columns.iter().all(String::is_empty) {
+            table
+        } else {
+            format!("{table}({})", foreign_key.referenced_columns.join(", "))
+        }
+    }
+}
+
+impl TableDelegate for ForeignKeysTableDelegate {
+    fn context_menu(
+        &mut self,
+        (row_ix, _): (usize, usize),
+        menu: PopupMenu,
+        _window: &mut Window,
+        _cx: &mut Context<TableState<Self>>,
+    ) -> PopupMenu {
+        if !self.editable || row_ix >= self.foreign_keys.len() {
+            return menu;
+        }
+        let tab = self.tab.clone();
+        menu.item(
+            PopupMenuItem::new("Drop Foreign Key").on_click(move |_, window, cx| {
+                tab.update(cx, |tab, cx| {
+                    tab.confirm_drop_foreign_key(row_ix, window, cx)
+                })
+                .log_err();
+            }),
+        )
+    }
+
+    fn columns_count(&self, _: &App) -> usize {
+        self.column_defs.len()
+    }
+
+    fn rows_count(&self, _: &App) -> usize {
+        self.foreign_keys.len()
+    }
+
+    fn column(&self, col_ix: usize, _: &App) -> Column {
+        self.column_defs[col_ix].clone()
+    }
+
+    fn render_th(
+        &mut self,
+        col_ix: usize,
+        _window: &mut Window,
+        cx: &mut Context<TableState<Self>>,
+    ) -> impl IntoElement {
+        let col = &self.column_defs[col_ix];
+        div()
+            .h_full()
+            .flex()
+            .items_center()
+            .px_2()
+            .font_family(cx.theme().mono_font_family.clone())
+            .text_size(px(12.))
+            .child(col.name.clone())
+    }
+
+    fn render_td(
+        &mut self,
+        row_ix: usize,
+        col_ix: usize,
+        _window: &mut Window,
+        cx: &mut Context<TableState<Self>>,
+    ) -> impl IntoElement {
+        let foreign_key = &self.foreign_keys[row_ix];
+        let value = match col_ix {
+            0 => foreign_key.name.clone(),
+            1 => foreign_key.columns.join(", "),
+            2 => self.references(foreign_key),
+            3 => foreign_key.on_update.clone(),
+            4 => foreign_key.on_delete.clone(),
+            _ => String::new(),
+        };
+
+        div()
+            .h_full()
+            .flex()
+            .items_center()
+            .px_2()
+            .font_family(cx.theme().mono_font_family.clone())
+            .text_size(px(12.))
+            .text_color(cx.theme().foreground)
+            .child(value)
+    }
+}
+
+#[cfg(test)]
+#[path = "table_structure_test.rs"]
+mod foreign_key_tests;
 
 #[cfg(test)]
 mod tests {

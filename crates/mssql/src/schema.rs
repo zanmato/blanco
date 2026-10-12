@@ -120,6 +120,38 @@ ORDER BY i.name
     )
 }
 
+/// One row per foreign key column of `table_name`, in the shape
+/// `ForeignKeyConstraint::from_column_rows` reads.
+pub fn foreign_keys_for_table_sql(table_name: &str, schema: Option<&str>) -> String {
+    let schema_filter = match schema {
+        Some(s) => format!("AND SCHEMA_NAME(t.schema_id) = '{}'", s.replace('\'', "''")),
+        None => String::new(),
+    };
+    format!(
+        r#"
+SELECT
+    fk.name,
+    SCHEMA_NAME(rt.schema_id),
+    rt.name,
+    pc.name,
+    rc.name,
+    REPLACE(fk.update_referential_action_desc, '_', ' '),
+    REPLACE(fk.delete_referential_action_desc, '_', ' ')
+FROM sys.foreign_keys fk
+JOIN sys.foreign_key_columns fkc ON fkc.constraint_object_id = fk.object_id
+JOIN sys.tables t ON t.object_id = fk.parent_object_id
+JOIN sys.tables rt ON rt.object_id = fk.referenced_object_id
+JOIN sys.columns pc ON pc.object_id = fkc.parent_object_id AND pc.column_id = fkc.parent_column_id
+JOIN sys.columns rc ON rc.object_id = fkc.referenced_object_id AND rc.column_id = fkc.referenced_column_id
+WHERE t.name = '{table}'
+{schema_filter}
+ORDER BY fk.name, fkc.constraint_column_id
+"#,
+        table = table_name.replace('\'', "''"),
+        schema_filter = schema_filter,
+    )
+}
+
 pub fn database_schema_paginated_sql(table_names: Option<&str>, limit: i64, offset: i64) -> String {
     let name_filter = match table_names {
         Some(names) => {
