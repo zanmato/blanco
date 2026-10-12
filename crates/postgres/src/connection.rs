@@ -6,7 +6,7 @@ mod types;
 pub use types::{PgConnectionKey, PgServerKey, PostgresSshConfig, QueryParam};
 
 use anyhow::Result;
-use blanco_core::Connection;
+use blanco_core::{ColumnType, Connection};
 use smol::lock::RwLock;
 use sqlx::Row;
 use sqlx::postgres::PgPoolOptions;
@@ -215,6 +215,65 @@ impl PostgresConnection {
             .collect();
 
         Ok(tables)
+    }
+
+    /// Type the PostGIS columns of a simple query result. sqlx only looks a
+    /// type up for a prepared statement, so `raw_sql` reports an extension
+    /// type such as `geometry` as `?` with its OID, and its values arrive as
+    /// the hex EWKB PostGIS writes as text. `column_oids` holds the OID of
+    /// each column sqlx left unnamed. A failed lookup leaves the result as
+    /// it is.
+    pub(crate) async fn type_postgis_columns(
+        pool: &sqlx::PgPool,
+        column_oids: &[Option<u32>],
+        column_types: &mut [ColumnType],
+        raw_column_types: &mut [String],
+        rows: &mut [Vec<Option<String>>],
+    ) {
+        let oids: Vec<i64> = column_oids
+            .iter()
+            .flatten()
+            .map(|oid| i64::from(*oid))
+            .collect();
+        if oids.is_empty() {
+            return;
+        }
+        let names = match sqlx::query_as::<_, (i64, String)>(
+            "SELECT oid::int8, typname::text FROM pg_catalog.pg_type WHERE oid::int8 = ANY($1)",
+        )
+        .bind(&oids)
+        .fetch_all(pool)
+        .await
+        {
+            Ok(names) => names.into_iter().collect::<HashMap<i64, String>>(),
+            Err(error) => {
+                tracing::warn!("Could not name the types of unnamed columns: {error}");
+                return;
+            }
+        };
+        for (column, oid) in column_oids.iter().enumerate() {
+            let Some(name) = oid.and_then(|oid| names.get(&i64::from(oid))) else {
+                continue;
+            };
+            if Self::map_postgres_type(name) != ColumnType::Geometry {
+                continue;
+            }
+            if let Some(column_type) = column_types.get_mut(column) {
+                *column_type = ColumnType::Geometry;
+            }
+            if let Some(raw_column_type) = raw_column_types.get_mut(column) {
+                *raw_column_type = name.clone();
+            }
+            for value in rows.iter_mut().filter_map(|row| row.get_mut(column)) {
+                if let Some(ewkt) = value
+                    .as_deref()
+                    .and_then(blanco_core::binary::decode_lenient)
+                    .and_then(|ewkb| blanco_core::geometry::ewkb_to_ewkt(&ewkb))
+                {
+                    *value = Some(ewkt);
+                }
+            }
+        }
     }
 
     /// Resolve OIDs to names using batch query for performance

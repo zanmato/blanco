@@ -13,6 +13,7 @@ pub(crate) fn should_quote_value(column_type: &ColumnType) -> bool {
             | ColumnType::Json
             | ColumnType::Array
             | ColumnType::Binary
+            | ColumnType::Geometry
             | ColumnType::Unknown
     )
 }

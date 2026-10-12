@@ -42,6 +42,7 @@ impl PostgresConnection {
         let mut columns: Vec<String> = Vec::new();
         let mut column_types: Vec<ColumnType> = Vec::new();
         let mut raw_column_types: Vec<String> = Vec::new();
+        let mut column_oids: Vec<Option<u32>> = Vec::new();
         let mut rows: Vec<Vec<Option<String>>> = Vec::new();
         let mut rows_affected: u64 = 0;
 
@@ -69,6 +70,7 @@ impl PostgresConnection {
                             .unzip();
                         column_types = types;
                         raw_column_types = raw_types;
+                        column_oids = unnamed_column_oids(&row);
                     }
 
                     // Convert row to strings immediately to avoid memory doubling
@@ -87,6 +89,15 @@ impl PostgresConnection {
                 }
             }
         }
+        drop(results);
+        Self::type_postgis_columns(
+            pool,
+            &column_oids,
+            &mut column_types,
+            &mut raw_column_types,
+            &mut rows,
+        )
+        .await;
 
         Ok(QueryResult {
             columns,
@@ -159,6 +170,7 @@ struct PgStatementAcc {
     rows: Vec<Vec<Option<String>>>,
     rows_affected: u64,
     oids_to_resolve: Vec<(usize, usize, i32)>,
+    column_oids: Vec<Option<u32>>,
 }
 
 impl PgStatementAcc {
@@ -179,6 +191,7 @@ impl PgStatementAcc {
                 .unzip();
             self.column_types = types;
             self.raw_column_types = raw_types;
+            self.column_oids = unnamed_column_oids(row);
         }
 
         let row_idx = self.rows.len();
@@ -208,6 +221,18 @@ impl PgStatementAcc {
         pool: &sqlx::PgPool,
         conn: &PostgresConnection,
     ) -> Result<QueryResult> {
+        PostgresConnection::type_postgis_columns(
+            pool,
+            &self.column_oids,
+            &mut self.column_types,
+            &mut self.raw_column_types,
+            &mut self.rows,
+        )
+        .await;
+        // Hex EWKB is no OID.
+        let column_types = &self.column_types;
+        self.oids_to_resolve
+            .retain(|(_, col_idx, _)| column_types.get(*col_idx) == Some(&ColumnType::Unknown));
         if !self.oids_to_resolve.is_empty() {
             let unique_oids: Vec<i32> = self
                 .oids_to_resolve
@@ -237,4 +262,20 @@ impl PgStatementAcc {
             table_columns: None,
         })
     }
+}
+
+/// The OID of each column of `row` that sqlx could not name, which it only
+/// does for prepared statements.
+fn unnamed_column_oids(row: &sqlx::postgres::PgRow) -> Vec<Option<u32>> {
+    row.columns()
+        .iter()
+        .map(|column| {
+            let type_info = column.type_info();
+            if type_info.name() == "?" {
+                type_info.oid().map(|oid| oid.0)
+            } else {
+                None
+            }
+        })
+        .collect()
 }

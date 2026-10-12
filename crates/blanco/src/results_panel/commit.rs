@@ -32,12 +32,14 @@ impl ResultsPanel {
         // First, commit any currently editing cell
         self.finalize_active_cell_edit(cx);
 
-        // Invalid JSON for a JSON column is refused by the server anyway; say
-        // which cell it is before sending anything.
+        // Invalid JSON for a JSON column or WKT for a geometry column is
+        // refused by the server anyway; say which cell it is before sending
+        // anything.
         let delegate = self.table_state.read(cx).delegate();
         if let Some(problem) = delegate
             .invalid_json_edit()
             .or_else(|| delegate.invalid_binary_edit())
+            .or_else(|| delegate.invalid_geometry_edit())
         {
             window.push_notification((NotificationType::Error, SharedString::from(problem)), cx);
             return;

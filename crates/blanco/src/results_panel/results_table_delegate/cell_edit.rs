@@ -6,7 +6,7 @@ use gpui_component::table::TableState;
 use super::{ResultsTableDelegate, results_settings};
 use crate::results_panel::ResultsPanel;
 use crate::results_panel::binary_viewer::{BinaryViewer, BinaryViewerEvent};
-use crate::results_panel::cell_edit_state::{CellInput, ChangeType, TableChange};
+use crate::results_panel::cell_edit_state::{CellInput, ChangeType, GeometryPreview, TableChange};
 use crate::results_panel::compare::pretty_json_or_original;
 use crate::results_panel::date_time_picker::{DateTimePicker, DateTimePickerEvent};
 use crate::results_panel::json_text::{is_json_document, json_error, minify_json};
@@ -35,7 +35,7 @@ impl ResultsTableDelegate {
             return None;
         }
 
-        if let Some(new_value) = self.edit_state.edited_values.get(&(row, col)).cloned() {
+        if let Some(mut new_value) = self.edit_state.edited_values.get(&(row, col)).cloned() {
             // Committing every pending edit walks cells that have no editor
             // open, and those keep the kind they were committed with.
             if self.edit_state.is_editing(row, col) {
@@ -46,6 +46,18 @@ impl ResultsTableDelegate {
                 }
             } else if new_value.is_none() {
                 self.edit_state.expression_cells.remove(&(row, col));
+            }
+
+            if self.column_types.get(col) == Some(&ColumnType::Geometry)
+                && !self.edit_state.is_expression(row, col)
+                && let Some(edited) = new_value.as_deref()
+                && let Some(Some(original)) = self.edit_state.original_values.get(&(row, col))
+                && let Some(with_srid) = blanco_core::geometry::carry_srid(edited, original)
+            {
+                self.edit_state
+                    .edited_values
+                    .insert((row, col), Some(with_srid.clone()));
+                new_value = Some(with_srid);
             }
 
             // Get the original value
@@ -147,7 +159,8 @@ impl ResultsTableDelegate {
             return;
         };
         edit_state.editing_as_expression = !edit_state.editing_as_expression;
-        edit_state.edited_values.insert(cell, Some(text));
+        edit_state.edited_values.insert(cell, Some(text.clone()));
+        state.delegate_mut().recheck_expanded_text(&text);
         state.refresh(cx);
         cx.notify();
     }
@@ -201,11 +214,50 @@ impl ResultsTableDelegate {
         }
     }
 
-    /// Recheck the expanded JSON after an edit.
-    pub(crate) fn recheck_expanded_json(&mut self, text: &str) {
+    /// Recheck the expanded JSON, or the GeoJSON of an expanded geometry,
+    /// after an edit.
+    pub(crate) fn recheck_expanded_text(&mut self, text: &str) {
         if self.edit_state.expanded_as_json {
             self.edit_state.json_error = json_error(text);
         }
+        if let Some((row, col)) = self.edit_state.expanded_cell
+            && self.column_types.get(col) == Some(&ColumnType::Geometry)
+        {
+            self.edit_state.geometry_preview = self
+                .expands_as_geometry(row, col)
+                .then(|| GeometryPreview::of(text))
+                .flatten();
+        }
+    }
+
+    /// Whether an expanded cell shows the GeoJSON of its WKT: a geometry
+    /// column, unless the text is SQL for the server.
+    pub(crate) fn expands_as_geometry(&self, row_ix: usize, col_ix: usize) -> bool {
+        self.column_types.get(col_ix) == Some(&ColumnType::Geometry)
+            && !self.edit_state.editing_as_expression
+            && !self.edit_state.is_expression(row_ix, col_ix)
+    }
+
+    /// Why an edit pending for a geometry column is not a geometry PostGIS
+    /// reads, so it can be fixed before it is sent.
+    pub fn invalid_geometry_edit(&self) -> Option<String> {
+        let mut cells: Vec<&(usize, usize)> = self.edit_state.edited_values.keys().collect();
+        cells.sort();
+        cells.into_iter().find_map(|&(row, col)| {
+            if self.column_types.get(col) != Some(&ColumnType::Geometry)
+                || self.edit_state.expression_cells.contains(&(row, col))
+            {
+                return None;
+            }
+            let text = self.edit_state.edited_values.get(&(row, col))?.as_deref()?;
+            let error = blanco_core::geometry::edit_error(text)?;
+            let column = self
+                .columns
+                .get(col)
+                .map(|column| column.name.to_string())
+                .unwrap_or_else(|| format!("column {}", col + 1));
+            Some(format!("Row {}, {column}: invalid WKT: {error}", row + 1))
+        })
     }
 
     /// Why an edit pending for a JSON column is not valid JSON, naming the row
@@ -525,6 +577,7 @@ impl ResultsTableDelegate {
         }
         state.delegate_mut().edit_state.expanded_as_json = false;
         state.delegate_mut().edit_state.json_error = None;
+        state.delegate_mut().edit_state.geometry_preview = None;
 
         // Recreate the state in single-line mode and subscribe to events
         let new_input = cx.new(|cx| InputState::new(window, cx).default_value(current_text));
@@ -591,10 +644,16 @@ impl ResultsTableDelegate {
         let is_json = is_json
             || (state.delegate().column_types.get(col_ix) == Some(&ColumnType::Text)
                 && is_json_document(&current_text));
+        let geometry_preview = state
+            .delegate()
+            .expands_as_geometry(row_ix, col_ix)
+            .then(|| GeometryPreview::of(&current_text))
+            .flatten();
         {
             let edit_state = &mut state.delegate_mut().edit_state;
             edit_state.expanded_as_json = is_json;
             edit_state.json_error = is_json.then(|| json_error(&current_text)).flatten();
+            edit_state.geometry_preview = geometry_preview;
         }
 
         // Recreate the state as a multi-line editor

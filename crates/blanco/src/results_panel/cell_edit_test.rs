@@ -1427,3 +1427,115 @@ async fn test_short_binary_cell_edits_inline_as_hex(cx: &mut TestAppContext) {
         .expect("half a byte is refused");
     assert!(problem.contains("Row 2, body"), "{problem}");
 }
+
+/// A geometry cell reads as WKT, a point as its coordinates. Expanded, it
+/// shows the GeoJSON of its WKT, flags WKT that does not parse, and WKT typed
+/// without an SRID keeps the one of the value it replaces. The harness is
+/// SQLite, so the column is typed as a geometry by hand.
+#[gpui::test]
+async fn test_geometry_cell_shows_wkt_and_geojson(cx: &mut TestAppContext) {
+    use crate::results_panel::cell_edit_state::GeometryPreview;
+    use crate::results_panel::results_table_delegate::results_settings;
+    use blanco_core::ColumnType;
+
+    let harness = TestHarness::new(cx);
+    let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+    cx.executor().allow_parking();
+
+    for sql in [
+        "CREATE TABLE places (id INTEGER PRIMARY KEY, shape TEXT)",
+        "INSERT INTO places (id, shape) VALUES (1, 'SRID=4326;POINT(18.07 59.33)')",
+        "SELECT * FROM places",
+    ] {
+        set_editor_text(&harness, sql, &mut cx);
+        run_query(&harness, &mut cx);
+        wait_for_query(&harness, &mut cx).await;
+    }
+    let results_panel = harness.editor_panel.read_with(&cx, |panel, _| {
+        panel
+            .active_query_tab()
+            .expect("query tab")
+            .results_panel
+            .clone()
+    });
+    let table_state = results_panel.read_with(&cx, |panel, _| panel.table_state().clone());
+    table_state.update(&mut cx, |state, _| {
+        state.delegate_mut().column_types[1] = ColumnType::Geometry;
+    });
+
+    let shown = table_state.read_with(&cx, |state, cx| {
+        let delegate = state.delegate();
+        [
+            delegate.display_value(1, "SRID=4326;POINT(18.07 59.33)", &results_settings(cx)),
+            delegate.display_value(1, "SRID=4326;LINESTRING(0 0,1 1)", &results_settings(cx)),
+        ]
+    });
+    assert_eq!(shown, ["18.07, 59.33", "LINESTRING(0 0,1 1)"]);
+
+    results_panel.update_in(&mut cx, |panel, window, cx| {
+        panel.start_cell_edit(0, 1, window, cx);
+    });
+    table_state.update_in(&mut cx, |state, window, cx| {
+        ResultsTableDelegate::handle_maximize(state, 0, 1, false, window, cx);
+    });
+    cx.run_until_parked();
+
+    let (editor, preview) = table_state.read_with(&cx, |state, _| {
+        let edit_state = &state.delegate().edit_state;
+        match edit_state.get_editing_input() {
+            Some(CellInput::Expanded(editor)) => (editor, edit_state.geometry_preview.clone()),
+            _ => panic!("maximize opens the expanded editor"),
+        }
+    });
+    assert_eq!(
+        editor.read_with(&cx, |editor, _| editor.text().to_string()),
+        "SRID=4326;POINT(18.07 59.33)"
+    );
+    let Some(GeometryPreview::GeoJson(geojson)) = preview else {
+        panic!("a point shows its GeoJSON, got {preview:?}");
+    };
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&geojson).ok(),
+        Some(serde_json::json!({"type": "Point", "coordinates": [18.07, 59.33]}))
+    );
+
+    editor.update_in(&mut cx, |editor, window, cx| {
+        editor.replace_all("POINT(1", window, cx);
+    });
+    cx.run_until_parked();
+    assert!(
+        matches!(
+            table_state.read_with(&cx, |state, _| state
+                .delegate()
+                .edit_state
+                .geometry_preview
+                .clone()),
+            Some(GeometryPreview::Invalid(_))
+        ),
+        "invalid WKT is flagged while typing"
+    );
+    let problem = table_state
+        .read_with(&cx, |state, _| state.delegate().invalid_geometry_edit())
+        .expect("invalid WKT is refused before it is sent");
+    assert!(
+        problem.starts_with("Row 1, shape: invalid WKT"),
+        "{problem}"
+    );
+
+    editor.update_in(&mut cx, |editor, window, cx| {
+        editor.replace_all("POINT(5 6)", window, cx);
+    });
+    cx.run_until_parked();
+    results_panel.update(&mut cx, |panel, cx| panel.finalize_active_cell_edit(cx));
+    cx.run_until_parked();
+    assert_eq!(
+        table_state.read_with(&cx, |state, _| state.delegate().invalid_geometry_edit()),
+        None
+    );
+    assert_eq!(
+        results_panel.read_with(&cx, |panel, cx| panel.preview_pending_sql(cx)),
+        vec![
+            r#"UPDATE "places" SET "shape" = 'SRID=4326;POINT(5 6)' WHERE "id" = '1'"#.to_string()
+        ]
+    );
+}
