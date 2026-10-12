@@ -170,6 +170,27 @@ impl AppDatabase {
         .await
     }
 
+    /// Store the tabs' order: each `(id, position)` in one transaction, so a
+    /// reload never sees half a reorder.
+    pub async fn set_query_tab_positions(
+        &self,
+        positions: Vec<(i64, i32)>,
+    ) -> Result<(), sqlx::Error> {
+        let pool = self.pool();
+        self.run(async move {
+            let mut transaction = pool.begin().await?;
+            for (id, position) in positions {
+                sqlx::query("UPDATE query_tabs SET position = ? WHERE id = ?")
+                    .bind(position)
+                    .bind(id)
+                    .execute(&mut *transaction)
+                    .await?;
+            }
+            transaction.commit().await
+        })
+        .await
+    }
+
     pub async fn delete_query_tab(&self, id: i64) -> Result<(), sqlx::Error> {
         let pool = self.pool();
         self.run(async move {

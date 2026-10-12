@@ -1,9 +1,10 @@
 use blanco_core::RoutineKind;
 use blanco_ui::{IconName, SqlViewMessage, Tab, TabBar};
 use gpui::{
-    AnyElement, App, ClickEvent, Context, FocusHandle, Focusable, FontWeight, InteractiveElement,
-    IntoElement, ParentElement, Render, Styled, WeakEntity, Window, div, prelude::FluentBuilder,
-    px, rems,
+    AnyElement, App, AppContext as _, ClickEvent, Context, FocusHandle, Focusable, FontWeight,
+    InteractiveElement, IntoElement, MouseButton, ParentElement, Render, SharedString,
+    StatefulInteractiveElement as _, Styled, WeakEntity, Window, div, prelude::FluentBuilder, px,
+    rems,
 };
 use gpui_component::{
     ActiveTheme, Disableable as _, Icon, Sizable, WindowExt as _,
@@ -11,8 +12,10 @@ use gpui_component::{
     dialog::{DialogAction, DialogClose, DialogFooter},
     h_flex,
     input::Editor,
+    menu::PopupMenuItem,
     popover::{Popover, PopoverState},
     resizable::{resizable_panel, v_resizable},
+    tooltip::Tooltip,
     v_flex,
 };
 
@@ -133,6 +136,11 @@ impl EditorPanel {
         let last_run_at = tab.connection_tab().and_then(|tab| tab.last_run_at);
         // Mirror the tab strip: the last remaining tab cannot be closed.
         let closable = self.tabs.len() > 1;
+        let tooltip = Self::tab_tooltip(tab, cx);
+        let dragged = DraggedTab {
+            ix,
+            label: tab.title(cx).into(),
+        };
         self.render_tab_bar_item_inner(ix, tab, cx)
             .when_some(last_run_at, |this, timestamp| {
                 this.menu_detail(crate::time_format::format_relative(timestamp))
@@ -141,6 +149,108 @@ impl EditorPanel {
                 let close = cx.listener(|this, index: &usize, _, cx| this.close_tab(*index, cx));
                 this.on_close(move |index, _, window, cx| close(index, window, cx))
             })
+            .when(closable, |this| {
+                this.on_mouse_down(
+                    MouseButton::Middle,
+                    cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.close_tab(ix, cx);
+                    }),
+                )
+            })
+            .when_some(tooltip, |this, tooltip| {
+                this.tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
+            })
+            .on_drag(dragged, |dragged, _, _, cx| {
+                cx.stop_propagation();
+                cx.new(|_| dragged.clone())
+            })
+            // A tab dragged rightwards lands after the one it is dropped on.
+            .drag_over::<DraggedTab>(move |style, dragged, _, cx| {
+                if dragged.ix < ix {
+                    style.border_r_2()
+                } else {
+                    style.border_l_2()
+                }
+                .border_color(cx.theme().drag_border)
+            })
+            .on_drop(cx.listener(move |this, dragged: &DraggedTab, _, cx| {
+                this.move_tab(dragged.ix, ix, cx);
+            }))
+            .context_menu(self.tab_context_menu(ix, cx))
+    }
+
+    /// The tab's right-click menu.
+    fn tab_context_menu(
+        &self,
+        ix: usize,
+        cx: &mut Context<Self>,
+    ) -> impl Fn(
+        gpui_component::menu::PopupMenu,
+        &mut Window,
+        &mut Context<gpui_component::menu::PopupMenu>,
+    ) -> gpui_component::menu::PopupMenu
+    + 'static {
+        let panel = cx.entity().downgrade();
+        let pinned = self.is_pinned(ix);
+        let can_duplicate = self.can_duplicate_tab(ix);
+        let closable = self.tabs.len() > 1;
+        let has_others = (self.pinned_count..self.tabs.len()).any(|other| other != ix);
+        let has_right = (ix + 1).max(self.pinned_count) < self.tabs.len();
+        move |menu, _, _| {
+            let item = |label: &'static str,
+                        enabled: bool,
+                        action: fn(
+                &mut EditorPanel,
+                usize,
+                &mut Window,
+                &mut Context<EditorPanel>,
+            )| {
+                let panel = panel.clone();
+                PopupMenuItem::new(label)
+                    .disabled(!enabled)
+                    .on_click(move |_, window, cx| {
+                        panel
+                            .update(cx, |panel, cx| action(panel, ix, window, cx))
+                            .log_err();
+                    })
+            };
+            menu.item(item("Duplicate", can_duplicate, |panel, ix, window, cx| {
+                panel.duplicate_tab(ix, window, cx)
+            }))
+            .item(item(
+                if pinned { "Unpin" } else { "Pin" },
+                true,
+                |panel, ix, window, cx| panel.toggle_pin(ix, window, cx),
+            ))
+            .separator()
+            .item(item("Close", closable, |panel, ix, _, cx| {
+                panel.close_tab(ix, cx)
+            }))
+            .item(item("Close Others", has_others, |panel, ix, _, cx| {
+                panel.close_other_tabs(ix, cx)
+            }))
+            .item(item("Close to the Right", has_right, |panel, ix, _, cx| {
+                panel.close_tabs_to_the_right(ix, cx)
+            }))
+        }
+    }
+
+    /// Where the tab's data lives: the qualified table for a structure tab,
+    /// the connection and database (and schema) for other tabs on one.
+    fn tab_tooltip(tab: &TabType, cx: &App) -> Option<SharedString> {
+        let context = tab.context(cx)?;
+        let mut path = vec![context.database_name.clone()];
+        path.extend(
+            context
+                .schema_name
+                .clone()
+                .filter(|schema| !schema.is_empty()),
+        );
+        if let TabType::TableStructure(structure) = tab {
+            path.push(structure.read(cx).table_name.clone());
+        }
+        Some(format!("{} · {}", context.connection_name, path.join(".")).into())
     }
 
     /// The icon that tells the tab kinds apart in the strip.
@@ -221,8 +331,18 @@ impl EditorPanel {
                         this.child(Self::environment_badge(env_type, cx))
                     })
                 })
-                .when(show_close_button, |this| {
-                    this.child(self.close_tab_button(("close-tab", ix), ix, cx))
+                .map(|this| {
+                    if self.is_pinned(ix) {
+                        this.child(
+                            Icon::new(IconName::Pin)
+                                .xsmall()
+                                .text_color(cx.theme().muted_foreground),
+                        )
+                    } else if show_close_button {
+                        this.child(self.close_tab_button(("close-tab", ix), ix, cx))
+                    } else {
+                        this
+                    }
                 })
                 .into_any_element(),
         )
@@ -944,5 +1064,26 @@ impl Render for EditorPanel {
                         ),
                     }),
             )
+    }
+}
+
+/// A tab being dragged along the strip.
+#[derive(Clone)]
+struct DraggedTab {
+    ix: usize,
+    label: SharedString,
+}
+
+impl Render for DraggedTab {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .px_3()
+            .py_1()
+            .text_sm()
+            .rounded(cx.theme().radius)
+            .bg(cx.theme().secondary)
+            .border_1()
+            .border_color(cx.theme().border)
+            .child(self.label.clone())
     }
 }

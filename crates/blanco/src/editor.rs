@@ -14,6 +14,7 @@ mod script_execution_test;
 mod snippet_editor;
 mod sql_operations;
 pub(crate) mod tab_access;
+mod tab_actions;
 mod table_structure;
 mod tabs;
 mod terminal_pane;
@@ -64,6 +65,9 @@ pub(crate) struct ProdWritePrompt {
 pub struct EditorPanel {
     focus_handle: FocusHandle,
     tabs: Vec<TabType>,
+    /// The first `pinned_count` tabs are pinned: they stay at the start and
+    /// Close Others and Close to the Right leave them.
+    pinned_count: usize,
     active_tab_ix: usize,
     tabbar_scroll_handle: gpui::ScrollHandle,
     _subscriptions: Vec<gpui::Subscription>,
@@ -222,6 +226,7 @@ impl EditorPanel {
             }
             moved.push((
                 matches!(tab, TabType::Script(_)),
+                self.is_pinned(index),
                 TabCreationParams {
                     title: connection_tab.title.clone(),
                     content: Some(connection_tab.editor.read(cx).value().to_string()),
@@ -235,13 +240,20 @@ impl EditorPanel {
                 },
             ));
             self.tabs.remove(index);
+            if index < self.pinned_count {
+                self.pinned_count -= 1;
+            }
         }
         self.active_tab_ix = self.active_tab_ix.min(self.tabs.len().saturating_sub(1));
-        for (is_script, params) in moved.into_iter().rev() {
+        for (is_script, was_pinned, params) in moved.into_iter().rev() {
             if is_script {
                 self.create_and_add_script_tab(window, params, cx);
             } else {
                 self.create_and_add_tab_with_connection(window, params, cx);
+            }
+            // The tab comes back last and unpinned.
+            if was_pinned && let Some(last) = self.tabs.len().checked_sub(1) {
+                self.toggle_pin(last, window, cx);
             }
         }
         cx.notify();
@@ -288,6 +300,9 @@ impl EditorPanel {
 
             // Remove tab from UI
             self.tabs.remove(tab_index);
+            if tab_index < self.pinned_count {
+                self.pinned_count -= 1;
+            }
 
             // Adjust active tab index so the same tab stays active when one
             // before it is closed.
@@ -642,6 +657,7 @@ impl EditorPanel {
         let mut panel = Self {
             focus_handle: cx.focus_handle(),
             tabs: vec![],
+            pinned_count: 0,
             active_tab_ix: 0,
             tabbar_scroll_handle: gpui::ScrollHandle::default(),
             _subscriptions: Vec::new(),
@@ -1053,6 +1069,27 @@ impl EditorPanel {
         self.scroll_tabbar_to_the_end(window, cx);
 
         cx.notify();
+    }
+
+    /// Bring the tab at `ix` into view once the strip has laid out its new
+    /// order, scrolling no further than needed. `from` is the offset to scroll
+    /// from when something else has moved the strip in the meantime.
+    fn scroll_tabbar_to_tab(
+        &self,
+        ix: usize,
+        from: Option<gpui::Point<gpui::Pixels>>,
+        window: &mut Window,
+    ) {
+        let scroll_handle = self.tabbar_scroll_handle.clone();
+        window.on_next_frame(move |window, _| {
+            window.on_next_frame(move |window, _| {
+                if let Some(offset) = from {
+                    scroll_handle.set_offset(offset);
+                }
+                scroll_handle.scroll_to_item(ix);
+                window.refresh();
+            })
+        });
     }
 
     fn scroll_tabbar_to_the_end(&self, window: &mut Window, _: &mut Context<Self>) {
