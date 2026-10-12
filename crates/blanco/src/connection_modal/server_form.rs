@@ -20,7 +20,9 @@ use gpui_component::{
 use app_database::{ConnectionData, EnvironmentType};
 
 use super::NewConnectionModal;
-use super::shared::{make_input, render_ssh_section, render_ssl_advanced_fields, secret_field};
+use super::shared::{
+    make_input, render_ssh_section, render_ssl_advanced_fields, secret_field, validate_ssh_section,
+};
 use super::types::host_contains_explicit_port;
 use database::SecretKind;
 
@@ -274,8 +276,8 @@ impl ServerForm {
 
     pub fn validate(&self, cx: &App) -> Option<String> {
         if self.ssh_enabled
-            && let Err(error) =
-                database::ssh_config::parse_jump_hosts(&self.ssh_jump_hosts_input.read(cx).value())
+            && let Some(error) =
+                validate_ssh_section(&self.ssh_host_input, &self.ssh_jump_hosts_input, cx)
         {
             return Some(error);
         }

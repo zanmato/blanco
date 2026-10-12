@@ -119,12 +119,13 @@ fn local_user_name() -> String {
 
 /// Authenticate `hop`, trying in turn what the connection itself names (the
 /// key chosen in the dialog, then the password, which is only offered to the
-/// SSH host itself), then the SSH agent's keys and the hop's `IdentityFile`s
-/// (or the default keys).
+/// SSH host itself), then the hop's `IdentityFile`s (or the default keys),
+/// and last the SSH agent's keys.
 ///
-/// The connection's own key and password go first because a server allows
-/// only a few attempts: an agent holding many keys would use them all up
-/// before the password was ever offered.
+/// The order matters because a server allows only a few attempts. An agent
+/// can hold more keys than that, so everything named for this host goes
+/// first, and among the agent's keys the ones that belong to an identity
+/// file lead, as in OpenSSH.
 async fn authenticate(
     session: &mut SshHandle<SshClientHandler>,
     hop: &SshHop,
@@ -138,7 +139,8 @@ async fn authenticate(
     let closed = |tried: &[String], error: russh::Error| {
         anyhow::anyhow!(
             "SSH authentication failed for {hop}: the host closed the connection ({error}), \
-             most likely after too many attempts; tried {}",
+             most likely after too many attempts. Choose a private key for the connection or \
+             name one with IdentityFile in ~/.ssh/config; tried {}",
             tried.join(", ")
         )
     };
@@ -156,7 +158,9 @@ async fn authenticate(
             Err(error) if is_target => {
                 anyhow::bail!("Failed to load private key {path}: {error}");
             }
-            Err(_) => {}
+            // The key may be meant for the SSH host alone, so a jump host
+            // carries on without it, but says so if nothing else works.
+            Err(error) => tried.push(format!("{path} (not loaded: {error})")),
         }
     }
 
@@ -169,9 +173,43 @@ async fn authenticate(
         }
     }
 
+    let explicit = config.ssh_private_key_path.as_deref().map(PathBuf::from);
+    let identity_files: Vec<PathBuf> = if hop.identity_files.is_empty() {
+        default_identity_files()
+    } else {
+        hop.identity_files.clone()
+    }
+    .into_iter()
+    .filter(|file| file.exists() && Some(file) != explicit.as_ref())
+    .collect();
+    // A key the agent holds is usually encrypted on disk, so it is left to
+    // the agent below; its public half says which agent key that is.
+    let mut agent_first = Vec::new();
+    for file in &identity_files {
+        match load_secret_key(file, config.ssh_private_key_password.as_deref()) {
+            Ok(key) => {
+                tried.push(file.display().to_string());
+                match session.authenticate_publickey(user, Arc::new(key)).await {
+                    Ok(true) => return Ok(()),
+                    Ok(false) => {}
+                    Err(error) => return Err(closed(&tried, error)),
+                }
+            }
+            Err(error) => {
+                let mut public_file = file.clone().into_os_string();
+                public_file.push(".pub");
+                match russh::keys::load_public_key(&public_file) {
+                    Ok(public_key) => agent_first.push(public_key),
+                    Err(_) => tried.push(format!("{} (not loaded: {error})", file.display())),
+                }
+            }
+        }
+    }
+
     let agent = russh::keys::agent::client::AgentClient::connect_env().await;
     if let Ok(mut agent) = agent {
-        let identities = agent.request_identities().await.unwrap_or_default();
+        let mut identities = agent.request_identities().await.unwrap_or_default();
+        identities.sort_by_key(|key| !agent_first.contains(key));
         let count = identities.len();
         if count > 0 {
             tried.push(format!("{count} key(s) from the SSH agent"));
@@ -188,29 +226,6 @@ async fn authenticate(
                     return Err(closed(&tried, russh::Error::SendError));
                 }
             }
-        }
-    }
-
-    let explicit = config.ssh_private_key_path.as_deref().map(PathBuf::from);
-    let files = if hop.identity_files.is_empty() {
-        default_identity_files()
-    } else {
-        hop.identity_files.clone()
-    };
-    for file in files
-        .into_iter()
-        .filter(|file| file.exists() && Some(file) != explicit.as_ref())
-    {
-        match load_secret_key(&file, config.ssh_private_key_password.as_deref()) {
-            Ok(key) => {
-                tried.push(file.display().to_string());
-                match session.authenticate_publickey(user, Arc::new(key)).await {
-                    Ok(true) => return Ok(()),
-                    Ok(false) => {}
-                    Err(error) => return Err(closed(&tried, error)),
-                }
-            }
-            Err(error) => tried.push(format!("{} (not loaded: {error})", file.display())),
         }
     }
 

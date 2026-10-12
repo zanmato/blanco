@@ -1,5 +1,5 @@
 use gpui::{
-    AppContext, Context, ElementId, Entity, IntoElement, ParentElement, Styled, Window, div,
+    App, AppContext, Context, ElementId, Entity, IntoElement, ParentElement, Styled, Window, div,
 };
 use gpui_component::{
     ActiveTheme as _, IconName, Sizable,
@@ -227,7 +227,7 @@ pub(super) fn render_ssh_section(
         .child(
             v_flex()
                 .gap_2()
-                .child(div().text_sm().child("Jump hosts"))
+                .child(div().text_sm().child("Jump hosts (optional)"))
                 .child(Input::new(ssh_jump_hosts_input)),
         )
         .child(
@@ -235,9 +235,32 @@ pub(super) fn render_ssh_section(
                 .text_xs()
                 .text_color(cx.theme().muted_foreground)
                 .child(
-                    "Host, user, port, keys and jump hosts left empty are taken from \
+                    "The tunnel ends at the SSH host, which can be an alias from \
+                     ~/.ssh/config. Jump hosts are the servers to go through before it, \
+                     in order. A user, port, key or jump hosts left empty are taken from \
                      ~/.ssh/config. Without a key or password, the SSH agent and the \
                      default keys in ~/.ssh are tried.",
                 ),
         )
+}
+
+/// What is wrong with the SSH section of a form, if anything. The SSH host
+/// is checked here so the dialog can say so, rather than only failing to
+/// save.
+pub(super) fn validate_ssh_section(
+    ssh_host_input: &Entity<InputState>,
+    ssh_jump_hosts_input: &Entity<InputState>,
+    cx: &App,
+) -> Option<String> {
+    let jump_hosts = ssh_jump_hosts_input.read(cx).value();
+    if ssh_host_input.read(cx).value().trim().is_empty() {
+        return Some(if jump_hosts.trim().is_empty() {
+            "SSH host is required".to_string()
+        } else {
+            "SSH host is required. Jump hosts are only the servers on the way to it, \
+             so a single server goes in SSH host"
+                .to_string()
+        });
+    }
+    database::ssh_config::parse_jump_hosts(&jump_hosts).err()
 }

@@ -274,7 +274,13 @@ impl ConnectionConfig {
             // An empty user is taken from ~/.ssh/config or the local user.
             ssh_user: self.ssh_user.clone().unwrap_or_default(),
             ssh_password: self.ssh_password.clone(),
-            ssh_private_key_path: self.ssh_private_key_path.clone(),
+            // A pasted path often carries a space, which is never part of it.
+            ssh_private_key_path: self
+                .ssh_private_key_path
+                .as_deref()
+                .map(str::trim)
+                .filter(|path| !path.is_empty())
+                .map(str::to_string),
             ssh_private_key_password: self.ssh_private_key_password.clone(),
             jump_hosts: self.ssh_jump_hosts.clone(),
             remote_host: remote_host.to_string(),
@@ -659,6 +665,33 @@ mod tests {
             assert_eq!(db_type.editor_language(), "sql", "{db_type:?}");
         }
         assert_eq!(DatabaseType::Redis.editor_language(), "redis");
+    }
+
+    #[test]
+    fn ssh_tunnel_config_trims_the_key_path() {
+        let config = ConnectionConfig::new(
+            1,
+            "tunnelled".to_string(),
+            DatabaseType::PostgreSQL,
+            "db".to_string(),
+            5432,
+            "app".to_string(),
+            "user".to_string(),
+            None,
+        )
+        .with_ssh_config(
+            "bastion".to_string(),
+            "deploy".to_string(),
+            None,
+            Some(" /home/deploy/.ssh/id_ed25519 ".to_string()),
+            None,
+            None,
+        );
+        let tunnel = config.ssh_tunnel_config("db", 5432, 15432).unwrap();
+        assert_eq!(
+            tunnel.ssh_private_key_path.as_deref(),
+            Some("/home/deploy/.ssh/id_ed25519")
+        );
     }
 
     #[test]

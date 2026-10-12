@@ -67,11 +67,11 @@ All notable changes to this project will be documented in this file.
   statement in the log, and can be stopped. It understands PostgreSQL dollar
   quotes, MySQL `DELIMITER` lines and SQL Server `GO` batches
 - SSH tunnels authenticate with the connection's key, then its password,
-  then keys from the SSH agent and the host's IdentityFiles or the default
-  keys in `~/.ssh`. Host aliases, User, Port, IdentityFile and ProxyJump come
-  from `~/.ssh/config`, following Include lines, and one or more jump hosts
-  can be set in the connection dialog. known_hosts is checked for every hop.
-  On Windows the SSH agent is not used
+  then the host's IdentityFiles or the default keys in `~/.ssh`, then the
+  keys of the SSH agent. Host aliases, User, Port, IdentityFile and ProxyJump
+  come from `~/.ssh/config`, following Include lines, and one or more jump
+  hosts can be set in the connection dialog. known_hosts is checked for every
+  hop. On Windows the SSH agent is not used
 - A search field in the title bar opens the command palette and shows its
   shortcut
 - Blanco checks for new releases hourly and shows an Update button in the
