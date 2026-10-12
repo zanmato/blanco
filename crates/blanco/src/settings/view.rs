@@ -487,7 +487,7 @@ impl SettingsView {
                 ]),
             ]),
             formatter_page(view_handle.clone(), &default_settings),
-            keybindings_page(view_handle.clone(), &AppSettings::global(cx).settings),
+            keybindings_page(view_handle.clone()),
             // Database Settings Page
             SettingPage::new("Database").resettable(true).groups(vec![
                 SettingGroup::new().title("Connection").items(vec![

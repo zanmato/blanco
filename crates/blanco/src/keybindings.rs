@@ -213,12 +213,56 @@ pub fn effective_keystroke(settings: &Settings, action: &str) -> String {
         .unwrap_or_else(|| default_keystroke(action).to_string())
 }
 
-/// True when every space-separated chord parses. An empty string is valid and
-/// means "unbound".
-pub fn keystrokes_valid(keystrokes: &str) -> bool {
+/// The chords of a shortcut, or `None` when one of them cannot be bound. An
+/// empty string has no chords and means "unbound".
+pub fn parse_keystrokes(keystrokes: &str) -> Option<Vec<gpui::Keystroke>> {
     keystrokes
         .split_whitespace()
-        .all(|chord| gpui::Keystroke::parse(chord).is_ok())
+        .map(|chord| {
+            gpui::Keystroke::parse(chord)
+                .ok()
+                .filter(|keystroke| is_bindable(keystroke))
+        })
+        .collect()
+}
+
+/// Whether a keystroke can serve as a shortcut. `Keystroke::parse` takes any
+/// word for a key, so the key has to be one a keyboard has, and it needs a
+/// modifier other than shift unless it is a function key: a bare letter as a
+/// shortcut would swallow typing.
+pub fn is_bindable(keystroke: &gpui::Keystroke) -> bool {
+    let key = keystroke.key.as_str();
+    let is_function_key = key
+        .strip_prefix('f')
+        .is_some_and(|number| !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit()));
+    let is_named_key = matches!(
+        key,
+        "enter"
+            | "tab"
+            | "space"
+            | "escape"
+            | "backspace"
+            | "delete"
+            | "insert"
+            | "home"
+            | "end"
+            | "pageup"
+            | "pagedown"
+            | "up"
+            | "down"
+            | "left"
+            | "right"
+    );
+    let modifiers = keystroke.modifiers;
+    let has_modifier =
+        modifiers.control || modifiers.alt || modifiers.platform || modifiers.function;
+    is_function_key || (has_modifier && (is_named_key || key.chars().count() == 1))
+}
+
+/// True when every space-separated chord can be bound. An empty string is
+/// valid and means "unbound".
+pub fn keystrokes_valid(keystrokes: &str) -> bool {
+    parse_keystrokes(keystrokes).is_some()
 }
 
 /// Resolve an action identifier and keystroke into a concrete `KeyBinding`.
@@ -265,8 +309,7 @@ fn key_binding(action: &str, keystrokes: &str, context: Option<&str>) -> Option<
 /// limited to different key contexts can still meet (an input sits inside the
 /// window), so any two with the same keystroke count as a conflict.
 pub fn conflicting_actions(settings: &Settings, action: &str) -> Vec<&'static str> {
-    let keystroke = effective_keystroke(settings, action);
-    let keystroke = normalized(&keystroke);
+    let keystroke = normalized(&effective_keystroke(settings, action));
     if keystroke.is_empty() {
         return Vec::new();
     }
@@ -278,12 +321,26 @@ pub fn conflicting_actions(settings: &Settings, action: &str) -> Vec<&'static st
         .collect()
 }
 
+/// Whether two shortcuts are the same keys, however they are spelled.
+pub fn same_keystrokes(a: &str, b: &str) -> bool {
+    normalized(a) == normalized(b)
+}
+
+/// One spelling per shortcut, so `Secondary-Enter` and a recorded `ctrl-enter`
+/// compare equal where secondary is ctrl.
 fn normalized(keystrokes: &str) -> String {
-    keystrokes
-        .split_whitespace()
-        .map(str::to_lowercase)
-        .collect::<Vec<_>>()
-        .join(" ")
+    match parse_keystrokes(keystrokes) {
+        Some(chords) => chords
+            .iter()
+            .map(gpui::Keystroke::unparse)
+            .collect::<Vec<_>>()
+            .join(" "),
+        None => keystrokes
+            .split_whitespace()
+            .map(str::to_lowercase)
+            .collect::<Vec<_>>()
+            .join(" "),
+    }
 }
 
 /// Build the customizable key bindings from settings, layering user overrides
@@ -344,6 +401,40 @@ mod tests {
             conflicting_actions(&settings, "RunQuery"),
             ["Toggle results pane"]
         );
+    }
+
+    #[test]
+    fn only_real_keystrokes_can_be_bound() {
+        for def in CUSTOMIZABLE_BINDINGS {
+            assert!(keystrokes_valid(def.default), "{}", def.action);
+        }
+        for valid in [
+            "",
+            "f5",
+            "ctrl-k",
+            "shift-alt-f",
+            "super-,",
+            "ctrl-k ctrl-s",
+        ] {
+            assert!(keystrokes_valid(valid), "{valid}");
+        }
+        for invalid in [
+            "ASDASDA",
+            "ctrl-asdasda",
+            "a",
+            "shift-a",
+            "enter",
+            "ctrl-k x",
+        ] {
+            assert!(!keystrokes_valid(invalid), "{invalid}");
+        }
+    }
+
+    #[test]
+    fn shortcuts_compare_by_keys_not_spelling() {
+        assert!(same_keystrokes("Secondary-Enter", "secondary-enter"));
+        assert!(same_keystrokes("shift-alt-f", "alt-shift-f"));
+        assert!(!same_keystrokes("ctrl-k", "ctrl-j"));
     }
 
     #[test]
