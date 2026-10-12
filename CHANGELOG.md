@@ -67,6 +67,17 @@ All notable changes to this project will be documented in this file.
   one per line, or as an IN list such as `('a', 'b')` with strings escaped
   for the dialect, numbers left bare and NULL left out, each also as distinct
   values. From a cell, a selection of several rows copies just those rows
+- More actions can be rebound in the Keybindings settings, now listed by
+  group with search: cancel the running query, new query tab, close tab,
+  next and previous tab (Ctrl+Tab and Ctrl+Shift+Tab), toggle the sidebar,
+  toggle the results pane, import into or export the selected table, and
+  refresh the connection. A shortcut is recorded by clicking its field and
+  pressing the keys, so only a real key combination can be stored: Escape
+  cancels, Backspace unbinds, and each shortcut has its own reset. A shortcut
+  that is also used by another action is flagged. Wrap Tab Navigation in the Editor settings decides whether next
+  and previous tab go around or stop at the ends
+- Toggle Results Pane hides the results under the editor and keeps the
+  toolbar with Run
 
 ### Fixes
 

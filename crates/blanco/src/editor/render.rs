@@ -512,12 +512,122 @@ impl EditorPanel {
             })
     }
 
-    fn render_query_tab_content(
+    /// The bar between a query tab's editor and its results: cursor
+    /// position, Format/Lint, Explain, the SQL log toggle and Run/Stop. It
+    /// stays under the editor when the results are hidden.
+    fn render_query_toolbar(
         &self,
         query_tab: &QueryTab,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let supports_sql = query_tab.context.db_type.supports_sql();
+        h_flex()
+            .p_2()
+            .gap_2()
+            .border_t_1()
+            .border_color(cx.theme().border)
+            .bg(cx.theme().title_bar)
+            .justify_between()
+            .child({
+                let position = query_tab.editor.read(cx).cursor_position();
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(format!(
+                        "Ln {}, Col {}",
+                        position.line + 1,
+                        position.character + 1
+                    ))
+            })
+            .child(
+                h_flex()
+                    .gap_2()
+                    // Format/lint and EXPLAIN are SQL-only; hide
+                    // them for non-SQL backends (e.g. Redis).
+                    .when(supports_sql, |this| {
+                        this.child(
+                            Button::new("format-query")
+                                .outline()
+                                .small()
+                                .icon(IconName::WandSparkles)
+                                .label("Format")
+                                .tooltip(format!("Format ({})", self.format_query_keystroke))
+                                .on_click(cx.listener(|panel, _, window, cx| {
+                                    panel.format_current_query(window, cx)
+                                })),
+                        )
+                    })
+                    .map(|this| {
+                        if self.loading {
+                            this.child(
+                                Button::new("abort-query")
+                                    .danger()
+                                    .small()
+                                    .icon(IconName::SquareStop)
+                                    .label("Stop")
+                                    .tooltip("Abort the running query")
+                                    .on_click(cx.listener(|panel, _, _window, cx| {
+                                        panel.abort_running_query(cx);
+                                    })),
+                            )
+                        } else {
+                            this.when(supports_sql, |this| {
+                                this.child(
+                                    Button::new("explain-query")
+                                        .outline()
+                                        .small()
+                                        .icon(IconName::Map)
+                                        .label("Explain")
+                                        .tooltip(
+                                            "Run EXPLAIN on the statement \
+                             at the cursor",
+                                        )
+                                        .on_click(cx.listener(|panel, _, window, cx| {
+                                            panel.on_explain_query(window, cx)
+                                        })),
+                                )
+                            })
+                            .child(
+                                Button::new("run-query")
+                                    .outline()
+                                    .small()
+                                    .icon(IconName::Play)
+                                    .label("Run Current")
+                                    .tooltip(format!("Run Current ({})", self.run_query_keystroke))
+                                    .on_click(cx.listener(|panel, _, window, cx| {
+                                        panel.on_run_query(window, cx)
+                                    })),
+                            )
+                        }
+                    }),
+            )
+    }
+
+    fn render_query_tab_content(
+        &self,
+        query_tab: &QueryTab,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        if query_tab.results_hidden {
+            // The editor takes the space and the toolbar stays under it, so
+            // Run and the other actions remain at hand.
+            return self
+                .render_with_terminal(
+                    v_flex()
+                        .size_full()
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_h_0()
+                                .child(self.render_editor(&query_tab.editor, cx)),
+                        )
+                        .child(self.render_query_toolbar(query_tab, cx)),
+                    query_tab.base.terminal_pane_view(),
+                    "editor-terminal-split",
+                    cx,
+                )
+                .into_any_element();
+        }
         self.render_with_terminal(
             v_resizable("editor-results-split")
                 .with_state(&self.editor_results_resize_state)
@@ -532,106 +642,7 @@ impl EditorPanel {
                             .h_full()
                             .w_full()
                             .min_w_0()
-                            .child(
-                                h_flex()
-                                    .p_2()
-                                    .gap_2()
-                                    .border_t_1()
-                                    .border_color(cx.theme().border)
-                                    .bg(cx.theme().title_bar)
-                                    .justify_between()
-                                    .child({
-                                        let position = query_tab.editor.read(cx).cursor_position();
-                                        div()
-                                            .text_xs()
-                                            .text_color(cx.theme().muted_foreground)
-                                            .child(format!(
-                                                "Ln {}, Col {}",
-                                                position.line + 1,
-                                                position.character + 1
-                                            ))
-                                    })
-                                    .child(
-                                        h_flex()
-                                            .gap_2()
-                                            // Format/lint and EXPLAIN are SQL-only; hide
-                                            // them for non-SQL backends (e.g. Redis).
-                                            .when(supports_sql, |this| {
-                                                this.child(
-                                                    Button::new("format-query")
-                                                        .outline()
-                                                        .small()
-                                                        .icon(IconName::WandSparkles)
-                                                        .label("Format")
-                                                        .tooltip(format!(
-                                                            "Format ({})",
-                                                            self.format_query_keystroke
-                                                        ))
-                                                        .on_click(cx.listener(
-                                                            |panel, _, window, cx| {
-                                                                panel.format_current_query(
-                                                                    window, cx,
-                                                                )
-                                                            },
-                                                        )),
-                                                )
-                                            })
-                                            .map(|this| {
-                                                if self.loading {
-                                                    this.child(
-                                                        Button::new("abort-query")
-                                                            .danger()
-                                                            .small()
-                                                            .icon(IconName::SquareStop)
-                                                            .label("Stop")
-                                                            .tooltip("Abort the running query")
-                                                            .on_click(cx.listener(
-                                                                |panel, _, _window, cx| {
-                                                                    panel.abort_running_query(cx);
-                                                                },
-                                                            )),
-                                                    )
-                                                } else {
-                                                    this.when(supports_sql, |this| {
-                                                        this.child(
-                                                            Button::new("explain-query")
-                                                                .outline()
-                                                                .small()
-                                                                .icon(IconName::Map)
-                                                                .label("Explain")
-                                                                .tooltip(
-                                                                    "Run EXPLAIN on the statement \
-                                                     at the cursor",
-                                                                )
-                                                                .on_click(cx.listener(
-                                                                    |panel, _, window, cx| {
-                                                                        panel.on_explain_query(
-                                                                            window, cx,
-                                                                        )
-                                                                    },
-                                                                )),
-                                                        )
-                                                    })
-                                                    .child(
-                                                        Button::new("run-query")
-                                                            .outline()
-                                                            .small()
-                                                            .icon(IconName::Play)
-                                                            .label("Run Current")
-                                                            .tooltip(format!(
-                                                                "Run Current ({})",
-                                                                self.run_query_keystroke
-                                                            ))
-                                                            .on_click(cx.listener(
-                                                                |panel, _, window, cx| {
-                                                                    panel.on_run_query(window, cx)
-                                                                },
-                                                            )),
-                                                    )
-                                                }
-                                            }),
-                                    ),
-                            )
+                            .child(self.render_query_toolbar(query_tab, cx))
                             .child(
                                 div()
                                     .flex_1()
@@ -671,6 +682,7 @@ impl EditorPanel {
             "editor-terminal-split",
             cx,
         )
+        .into_any_element()
     }
 
     /// Script tabs are the query layout minus everything SQL-specific: editor

@@ -421,6 +421,35 @@ impl SettingsView {
                         "The key that accepts the highlighted completion. A key that does not accept keeps its usual meaning: Enter starts a new line and closes the list, Tab indents.",
                     ),
                     SettingItem::new(
+                        "Wrap Tab Navigation",
+                        SettingField::switch(
+                            move |cx: &App| {
+                                AppSettings::global(cx).settings.editor.tab_navigation_wraps
+                            },
+                            {
+                                let view_handle = view_handle.clone();
+                                move |val: bool, cx: &mut App| {
+                                    AppSettings::global_mut(cx)
+                                        .settings
+                                        .editor
+                                        .tab_navigation_wraps = val;
+
+                                    let key = "editor.tab_navigation_wraps".to_string();
+                                    let value = val.to_string();
+                                    if let Some(view) = view_handle.upgrade() {
+                                        view.update(cx, |view, cx| {
+                                            view.save_setting_debounced(key, value, false, cx);
+                                        });
+                                    }
+                                }
+                            },
+                        )
+                        .default_value(default_settings.editor.tab_navigation_wraps),
+                    )
+                    .description(
+                        "Next and Previous Tab go around from the last tab to the first. Off, they stop at the ends.",
+                    ),
+                    SettingItem::new(
                         "Font Size",
                         SettingField::number_input(
                             NumberFieldOptions {
