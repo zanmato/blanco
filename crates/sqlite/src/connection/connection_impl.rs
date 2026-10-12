@@ -405,14 +405,7 @@ impl Connection for SqliteConnection {
                     .map(|col| col.name().to_string())
                     .collect();
 
-                let (types, raw_types): (Vec<ColumnType>, Vec<String>) = row
-                    .columns()
-                    .iter()
-                    .map(|col| {
-                        let raw_type = col.type_info().name().to_string();
-                        (Self::map_sqlite_type(&raw_type), raw_type)
-                    })
-                    .unzip();
+                let (types, raw_types) = super::result_column_types(&row);
                 column_types = types;
                 raw_column_types = raw_types;
 

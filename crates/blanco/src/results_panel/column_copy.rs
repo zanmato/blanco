@@ -59,9 +59,28 @@ impl ResultsPanel {
     pub(super) fn on_copy_column_values(
         &mut self,
         action: &CopyColumnValues,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let copied_rows: Vec<usize> = {
+            let table_state = self.table_state.read(cx);
+            let selected_rows = table_state.selected_rows();
+            if action.selected_only && selected_rows.len() > 1 {
+                selected_rows.iter().copied().collect()
+            } else {
+                (0..table_state.delegate().rows.len()).collect()
+            }
+        };
+        if self.defer_action(
+            copied_rows,
+            Some(action.column),
+            action,
+            window,
+            cx,
+            Self::on_copy_column_values,
+        ) {
+            return;
+        }
         let table_state = self.table_state.read(cx);
         let delegate = table_state.delegate();
         let selected_rows: BTreeSet<usize> = if action.selected_only {

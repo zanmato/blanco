@@ -169,7 +169,7 @@ mod tests {
             get_val("uuid_col").to_lowercase(),
             "550e8400-e29b-41d4-a716-446655440000"
         );
-        assert_eq!(get_val("varbinary_col"), "0102030405");
+        assert_eq!(get_val("varbinary_col"), "0x0102030405");
         assert!(get_val("json_col").contains("\"name\":\"test\""));
 
         let type_map: std::collections::HashMap<String, ColumnType> = query_result

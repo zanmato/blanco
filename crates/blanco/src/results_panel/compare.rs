@@ -144,9 +144,19 @@ impl ResultsPanel {
     pub(super) fn on_select_cell_for_compare(
         &mut self,
         action: &SelectCellForCompare,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.defer_action(
+            [action.row],
+            Some(action.col),
+            action,
+            window,
+            cx,
+            Self::on_select_cell_for_compare,
+        ) {
+            return;
+        }
         let source =
             cell_compare_source(self.table_state.read(cx).delegate(), action.row, action.col);
         self.set_compare_selection(CompareKind::Cell, source, cx);
@@ -155,9 +165,19 @@ impl ResultsPanel {
     pub(super) fn on_select_row_for_compare(
         &mut self,
         action: &SelectRowForCompare,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.defer_action(
+            [action.row],
+            None,
+            action,
+            window,
+            cx,
+            Self::on_select_row_for_compare,
+        ) {
+            return;
+        }
         let source = row_compare_source(self.table_state.read(cx).delegate(), action.row);
         self.set_compare_selection(CompareKind::Row, source, cx);
     }
@@ -179,6 +199,16 @@ impl ResultsPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.defer_action(
+            [action.row],
+            Some(action.col),
+            action,
+            window,
+            cx,
+            Self::on_compare_cell_with_selected,
+        ) {
+            return;
+        }
         let right =
             cell_compare_source(self.table_state.read(cx).delegate(), action.row, action.col);
         self.open_compare_dialog(CompareKind::Cell, right, window, cx);
@@ -190,6 +220,16 @@ impl ResultsPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.defer_action(
+            [action.row],
+            None,
+            action,
+            window,
+            cx,
+            Self::on_compare_row_with_selected,
+        ) {
+            return;
+        }
         let right = row_compare_source(self.table_state.read(cx).delegate(), action.row);
         self.open_compare_dialog(CompareKind::Row, right, window, cx);
     }

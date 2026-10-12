@@ -48,6 +48,32 @@ slow connection. Requests join the running fetch, expired cache entries are serv
 a refresh runs behind them, a fetch is bounded by the query timeout setting, and a failed
 fetch caches nothing (`fetch.rs` returns errors, never an empty listing).
 
+## Binary and deferred values
+
+Result rows carry text, so the bytes of a binary column travel as `0x` plus
+lowercase hex (`blanco_core::binary`), which every driver produces for
+`ColumnType::Binary`. Anything that writes a value back goes through
+`Dialect::value_literal`, which spells hex notation of a binary column as the
+backend's byte literal: change operations (`ColumnValue::Binary`, binary primary
+keys included), the SQL and VALUES transformers, filters
+(`FilterCondition::binary`). Text without the `0x` in a binary cell is sent as a
+string. `results_panel/binary_viewer.rs` is what a binary cell expands into. It
+decodes its image itself and renders it as a `RenderImage`, so nothing lands in
+GPUI's asset cache, and drops the texture from every window when it is replaced
+or the viewer goes away.
+
+With `results.defer_values_over_kb` set, a plain `SELECT *` on one table with a
+primary key is rewritten by `Dialect::deferred_read` (`blanco_core::deferred`)
+so large text and binary columns come back as a preview plus a size helper
+column, which `DeferredPlan::apply` strips again. The three places that run a
+grid query do this: the editor's run, the filter bar and the refresh after a
+commit. The grid knows deferred cells by primary key and column name
+(`results_panel/deferred_values.rs`), so sorting, filtering and moving columns
+do not disturb them. Any handler that needs a value starts with
+`defer_action` or `load_deferred_values_then`, which fetch by key and run the
+handler again. A new handler that reads `delegate.rows` to write or copy must
+do the same, or it will use previews.
+
 ## SQL log selection
 
 `blanco_ui::SqlView` entries are `SelectableLogEntry` elements that register with

@@ -49,8 +49,17 @@ impl ResultsPanel {
         cx.notify();
     }
 
-    pub fn duplicate_row(&mut self, cx: &mut Context<Self>) {
+    pub fn duplicate_row(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.commit_in_progress {
+            return;
+        }
+
+        // The copies are inserted with what their cells hold, which has to
+        // be the values rather than previews of them.
+        let rows = self.sorted_selected_rows(cx);
+        if self.load_deferred_values_then(rows, None, window, cx, |panel, window, cx| {
+            panel.duplicate_row(window, cx)
+        }) {
             return;
         }
 
@@ -223,9 +232,13 @@ impl ResultsPanel {
     pub(super) fn on_duplicate_row(
         &mut self,
         action: &DuplicateRow,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let rows = self.rows_for_context_action(action.row, cx);
+        if self.defer_action(rows, None, action, window, cx, Self::on_duplicate_row) {
+            return;
+        }
         for row_ix in self.rows_for_context_action(action.row, cx) {
             self.duplicate_row_with_row(row_ix, cx);
         }

@@ -66,6 +66,12 @@ impl SqlTransformer {
             match value {
                 None => output.push_str("NULL"),
                 Some("") => output.push_str("''"),
+                Some(value)
+                    if *column_type == ColumnType::Binary
+                        && blanco_core::binary::is_hex_notation(value) =>
+                {
+                    output.push_str(&db_type.dialect().value_literal(value, *column_type));
+                }
                 Some(value) if should_quote_value(column_type) => {
                     output.push('\'');
                     sql_escape_string_to(value, db_type, output);

@@ -5,6 +5,7 @@ use gpui::{AppContext as _, ClipboardItem, Context, Entity, Focusable as _, Wind
 
 use database::DatabaseService;
 
+use super::deferred_values::{self, DeferredRead};
 use super::filter_bar::{FilterBar, FilterBarEvent, FilterColumn};
 use super::{ResultViewMode, ResultsPanel};
 use crate::app::FilterByCellValue;
@@ -173,15 +174,25 @@ impl ResultsPanel {
         let database_name = self.database_name.clone();
         let table_state = table_state.clone();
         let bar = bar.downgrade();
+        let deferred_read = DeferredRead::plan(
+            self.db_type,
+            &query,
+            &table_columns,
+            deferred_values::threshold(cx),
+        );
         let task = cx.background_spawn({
             let query = query.clone();
             async move {
                 let connection = db_service
                     .get_or_create_connection(connection_id, Some(&database_name))
                     .await?;
-                connection
-                    .execute_query(&query, Some(&database_name), None)
-                    .await
+                deferred_values::execute_read(
+                    &connection,
+                    &query,
+                    &database_name,
+                    deferred_read.as_ref(),
+                )
+                .await
             }
         });
         cx.spawn_in(window, async move |panel, cx| {
@@ -189,7 +200,7 @@ impl ResultsPanel {
             panel
                 .update_in(cx, |_panel, window, cx| {
                     let outcome = match result {
-                        Ok(mut result) => {
+                        Ok((mut result, deferred)) => {
                             let rows = result.rows.len();
                             result.query_text = Some(query.clone());
                             result.table_name = table_name;
@@ -200,6 +211,7 @@ impl ResultsPanel {
                                 let delegate = state.delegate_mut();
                                 delegate.set_original_query(query);
                                 delegate.set_query_result(result, window, cx);
+                                delegate.set_deferred_values(deferred);
                                 state.clear_selection(cx);
                                 state.refresh(cx);
                             });
@@ -224,6 +236,16 @@ impl ResultsPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.defer_action(
+            [action.row],
+            Some(action.col),
+            action,
+            window,
+            cx,
+            Self::on_filter_by_cell_value,
+        ) {
+            return;
+        }
         let (column, value) = {
             let delegate = self.table_state.read(cx).delegate();
             let Some(column) = delegate.columns.get(action.col) else {

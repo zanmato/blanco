@@ -133,6 +133,9 @@ pub struct FilterCondition {
     /// rather than as text (ClickHouse refuses to compare a number with a
     /// string).
     pub numeric: bool,
+    /// The column holds bytes, so a value written as hex is compared as the
+    /// bytes it spells rather than as its digits.
+    pub binary: bool,
 }
 
 impl Dialect {
@@ -141,6 +144,11 @@ impl Dialect {
     pub fn filter_predicate(&self, condition: &FilterCondition) -> String {
         let column = self.quote_identifier(&condition.column);
         let value = condition.value.as_str();
+        if condition.binary
+            && let Some(predicate) = self.binary_predicate(&column, condition.operator, value)
+        {
+            return predicate;
+        }
         let literal = |value: &str| self.filter_literal(value.trim(), condition.numeric);
         match condition.operator {
             FilterOperator::Equals => format!("{column} = {}", literal(value)),
@@ -175,6 +183,93 @@ impl Dialect {
             }
             FilterOperator::IsNull => format!("{column} IS NULL"),
             FilterOperator::IsNotNull => format!("{column} IS NOT NULL"),
+        }
+    }
+
+    /// The predicate comparing a binary column with hex, with or without
+    /// its `0x`. `None` when the value is not hex or the operator matches
+    /// text, which leaves the comparison to the text predicates.
+    fn binary_predicate(
+        &self,
+        column: &str,
+        operator: FilterOperator,
+        value: &str,
+    ) -> Option<String> {
+        let literal = |value: &str| {
+            let bytes = crate::binary::decode_lenient(value)?;
+            let hex = crate::binary::encode(&bytes);
+            Some((
+                self.value_literal(&hex, crate::ColumnType::Binary),
+                bytes.len(),
+            ))
+        };
+        let comparison = |symbol: &str| {
+            let (literal, _) = literal(value)?;
+            Some(format!("{column} {symbol} {literal}"))
+        };
+        let length = match self.database_type() {
+            DatabaseType::MsSql => format!("DATALENGTH({column})"),
+            _ => format!("LENGTH({column})"),
+        };
+        let substring = match self.database_type() {
+            DatabaseType::MsSql => "SUBSTRING",
+            _ => "SUBSTR",
+        };
+        match operator {
+            FilterOperator::Equals => comparison("="),
+            FilterOperator::NotEquals => comparison("<>"),
+            FilterOperator::Less => comparison("<"),
+            FilterOperator::LessOrEqual => comparison("<="),
+            FilterOperator::Greater => comparison(">"),
+            FilterOperator::GreaterOrEqual => comparison(">="),
+            FilterOperator::Contains | FilterOperator::NotContains => {
+                let (literal, _) = literal(value)?;
+                let position = match self.database_type() {
+                    DatabaseType::PostgreSQL => format!("POSITION({literal} IN {column})"),
+                    DatabaseType::MySQL => format!("LOCATE({literal}, {column})"),
+                    DatabaseType::MsSql => format!("CHARINDEX({literal}, {column})"),
+                    _ => format!("INSTR({column}, {literal})"),
+                };
+                let symbol = if operator == FilterOperator::Contains {
+                    ">"
+                } else {
+                    "="
+                };
+                Some(format!("{position} {symbol} 0"))
+            }
+            FilterOperator::StartsWith => {
+                let (literal, count) = literal(value)?;
+                Some(format!("{substring}({column}, 1, {count}) = {literal}"))
+            }
+            FilterOperator::EndsWith => {
+                let (literal, count) = literal(value)?;
+                // A value longer than the column cannot be its ending, and
+                // the start it would give means something else per backend.
+                Some(format!(
+                    "{length} >= {count} AND {substring}({column}, {length} - {count} + 1, {count}) = {literal}"
+                ))
+            }
+            FilterOperator::In | FilterOperator::NotIn => {
+                let literals = value
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(|value| literal(value).map(|(literal, _)| literal))
+                    .collect::<Option<Vec<_>>>()?;
+                if literals.is_empty() {
+                    return None;
+                }
+                let not = if operator == FilterOperator::NotIn {
+                    "NOT "
+                } else {
+                    ""
+                };
+                Some(format!("{column} {not}IN ({})", literals.join(", ")))
+            }
+            FilterOperator::Like
+            | FilterOperator::NotLike
+            | FilterOperator::IsNull
+            | FilterOperator::IsNotNull => None,
         }
     }
 
@@ -318,7 +413,56 @@ mod tests {
             operator,
             value: value.to_string(),
             numeric: false,
+            binary: false,
         }
+    }
+
+    #[test]
+    fn binary_columns_compare_hex_as_bytes() {
+        let binary = |operator, value: &str| FilterCondition {
+            column: "body".to_string(),
+            operator,
+            value: value.to_string(),
+            numeric: false,
+            binary: true,
+        };
+        let pg = DatabaseType::PostgreSQL.dialect();
+        assert_eq!(
+            pg.filter_predicate(&binary(FilterOperator::Equals, "0x89504E47")),
+            r#""body" = '\x89504e47'::bytea"#
+        );
+        // The digits alone are hex too, since the column only holds bytes.
+        assert_eq!(
+            pg.filter_predicate(&binary(FilterOperator::StartsWith, "8950")),
+            r#"SUBSTR("body", 1, 2) = '\x8950'::bytea"#
+        );
+        assert_eq!(
+            pg.filter_predicate(&binary(FilterOperator::Contains, "\\x4e47")),
+            r#"POSITION('\x4e47'::bytea IN "body") > 0"#
+        );
+        assert_eq!(
+            DatabaseType::MySQL
+                .dialect()
+                .filter_predicate(&binary(FilterOperator::In, "0x01, 0x02")),
+            "`body` IN (X'01', X'02')"
+        );
+        assert_eq!(
+            DatabaseType::MsSql
+                .dialect()
+                .filter_predicate(&binary(FilterOperator::EndsWith, "0xff")),
+            "DATALENGTH([body]) >= 1 AND SUBSTRING([body], DATALENGTH([body]) - 1 + 1, 1) = 0xff"
+        );
+        assert_eq!(
+            DatabaseType::SQLite
+                .dialect()
+                .filter_predicate(&binary(FilterOperator::NotContains, "0xff")),
+            r#"INSTR("body", X'ff') = 0"#
+        );
+        // Not hex: compared as the text it is.
+        assert_eq!(
+            pg.filter_predicate(&binary(FilterOperator::Equals, "hello")),
+            r#""body" = 'hello'"#
+        );
     }
 
     #[test]
@@ -331,6 +475,7 @@ mod tests {
         assert_eq!(
             pg.filter_predicate(&FilterCondition {
                 numeric: true,
+                binary: false,
                 ..condition("id", FilterOperator::Greater, " 42 ")
             }),
             "\"id\" > 42"
@@ -339,6 +484,7 @@ mod tests {
         assert_eq!(
             pg.filter_predicate(&FilterCondition {
                 numeric: true,
+                binary: false,
                 ..condition("id", FilterOperator::Equals, "1; DROP TABLE x")
             }),
             "\"id\" = '1; DROP TABLE x'"
@@ -346,6 +492,7 @@ mod tests {
         assert_eq!(
             pg.filter_predicate(&FilterCondition {
                 numeric: true,
+                binary: false,
                 ..condition("id", FilterOperator::In, "1, 2,,3")
             }),
             "\"id\" IN (1, 2, 3)"

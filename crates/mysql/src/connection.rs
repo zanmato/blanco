@@ -155,7 +155,9 @@ impl MysqlConnection {
             "char" | "varchar" | "text" => ColumnType::Text,
             "date" | "datetime" | "timestamp" | "time" | "year" => ColumnType::DateTime,
             "json" => ColumnType::Json,
-            "binary" | "varbinary" | "blob" => ColumnType::Binary,
+            "binary" | "varbinary" | "blob" | "tinyblob" | "mediumblob" | "longblob" => {
+                ColumnType::Binary
+            }
             "boolean" => ColumnType::Boolean,
             _ => ColumnType::Unknown,
         }
@@ -495,7 +497,7 @@ impl MysqlConnection {
             }
             ColumnType::Binary => {
                 if let Ok(Some(v)) = row.try_get::<Option<Vec<u8>>, _>(column_index) {
-                    return Some(format!("0x{}", hex::encode(v)));
+                    return Some(blanco_core::binary::encode(&v));
                 }
                 None
             }

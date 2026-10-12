@@ -1,5 +1,7 @@
 // Database-agnostic table change operations
 
+use blanco_core::ColumnType;
+
 #[derive(Clone, Debug)]
 pub struct TableChangeOperation {
     pub operation_type: OperationType,
@@ -27,7 +29,7 @@ impl std::fmt::Display for OperationType {
 
 #[derive(Clone, Debug)]
 pub enum RowIdentifier {
-    PrimaryKey { columns: Vec<(String, String)> },
+    PrimaryKey { columns: Vec<(String, ColumnValue)> },
     RowIndex, // For cases without clear PK
 }
 
@@ -44,20 +46,45 @@ pub struct ColumnChange {
 pub enum ColumnValue {
     Null,
     Literal(String),
+    /// The bytes of a binary column, as hex digits without a prefix. They are
+    /// written in the backend's binary literal, not as a string of digits.
+    Binary(String),
     Expression(String),
 }
 
 impl ColumnValue {
     /// A blank expression would leave a hole in the statement (`SET x = `),
     /// so it falls back to the literal the cell would otherwise hold.
+    #[cfg(test)]
     pub fn from_cell(value: Option<String>, is_expression: bool) -> Self {
+        Self::from_typed_cell(value, is_expression, ColumnType::Text)
+    }
+
+    /// As [`Self::from_cell`], for a column of `column_type`: a binary
+    /// column's hex notation becomes the bytes it spells.
+    pub fn from_typed_cell(
+        value: Option<String>,
+        is_expression: bool,
+        column_type: ColumnType,
+    ) -> Self {
         match value {
             None => Self::Null,
             Some(text) if is_expression && !text.trim().is_empty() => {
                 Self::Expression(text.trim().to_string())
             }
-            Some(text) => Self::Literal(text),
+            Some(text) => Self::data(text, column_type),
         }
+    }
+
+    /// A value that is data by definition, such as a primary key read from
+    /// the server.
+    pub fn data(text: String, column_type: ColumnType) -> Self {
+        if column_type == ColumnType::Binary
+            && let Some(hex) = blanco_core::binary::hex_digits(&text)
+        {
+            return Self::Binary(hex);
+        }
+        Self::Literal(text)
     }
 }
 
@@ -79,6 +106,7 @@ impl TableChangeOperation {
         match value {
             ColumnValue::Null => "NULL".to_string(),
             ColumnValue::Literal(text) => Self::format_literal(text, database_type),
+            ColumnValue::Binary(hex) => database_type.dialect().binary_literal(hex),
             ColumnValue::Expression(sql) => sql.clone(),
         }
     }
@@ -89,8 +117,20 @@ impl TableChangeOperation {
         database_type.dialect().string_literal(value)
     }
 
+    /// Key values come from the server and are data: quoted or written as
+    /// bytes, never evaluated.
+    fn format_key_value(value: &ColumnValue, database_type: database::DatabaseType) -> String {
+        match value {
+            ColumnValue::Null => "NULL".to_string(),
+            ColumnValue::Literal(text) | ColumnValue::Expression(text) => {
+                Self::format_literal(text, database_type)
+            }
+            ColumnValue::Binary(hex) => database_type.dialect().binary_literal(hex),
+        }
+    }
+
     fn format_where_clause(
-        columns: &[(String, String)],
+        columns: &[(String, ColumnValue)],
         database_type: database::DatabaseType,
     ) -> String {
         columns
@@ -99,7 +139,7 @@ impl TableChangeOperation {
                 format!(
                     "{} = {}",
                     Self::quote_identifier(column, database_type),
-                    Self::format_literal(value, database_type)
+                    Self::format_key_value(value, database_type)
                 )
             })
             .collect::<Vec<_>>()
@@ -195,7 +235,10 @@ mod tests {
             operation_type: OperationType::Update,
             table_name: "sales.order".to_string(),
             row_identifier: RowIdentifier::PrimaryKey {
-                columns: vec![("user".to_string(), "O'Brien".to_string())],
+                columns: vec![(
+                    "user".to_string(),
+                    ColumnValue::Literal("O'Brien".to_string()),
+                )],
             },
             changes: vec![ColumnChange {
                 column_name: "when".to_string(),
@@ -284,12 +327,63 @@ mod tests {
     }
 
     #[test]
+    fn binary_values_and_keys_are_written_as_bytes() {
+        use blanco_core::ColumnType;
+
+        let operation = TableChangeOperation {
+            operation_type: OperationType::Update,
+            table_name: "files".to_string(),
+            row_identifier: RowIdentifier::PrimaryKey {
+                columns: vec![(
+                    "id".to_string(),
+                    ColumnValue::data("0xCAFE".to_string(), ColumnType::Binary),
+                )],
+            },
+            changes: vec![ColumnChange {
+                column_name: "body".to_string(),
+                value: ColumnValue::from_typed_cell(
+                    Some("0x00ff".to_string()),
+                    false,
+                    ColumnType::Binary,
+                ),
+            }],
+        };
+        assert_eq!(
+            operation.to_sql_query(DatabaseType::PostgreSQL),
+            r#"UPDATE "files" SET "body" = '\x00ff'::bytea WHERE "id" = '\xcafe'::bytea"#
+        );
+        assert_eq!(
+            operation.to_sql_query(DatabaseType::MySQL),
+            "UPDATE `files` SET `body` = X'00ff' WHERE `id` = X'cafe'"
+        );
+        assert_eq!(
+            operation.to_sql_query(DatabaseType::SQLite),
+            r#"UPDATE "files" SET "body" = X'00ff' WHERE "id" = X'cafe'"#
+        );
+        assert_eq!(
+            operation.to_sql_query(DatabaseType::MsSql),
+            "UPDATE [files] SET [body] = 0x00ff WHERE [id] = 0xcafe"
+        );
+
+        // Without the prefix the text is a string, and the same text in a
+        // text column is never bytes.
+        assert_eq!(
+            ColumnValue::from_typed_cell(Some("cafe".to_string()), false, ColumnType::Binary),
+            ColumnValue::Literal("cafe".to_string())
+        );
+        assert_eq!(
+            ColumnValue::from_typed_cell(Some("0xcafe".to_string()), false, ColumnType::Text),
+            ColumnValue::Literal("0xcafe".to_string())
+        );
+    }
+
+    #[test]
     fn update_sets_expression_verbatim() {
         let operation = TableChangeOperation {
             operation_type: OperationType::Update,
             table_name: "public.item".to_string(),
             row_identifier: RowIdentifier::PrimaryKey {
-                columns: vec![("id".to_string(), "7".to_string())],
+                columns: vec![("id".to_string(), ColumnValue::Literal("7".to_string()))],
             },
             changes: vec![ColumnChange {
                 column_name: "price".to_string(),
@@ -309,7 +403,10 @@ mod tests {
             operation_type: OperationType::Delete,
             table_name: "public.setting".to_string(),
             row_identifier: RowIdentifier::PrimaryKey {
-                columns: vec![("name".to_string(), "DEFAULT".to_string())],
+                columns: vec![(
+                    "name".to_string(),
+                    ColumnValue::Literal("DEFAULT".to_string()),
+                )],
             },
             changes: Vec::new(),
         };
@@ -326,7 +423,10 @@ mod tests {
             operation_type: OperationType::Delete,
             table_name: "dbo.user]data".to_string(),
             row_identifier: RowIdentifier::PrimaryKey {
-                columns: vec![("key]column".to_string(), "1".to_string())],
+                columns: vec![(
+                    "key]column".to_string(),
+                    ColumnValue::Literal("1".to_string()),
+                )],
             },
             changes: Vec::new(),
         };

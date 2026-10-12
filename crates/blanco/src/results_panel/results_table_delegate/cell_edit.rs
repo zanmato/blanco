@@ -1,10 +1,11 @@
 use blanco_core::ColumnType;
-use gpui::{AppContext, Context, Focusable, Window};
+use gpui::{AppContext, Context, Entity, Focusable, Window};
 use gpui_component::input::{EditorState, InputState};
 use gpui_component::table::TableState;
 
 use super::{ResultsTableDelegate, results_settings};
 use crate::results_panel::ResultsPanel;
+use crate::results_panel::binary_viewer::{BinaryViewer, BinaryViewerEvent};
 use crate::results_panel::cell_edit_state::{CellInput, ChangeType, TableChange};
 use crate::results_panel::compare::pretty_json_or_original;
 use crate::results_panel::date_time_picker::{DateTimePicker, DateTimePickerEvent};
@@ -163,7 +164,7 @@ impl ResultsTableDelegate {
 
     /// The value a cell currently holds: the pending edit when there is one,
     /// otherwise the row data as loaded.
-    pub(super) fn stored_cell_value(&self, row_ix: usize, col_ix: usize) -> Option<String> {
+    pub(crate) fn stored_cell_value(&self, row_ix: usize, col_ix: usize) -> Option<String> {
         match self.edit_state.get_edited_value(row_ix, col_ix) {
             Some(edited) => edited.clone(),
             None => self
@@ -227,6 +228,36 @@ impl ResultsTableDelegate {
                 .map(|column| column.name.to_string())
                 .unwrap_or_else(|| format!("column {}", col + 1));
             Some(format!("Row {}, {column}: invalid JSON: {error}", row + 1))
+        })
+    }
+
+    /// Why an edit pending for a binary column is not the bytes it claims to
+    /// be: text written as hex (`0x…`) whose digits are not whole bytes. Text
+    /// without the prefix is sent as the string it is.
+    pub fn invalid_binary_edit(&self) -> Option<String> {
+        let mut cells: Vec<&(usize, usize)> = self.edit_state.edited_values.keys().collect();
+        cells.sort();
+        cells.into_iter().find_map(|&(row, col)| {
+            if self.column_types.get(col) != Some(&ColumnType::Binary)
+                || self.edit_state.expression_cells.contains(&(row, col))
+            {
+                return None;
+            }
+            let text = self.edit_state.edited_values.get(&(row, col))?.as_deref()?;
+            if !blanco_core::binary::is_hex_notation(text)
+                || blanco_core::binary::hex_digits(text).is_some()
+            {
+                return None;
+            }
+            let column = self
+                .columns
+                .get(col)
+                .map(|column| column.name.to_string())
+                .unwrap_or_else(|| format!("column {}", col + 1));
+            Some(format!(
+                "Row {}, {column}: invalid hex: expected pairs of hex digits after 0x",
+                row + 1
+            ))
         })
     }
 
@@ -323,6 +354,151 @@ impl ResultsTableDelegate {
         self.edit_state.date_picker.clone()
     }
 
+    /// Whether the cell's value is bytes the binary viewer can show: a
+    /// binary column holding NULL or hex notation. Text someone typed into a
+    /// binary cell without the `0x` is text and stays in the text editors.
+    pub(crate) fn opens_in_binary_viewer(&self, row_ix: usize, col_ix: usize) -> bool {
+        self.column_types.get(col_ix) == Some(&ColumnType::Binary)
+            && !self.edit_state.is_expression(row_ix, col_ix)
+            && self
+                .stored_cell_value(row_ix, col_ix)
+                .is_none_or(|value| blanco_core::binary::hex_digits(&value).is_some())
+    }
+
+    /// Whether a binary cell is too long for the single-line input, whose
+    /// text would be twice the value's size on one line.
+    pub(crate) fn binary_exceeds_inline_input(&self, row_ix: usize, col_ix: usize) -> bool {
+        const INLINE_BYTES: usize = 64;
+        self.column_types.get(col_ix) == Some(&ColumnType::Binary)
+            && self
+                .stored_cell_value(row_ix, col_ix)
+                .and_then(|value| blanco_core::binary::byte_length(&value))
+                .is_some_and(|length| length > INLINE_BYTES)
+    }
+
+    /// Expand a binary cell into the viewer. The cell counts as being
+    /// edited while it is open, so the grid draws the viewer in its place.
+    pub(crate) fn open_binary_viewer(
+        state: &mut TableState<ResultsTableDelegate>,
+        row_ix: usize,
+        col_ix: usize,
+        window: &mut Window,
+        cx: &mut Context<'_, TableState<ResultsTableDelegate>>,
+    ) -> Entity<BinaryViewer> {
+        let delegate = state.delegate();
+        let bytes = delegate
+            .stored_cell_value(row_ix, col_ix)
+            .and_then(|value| blanco_core::binary::decode(&value));
+        let editable = delegate.is_editable();
+        let file_stem = delegate.binary_file_stem(col_ix);
+        let viewer = cx.new(|cx| BinaryViewer::new(bytes, editable, file_stem, cx));
+        cx.subscribe_in(&viewer, window, move |state, _, event, window, cx| {
+            Self::handle_binary_viewer_event(state, (row_ix, col_ix), event, window, cx);
+        })
+        .detach();
+
+        let original = delegate
+            .rows
+            .get(row_ix)
+            .and_then(|row| row.get(col_ix))
+            .cloned()
+            .flatten();
+        let is_new_row = delegate.edit_state.is_new_row(row_ix);
+        let edit_state = &mut state.delegate_mut().edit_state;
+        if !is_new_row {
+            edit_state
+                .original_values
+                .entry((row_ix, col_ix))
+                .or_insert(original);
+        }
+        edit_state.editing_cell = Some((row_ix, col_ix));
+        edit_state.expanded_cell = Some((row_ix, col_ix));
+        edit_state.editing_input = None;
+        edit_state.date_picker = None;
+        edit_state.editing_as_expression = false;
+        edit_state.binary_viewer = Some(viewer.clone());
+
+        viewer.focus_handle(cx).focus(window, cx);
+        state.refresh(cx);
+        cx.notify();
+        viewer
+    }
+
+    /// File name offered when a binary cell is saved: the table and column.
+    fn binary_file_stem(&self, col_ix: usize) -> String {
+        let column = self
+            .columns
+            .get(col_ix)
+            .map(|column| column.name.to_string())
+            .unwrap_or_else(|| "value".to_string());
+        let stem = match &self.table_name {
+            Some(table) => format!("{table}_{column}"),
+            None => column,
+        };
+        stem.chars()
+            .map(|c| {
+                if c.is_alphanumeric() || matches!(c, '-' | '_' | '.') {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect()
+    }
+
+    fn handle_binary_viewer_event(
+        state: &mut TableState<ResultsTableDelegate>,
+        cell: (usize, usize),
+        event: &BinaryViewerEvent,
+        window: &mut Window,
+        cx: &mut Context<'_, TableState<ResultsTableDelegate>>,
+    ) {
+        if state.delegate().edit_state.editing_cell != Some(cell) {
+            return;
+        }
+        match event {
+            BinaryViewerEvent::Loaded(bytes) => {
+                if state.delegate().is_editable() {
+                    state
+                        .delegate_mut()
+                        .edit_state
+                        .edited_values
+                        .insert(cell, Some(blanco_core::binary::encode(bytes)));
+                    state.refresh(cx);
+                    cx.notify();
+                }
+            }
+            BinaryViewerEvent::Close => Self::close_binary_viewer(state, window, cx),
+        }
+    }
+
+    /// Close the binary viewer, keeping a loaded file as the cell's pending
+    /// edit.
+    pub(crate) fn close_binary_viewer(
+        state: &mut TableState<ResultsTableDelegate>,
+        window: &mut Window,
+        cx: &mut Context<'_, TableState<ResultsTableDelegate>>,
+    ) {
+        state.delegate_mut().finish_binary_viewer();
+        state.focus_handle(cx).focus(window, cx);
+        state.refresh(cx);
+        cx.notify();
+    }
+
+    /// End the binary viewer's edit: a loaded file becomes a pending change,
+    /// an untouched value is left as it was.
+    pub(crate) fn finish_binary_viewer(&mut self) {
+        if self.edit_state.binary_viewer.is_none() {
+            return;
+        }
+        if let Some((row, col)) = self.edit_state.editing_cell
+            && self.edit_state.is_edited(row, col)
+        {
+            self.commit_cell_edit(row, col);
+        }
+        self.edit_state.stop_editing();
+    }
+
     /// Collapse an expanded cell editor back to a single-line inline input.
     pub(crate) fn handle_minimize(
         state: &mut TableState<ResultsTableDelegate>,
@@ -380,6 +556,11 @@ impl ResultsTableDelegate {
         window: &mut Window,
         cx: &mut Context<'_, TableState<ResultsTableDelegate>>,
     ) {
+        if state.delegate().opens_in_binary_viewer(row_ix, col_ix) {
+            Self::open_binary_viewer(state, row_ix, col_ix, window, cx);
+            return;
+        }
+
         let inline_text = state
             .delegate_mut()
             .edit_state

@@ -1551,6 +1551,433 @@ fn password_prompt_round_trip(case: DriverCase, id: i64) {
     assert_eq!(prompt.asked.lock().unwrap().len(), 4);
 }
 
+/// Binary values against every live backend that has a binary type: bytes
+/// written with the dialect's literal come back as the same hex, a binary
+/// key addresses its row, the stream export path agrees with the query path
+/// and the filter predicates select what they say.
+#[test]
+fn test_binary_values_round_trip() {
+    use blanco_core::binary::encode;
+    use blanco_core::{ColumnType, FilterCondition, FilterOperator};
+    use database::ConnectionConfig;
+    use futures::StreamExt as _;
+
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let sqlite_path = temp_dir
+        .path()
+        .join("binary.db")
+        .to_string_lossy()
+        .to_string();
+
+    let server = |case: &DriverCase, id: i64| {
+        ConnectionConfig::new(
+            id,
+            case.name.to_string(),
+            case.db_type,
+            case.host.clone(),
+            case.port.parse().expect("port"),
+            case.database.clone(),
+            case.username.clone(),
+            Some(case.password.clone()),
+        )
+    };
+    let postgres = postgres_case();
+    let mysql = mysql_case();
+    let mssql = mssql_case();
+    let cases = vec![
+        (
+            "SQLite",
+            ConnectionConfig::new_sqlite(9101, "binary-sqlite".to_string(), sqlite_path),
+            "main".to_string(),
+            "CREATE TABLE blanco_binary_test (id BLOB PRIMARY KEY, body BLOB)",
+        ),
+        (
+            postgres.label,
+            server(&postgres, 9102),
+            postgres.database.clone(),
+            "CREATE TABLE blanco_binary_test (id bytea PRIMARY KEY, body bytea)",
+        ),
+        (
+            mysql.label,
+            server(&mysql, 9103),
+            mysql.database.clone(),
+            "CREATE TABLE blanco_binary_test (id VARBINARY(16) PRIMARY KEY, body LONGBLOB)",
+        ),
+        (
+            mssql.label,
+            server(&mssql, 9104).with_trust_server_certificate(true),
+            mssql.database.clone(),
+            "CREATE TABLE blanco_binary_test (id VARBINARY(16) PRIMARY KEY, body VARBINARY(MAX))",
+        ),
+    ];
+
+    let every_byte: Vec<u8> = (0..=255).collect();
+    let image_start = b"\x89PNG\r\n".to_vec();
+    let service = DatabaseService::new(runtime.handle().clone());
+
+    for (label, config, database, create_table) in cases {
+        let dialect = config.db_type.dialect();
+        let database = Some(database.as_str());
+        let connection = runtime.block_on(async {
+            service.add_connection_config(config.clone()).await;
+            let connection = service
+                .get_or_create_connection(config.id, database)
+                .await?;
+            connection.ping().await?;
+            anyhow::Ok(connection)
+        });
+        let connection = match connection {
+            Ok(connection) => connection,
+            Err(error) if strict() => panic!("{label}: server unreachable: {error:#}"),
+            Err(error) => {
+                eprintln!(
+                    "skip {label}: server unreachable ({error:#}). Set BLANCO_RUN_DB_TESTS=1 to require."
+                );
+                continue;
+            }
+        };
+        let write = |sql: &str| {
+            runtime
+                .block_on(connection.execute_write(sql, database, &[]))
+                .unwrap_or_else(|error| panic!("{label}: {sql}: {error:#}"))
+        };
+        let literal = |bytes: &[u8]| dialect.value_literal(&encode(bytes), ColumnType::Binary);
+
+        write("DROP TABLE IF EXISTS blanco_binary_test");
+        write(create_table);
+        for (key, body) in [
+            (1u8, Some(&every_byte)),
+            (2, Some(&image_start)),
+            (3, Some(&Vec::new())),
+            (4, None),
+        ] {
+            let body = body.map_or("NULL".to_string(), |body| literal(body));
+            write(&format!(
+                "INSERT INTO blanco_binary_test (id, body) VALUES ({}, {body})",
+                literal(&[key])
+            ));
+        }
+
+        let expected = vec![
+            vec![Some("0x01".to_string()), Some(encode(&every_byte))],
+            vec![Some("0x02".to_string()), Some(encode(&image_start))],
+            vec![Some("0x03".to_string()), Some("0x".to_string())],
+            vec![Some("0x04".to_string()), None],
+        ];
+        let select = "SELECT id, body FROM blanco_binary_test ORDER BY id";
+        let result = runtime
+            .block_on(connection.execute_query(select, database, None))
+            .unwrap_or_else(|error| panic!("{label}: select: {error:#}"));
+        assert_eq!(
+            result.column_types,
+            vec![ColumnType::Binary, ColumnType::Binary],
+            "{label}: column types"
+        );
+        assert_eq!(result.rows, expected, "{label}: queried rows");
+
+        // Exports read through the streaming path.
+        let streamed = runtime.block_on(async {
+            let (_, column_types, mut rows) = connection
+                .execute_query_stream_rows(select, database)
+                .await
+                .unwrap_or_else(|error| panic!("{label}: stream: {error:#}"));
+            assert_eq!(column_types[1], ColumnType::Binary, "{label}: stream types");
+            let mut collected = Vec::new();
+            while let Some(row) = rows.next().await {
+                collected.push(row.unwrap_or_else(|error| panic!("{label}: row: {error:#}")));
+            }
+            collected
+        });
+        assert_eq!(streamed, expected, "{label}: streamed rows");
+
+        let matching = |operator: FilterOperator, value: &str| -> Vec<String> {
+            let predicate = dialect.filter_predicate(&FilterCondition {
+                column: "body".to_string(),
+                operator,
+                value: value.to_string(),
+                numeric: false,
+                binary: true,
+            });
+            let sql = format!("SELECT id FROM blanco_binary_test WHERE {predicate} ORDER BY id");
+            runtime
+                .block_on(connection.execute_query(&sql, database, None))
+                .unwrap_or_else(|error| panic!("{label}: {sql}: {error:#}"))
+                .rows
+                .into_iter()
+                .map(|row| row[0].clone().unwrap_or_default())
+                .collect()
+        };
+        assert_eq!(
+            matching(FilterOperator::Equals, "0x89504e470d0a"),
+            ["0x02"],
+            "{label}: equals"
+        );
+        assert_eq!(
+            matching(FilterOperator::NotEquals, "0x89504e470d0a"),
+            ["0x01", "0x03"],
+            "{label}: not equals"
+        );
+        assert_eq!(
+            matching(FilterOperator::StartsWith, "8950"),
+            ["0x02"],
+            "{label}: starts with"
+        );
+        assert_eq!(
+            matching(FilterOperator::EndsWith, "0x0d0a"),
+            ["0x02"],
+            "{label}: ends with"
+        );
+        assert_eq!(
+            matching(FilterOperator::EndsWith, "0xfeff"),
+            ["0x01"],
+            "{label}: ends with, long value"
+        );
+        assert_eq!(
+            matching(FilterOperator::Contains, "0x4e47"),
+            ["0x02"],
+            "{label}: contains"
+        );
+        assert_eq!(
+            matching(FilterOperator::NotContains, "0x4e47"),
+            ["0x01", "0x03"],
+            "{label}: does not contain"
+        );
+        assert_eq!(
+            matching(FilterOperator::In, "0x, 0x89504e470d0a"),
+            ["0x02", "0x03"],
+            "{label}: in"
+        );
+        assert_eq!(
+            matching(FilterOperator::Greater, "0x88"),
+            ["0x02"],
+            "{label}: greater"
+        );
+
+        // A binary key addresses its row.
+        let updated = write(&format!(
+            "UPDATE blanco_binary_test SET body = {} WHERE id = {}",
+            literal(&[0xca, 0xfe]),
+            literal(&[4])
+        ));
+        assert_eq!(updated, 1, "{label}: update by binary key");
+        let result = runtime
+            .block_on(connection.execute_query(
+                &format!(
+                    "SELECT body FROM blanco_binary_test WHERE id = {}",
+                    literal(&[4])
+                ),
+                database,
+                None,
+            ))
+            .unwrap_or_else(|error| panic!("{label}: reselect: {error:#}"));
+        assert_eq!(
+            result.rows,
+            vec![vec![Some("0xcafe".to_string())]],
+            "{label}"
+        );
+
+        write("DROP TABLE blanco_binary_test");
+    }
+}
+
+/// Reading a table with its large values deferred, against every backend
+/// that supports it: the rewritten read runs, cuts exactly the values over
+/// the threshold, keeps the result's shape and types, and the full values
+/// come back by primary key.
+#[test]
+fn test_deferred_read_round_trip() {
+    use blanco_core::ColumnType;
+    use blanco_core::binary::encode;
+    use blanco_core::deferred::DeferredCell;
+    use database::ConnectionConfig;
+
+    const THRESHOLD: u64 = 1024;
+    const PREVIEW: usize = blanco_core::deferred::PREVIEW_LENGTH;
+
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let sqlite_path = temp_dir
+        .path()
+        .join("deferred.db")
+        .to_string_lossy()
+        .to_string();
+    let server = |case: &DriverCase, id: i64| {
+        ConnectionConfig::new(
+            id,
+            case.name.to_string(),
+            case.db_type,
+            case.host.clone(),
+            case.port.parse().expect("port"),
+            case.database.clone(),
+            case.username.clone(),
+            Some(case.password.clone()),
+        )
+    };
+    let postgres = postgres_case();
+    let mysql = mysql_case();
+    let mssql = mssql_case();
+    // The last field is how many bytes a character of the text column takes.
+    let cases = vec![
+        (
+            "SQLite",
+            ConnectionConfig::new_sqlite(9201, "deferred-sqlite".to_string(), sqlite_path),
+            "main".to_string(),
+            "CREATE TABLE blanco_deferred_test (id INTEGER PRIMARY KEY, title VARCHAR(50), body TEXT, data BLOB)",
+            1,
+        ),
+        (
+            postgres.label,
+            server(&postgres, 9202),
+            postgres.database.clone(),
+            "CREATE TABLE blanco_deferred_test (id integer PRIMARY KEY, title varchar(50), body text, data bytea)",
+            1,
+        ),
+        (
+            mysql.label,
+            server(&mysql, 9203),
+            mysql.database.clone(),
+            "CREATE TABLE blanco_deferred_test (id integer PRIMARY KEY, title VARCHAR(50), body LONGTEXT, data LONGBLOB)",
+            1,
+        ),
+        (
+            mssql.label,
+            server(&mssql, 9204).with_trust_server_certificate(true),
+            mssql.database.clone(),
+            "CREATE TABLE blanco_deferred_test (id integer PRIMARY KEY, title NVARCHAR(50), body NVARCHAR(MAX), data VARBINARY(MAX))",
+            2,
+        ),
+    ];
+
+    let long_text = "ab".repeat(2500);
+    let long_bytes = vec![7u8; 3000];
+    let service = DatabaseService::new(runtime.handle().clone());
+
+    for (label, config, database, create_table, bytes_per_character) in cases {
+        let dialect = config.db_type.dialect();
+        let database = Some(database.as_str());
+        let connection = runtime.block_on(async {
+            service.add_connection_config(config.clone()).await;
+            let connection = service
+                .get_or_create_connection(config.id, database)
+                .await?;
+            connection.ping().await?;
+            anyhow::Ok(connection)
+        });
+        let connection = match connection {
+            Ok(connection) => connection,
+            Err(error) if strict() => panic!("{label}: server unreachable: {error:#}"),
+            Err(error) => {
+                eprintln!(
+                    "skip {label}: server unreachable ({error:#}). Set BLANCO_RUN_DB_TESTS=1 to require."
+                );
+                continue;
+            }
+        };
+        let write = |sql: &str| {
+            runtime
+                .block_on(connection.execute_write(sql, database, &[]))
+                .unwrap_or_else(|error| panic!("{label}: {error:#}"))
+        };
+        let query = |sql: &str| {
+            runtime
+                .block_on(connection.execute_query(sql, database, None))
+                .unwrap_or_else(|error| panic!("{label}: {sql}: {error:#}"))
+        };
+
+        write("DROP TABLE IF EXISTS blanco_deferred_test");
+        write(create_table);
+        // The NULL row comes first: a driver that types a column from its
+        // first value has nothing to go by.
+        write(
+            "INSERT INTO blanco_deferred_test (id, title, body, data) VALUES (1, NULL, NULL, NULL)",
+        );
+        write(&format!(
+            "INSERT INTO blanco_deferred_test (id, title, body, data) VALUES (2, 'small', 'short', {})",
+            dialect.value_literal("0x0102", ColumnType::Binary)
+        ));
+        write(&format!(
+            "INSERT INTO blanco_deferred_test (id, title, body, data) VALUES (3, 'large', {}, {})",
+            dialect.string_literal(&long_text),
+            dialect.value_literal(&encode(&long_bytes), ColumnType::Binary)
+        ));
+
+        let table_columns = runtime
+            .block_on(connection.get_columns_for_table("blanco_deferred_test", None))
+            .unwrap_or_else(|error| panic!("{label}: columns: {error:#}"));
+        let original = dialect.apply_row_limit(
+            "SELECT * FROM blanco_deferred_test WHERE id > 0 ORDER BY id",
+            100,
+        );
+        let plan = dialect
+            .deferred_read(&original, &table_columns, THRESHOLD)
+            .unwrap_or_else(|| {
+                panic!("{label}: {original} should be deferrable: {table_columns:?}")
+            });
+
+        let full = query(&original);
+        let mut result = query(&plan.query);
+        let deferred = plan.apply(&mut result, THRESHOLD);
+
+        assert_eq!(result.columns, full.columns, "{label}: columns");
+        assert_eq!(
+            result.column_types, full.column_types,
+            "{label}: column types"
+        );
+        assert_eq!(
+            deferred,
+            vec![
+                DeferredCell {
+                    row: 2,
+                    column: 2,
+                    size: (long_text.len() * bytes_per_character) as u64
+                },
+                DeferredCell {
+                    row: 2,
+                    column: 3,
+                    size: long_bytes.len() as u64
+                },
+            ],
+            "{label}: deferred cells"
+        );
+        // Rows without large values are untouched.
+        assert_eq!(result.rows[..2], full.rows[..2], "{label}: small rows");
+        assert_eq!(
+            result.rows[2][..2],
+            full.rows[2][..2],
+            "{label}: small cells"
+        );
+        assert_eq!(
+            result.rows[2][2].as_deref(),
+            Some(&long_text[..PREVIEW]),
+            "{label}: text preview"
+        );
+        assert_eq!(
+            result.rows[2][3],
+            Some(encode(&long_bytes[..PREVIEW])),
+            "{label}: binary preview"
+        );
+
+        let fetched = query(&dialect.deferred_values_query(
+            "blanco_deferred_test",
+            &[("id".to_string(), ColumnType::Integer)],
+            &["body".to_string(), "data".to_string()],
+            &[vec!["3".to_string()]],
+        ));
+        assert_eq!(
+            fetched.rows,
+            vec![vec![
+                Some("3".to_string()),
+                Some(long_text.clone()),
+                Some(encode(&long_bytes))
+            ]],
+            "{label}: full values"
+        );
+
+        write("DROP TABLE blanco_deferred_test");
+    }
+}
+
 /// A PostgreSQL connection without a password takes it from the password
 /// file the service is pointed at, and is asked for one when the file has no
 /// line for it. The file is a temporary one, so neither outcome depends on

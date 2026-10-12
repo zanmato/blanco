@@ -43,6 +43,43 @@ impl fmt::Display for TransformError {
 
 impl std::error::Error for TransformError {}
 
+/// How the bytes of a binary column are written to text formats.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BinaryEncoding {
+    /// `0x` followed by hex digits, as the grid shows them.
+    #[default]
+    Hex,
+    /// Base64 with the standard alphabet and padding.
+    Base64,
+}
+
+impl BinaryEncoding {
+    pub const ALL: [BinaryEncoding; 2] = [BinaryEncoding::Hex, BinaryEncoding::Base64];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            BinaryEncoding::Hex => "Hex",
+            BinaryEncoding::Base64 => "Base64",
+        }
+    }
+
+    /// The text written for a cell of `column_type`. Only the hex notation
+    /// of a binary column is re-encoded; anything else is written as it is.
+    pub fn apply<'a>(
+        self,
+        value: &'a str,
+        column_type: Option<&ColumnType>,
+    ) -> std::borrow::Cow<'a, str> {
+        if self == BinaryEncoding::Base64
+            && column_type == Some(&ColumnType::Binary)
+            && let Some(bytes) = blanco_core::binary::decode(value)
+        {
+            return blanco_core::binary::to_base64(&bytes).into();
+        }
+        value.into()
+    }
+}
+
 /// Core trait for data transformers that convert table data to different formats
 pub trait DataTransformer: Send + Sync {
     /// Returns the display name of this format
@@ -170,6 +207,82 @@ impl SelectedTableData {
 mod tests {
     use super::*;
     use crate::{SelectedCell, SelectedRow, SelectedTableData};
+
+    fn binary_data(db_type: blanco_core::DatabaseType) -> SelectedTableData {
+        let cell = |col, name: &str, value: &str, column_type| SelectedCell {
+            col,
+            value: Some(value.to_string()),
+            column_name: Some(name.to_string()),
+            column_type: Some(column_type),
+        };
+        SelectedTableData {
+            table_name: Some("files".to_string()),
+            db_type: Some(db_type),
+            columns: vec!["name".to_string(), "body".to_string()],
+            selected_rows: vec![SelectedRow {
+                row: 0,
+                cells: vec![
+                    cell(0, "name", "0x666f6f", ColumnType::Text),
+                    cell(1, "body", "0x666f6f", ColumnType::Binary),
+                ],
+            }],
+        }
+    }
+
+    #[test]
+    fn binary_columns_are_written_as_hex_or_base64() {
+        let data = binary_data(blanco_core::DatabaseType::PostgreSQL);
+        // Only the binary column is re-encoded: the same text in a text
+        // column is text.
+        let csv = CsvTransformer::default()
+            .binary_encoding(BinaryEncoding::Base64)
+            .transform_selected_data(&data)
+            .expect("csv");
+        assert_eq!(csv, "name;body\n0x666f6f;Zm9v\n");
+        let csv = CsvTransformer::default()
+            .transform_selected_data(&data)
+            .expect("csv");
+        assert_eq!(csv, "name;body\n0x666f6f;0x666f6f\n");
+
+        let types = [ColumnType::Text, ColumnType::Binary];
+        let row = [Some("0x666f6f".to_string()), Some("0x666f6f".to_string())];
+        let streamed = CsvTransformer::default()
+            .binary_encoding(BinaryEncoding::Base64)
+            .transform_stream_row(&row, &data.columns, &types)
+            .expect("row");
+        assert_eq!(streamed, "0x666f6f;Zm9v\n");
+
+        let json = JsonTransformer::new()
+            .binary_encoding(BinaryEncoding::Base64)
+            .transform_selected_data(&data)
+            .expect("json");
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid json");
+        assert_eq!(parsed[0]["body"], "Zm9v");
+        assert_eq!(parsed[0]["name"], "0x666f6f");
+        // Hex digits that read like a number stay a string.
+        let numeric = [Some("x".to_string()), Some("0x1234".to_string())];
+        let json = JsonTransformer::new()
+            .transform_stream_row(&numeric, &data.columns, &types)
+            .expect("row");
+        assert!(json.contains("\"0x1234\""), "{json}");
+    }
+
+    #[test]
+    fn sql_formats_write_binary_literals() {
+        use blanco_core::DatabaseType;
+        let sql = |db_type| {
+            SqlTransformer::new()
+                .transform_selected_data(&binary_data(db_type))
+                .expect("sql")
+        };
+        assert!(sql(DatabaseType::PostgreSQL).contains(r"('0x666f6f', '\x666f6f'::bytea)"));
+        assert!(sql(DatabaseType::MySQL).contains("('0x666f6f', X'666f6f')"));
+        assert!(sql(DatabaseType::MsSql).contains("('0x666f6f', 0x666f6f)"));
+        let values = ValuesTransformer::new()
+            .transform_selected_data(&binary_data(DatabaseType::SQLite))
+            .expect("values");
+        assert!(values.contains("('0x666f6f', X'666f6f')"), "{values}");
+    }
 
     fn create_test_data_with_nulls() -> SelectedTableData {
         SelectedTableData {

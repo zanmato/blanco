@@ -4,11 +4,13 @@
 //! It defines the core interfaces for database connections, completion providers,
 //! and database service traits.
 
+pub mod binary;
 pub mod connection_context;
 pub mod connection_trait;
 pub mod database_service;
 pub mod database_type;
 pub mod ddl;
+pub mod deferred;
 pub mod dialect;
 pub mod explain_plan;
 pub mod statement_stream;

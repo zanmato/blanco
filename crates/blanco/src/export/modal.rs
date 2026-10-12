@@ -22,8 +22,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 use transformers::{
-    CsvOptions, CsvQuoting, CsvTransformer, DataTransformer, JsonTransformer, MarkdownTransformer,
-    SqlTransformer, TextEncoding, TsvTransformer,
+    BinaryEncoding, CsvOptions, CsvQuoting, CsvTransformer, DataTransformer, JsonTransformer,
+    MarkdownTransformer, SqlTransformer, TextEncoding, TsvTransformer,
 };
 
 use super::service::ExportResult;
@@ -160,6 +160,8 @@ pub struct ExportModal {
     directory_input: Entity<InputState>,
     filename_input: Entity<InputState>,
     encoding_select: OptionSelect,
+    /// How CSV and JSON write binary columns.
+    binary_select: OptionSelect,
     csv: CsvControls,
     /// SQL output as one INSERT holding every row.
     sql_multi_row: bool,
@@ -232,6 +234,13 @@ impl ExportModal {
                 &TextEncoding::ALL,
                 TextEncoding::label,
                 TextEncoding::default(),
+                window,
+                cx,
+            ),
+            binary_select: option_select(
+                &BinaryEncoding::ALL,
+                BinaryEncoding::label,
+                BinaryEncoding::default(),
                 window,
                 cx,
             ),
@@ -343,6 +352,7 @@ impl ExportModal {
             cancel: Arc::clone(&self.cancel),
         };
         let csv_options = self.csv.options(cx);
+        let binary = chosen(&self.binary_select, &BinaryEncoding::ALL, cx);
         let sql_multi_row = self.sql_multi_row;
 
         self.is_exporting = true;
@@ -393,10 +403,14 @@ impl ExportModal {
                         .await?;
 
                     let transformer: Box<dyn DataTransformer> = match format {
-                        ExportFormat::Csv => Box::new(CsvTransformer::new(csv_options)),
+                        ExportFormat::Csv => {
+                            Box::new(CsvTransformer::new(csv_options).binary_encoding(binary))
+                        }
                         ExportFormat::Tsv => Box::new(TsvTransformer),
                         ExportFormat::Markdown => Box::new(MarkdownTransformer),
-                        ExportFormat::Json => Box::new(JsonTransformer::new()),
+                        ExportFormat::Json => {
+                            Box::new(JsonTransformer::new().binary_encoding(binary))
+                        }
                         ExportFormat::Sql => {
                             let table_name_for_sql = match &schema_name {
                                 Some(schema) => format!("{schema}.{table_name}"),
@@ -655,6 +669,17 @@ impl Render for ExportModal {
                     .gap_2()
                     .child(div().text_sm().child("Encoding"))
                     .child(Select::new(&self.encoding_select)),
+            )
+            .when(
+                matches!(format, ExportFormat::Csv | ExportFormat::Json),
+                |this| {
+                    this.child(
+                        v_flex()
+                            .gap_2()
+                            .child(div().text_sm().child("Binary Values"))
+                            .child(Select::new(&self.binary_select)),
+                    )
+                },
             )
             .map(|this| match format {
                 ExportFormat::Csv => this.child(self.render_csv_options(cx)),

@@ -817,6 +817,48 @@ impl SettingsView {
                         .default_value(default_settings.results.show_row_numbers),
                     )
                     .description("Number the rows of a result. Applies to the next result shown."),
+                    SettingItem::new(
+                        "Defer Values Larger Than (KB)",
+                        SettingField::number_input(
+                            NumberFieldOptions {
+                                min: 0.0,
+                                max: 1_048_576.0,
+                                step: 16.0,
+                            },
+                            move |cx: &App| {
+                                f64::from(
+                                    AppSettings::global(cx)
+                                        .settings
+                                        .results
+                                        .defer_values_over_kb,
+                                )
+                            },
+                            {
+                                let view_handle = view_handle.clone();
+                                move |val: f64, cx: &mut App| {
+                                    AppSettings::global_mut(cx)
+                                        .settings
+                                        .results
+                                        .defer_values_over_kb = val as u32;
+
+                                    let key = "results.defer_values_over_kb".to_string();
+                                    let value = (val as u32).to_string();
+                                    if let Some(view) = view_handle.upgrade() {
+                                        view.update(cx, |view, cx| {
+                                            view.save_setting_debounced(key, value, false, cx);
+                                        });
+                                    }
+                                }
+                            },
+                        )
+                        .default_value(f64::from(default_settings.results.defer_values_over_kb)),
+                    )
+                    .description(
+                        "When a table is opened, text and binary values larger than this are \
+                         left on the server and shown with their size. The full value loads \
+                         when the cell is opened or copied. Applies to SELECT * on one table \
+                         with a primary key. Set to 0 to always load full values.",
+                    ),
                 ]),
                 SettingGroup::new()
                     .title("Backup Tools")

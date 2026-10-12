@@ -5,6 +5,7 @@ use blanco_core::{QueryResult, connection_trait::ColumnType};
 
 use super::cell_edit_state::{CellEditState, format_value_for_display};
 use super::compare::CompareKind;
+use super::deferred_values::DeferredValues;
 use super::temporal;
 use crate::app_settings::AppSettings;
 use crate::settings::ResultsSettings;
@@ -18,6 +19,22 @@ pub use layout::ColumnLayout;
 
 /// The grid's display settings. Falls back to the defaults where the app
 /// settings are not installed, as in tests that build a table on its own.
+/// How the bytes of a binary cell read in the grid: all of a short value,
+/// the start of a long one with its size. `None` for text that is not hex
+/// notation, which someone typed into the cell.
+fn binary_display_text(value: &str) -> Option<String> {
+    const SHOWN_BYTES: usize = 16;
+    let length = blanco_core::binary::byte_length(value)?;
+    if length <= SHOWN_BYTES {
+        return Some(value.to_string());
+    }
+    let shown = value.get(..2 + SHOWN_BYTES * 2)?;
+    Some(format!(
+        "{shown}… ({})",
+        blanco_core::binary::format_size(length)
+    ))
+}
+
 pub(crate) fn results_settings(cx: &App) -> ResultsSettings {
     cx.try_global::<AppSettings>()
         .map(|app_settings| app_settings.settings.results.clone())
@@ -40,11 +57,13 @@ pub struct ResultsTableDelegate {
     pub compare_selection_kind: Option<CompareKind>,
     /// Column metadata for tooltips and rendering
     table_columns: Vec<blanco_core::ColumnInfo>,
+    /// The cells holding a preview of a value left on the server.
+    pub(super) deferred: DeferredValues,
     /// The full result while a text filter is active. `rows` then holds only
     /// the matching subset, which keeps every row-index based code path
     /// (selection, editing, sorting) unaware of filtering. `None` when no
     /// filter is applied.
-    unfiltered_rows: Option<Vec<Vec<Option<String>>>>,
+    pub(super) unfiltered_rows: Option<Vec<Vec<Option<String>>>>,
     /// How many columns at the end of `columns` are hidden. See `layout`.
     hidden_columns: usize,
     /// How many columns at the start are pinned to the left edge.
@@ -79,6 +98,7 @@ impl ResultsTableDelegate {
             &foreign_key.foreign_column_name,
             value,
             numeric,
+            self.column_types.get(col_ix) == Some(&ColumnType::Binary),
         );
         let (schema_name, table) = match foreign_key.foreign_table_name.rsplit_once('.') {
             Some((schema, table)) => (Some(schema.to_string()), table),
@@ -156,6 +176,11 @@ impl ResultsTableDelegate {
     ) -> String {
         if self.column_types.get(col_ix) == Some(&ColumnType::DateTime)
             && let Some(text) = temporal::display_text(value, settings)
+        {
+            return text;
+        }
+        if self.column_types.get(col_ix) == Some(&ColumnType::Binary)
+            && let Some(text) = binary_display_text(value)
         {
             return text;
         }
@@ -381,6 +406,7 @@ impl ResultsTableDelegate {
             .collect();
 
         self.rows = result.rows;
+        self.deferred = DeferredValues::default();
         self.reset_column_layout();
 
         // Use table metadata from QueryResult if available
@@ -444,7 +470,7 @@ impl ResultsTableDelegate {
 mod tests {
     use super::*;
     use crate::results_panel::table_operations::{
-        OperationType, RowIdentifier, TableChangeOperation,
+        ColumnValue, OperationType, RowIdentifier, TableChangeOperation,
     };
     use crate::results_panel::{ChangeType, TableChange};
     use blanco_core::ColumnInfo;
@@ -791,7 +817,10 @@ mod tests {
 
         if let OperationType::Update = &operations[0].operation_type {
             if let RowIdentifier::PrimaryKey { columns } = &operations[0].row_identifier {
-                assert_eq!(columns, &[("id".to_string(), "2".to_string())]);
+                assert_eq!(
+                    columns,
+                    &[("id".to_string(), ColumnValue::Literal("2".to_string()))]
+                );
             } else {
                 panic!("Expected PrimaryKey row identifier");
             }
@@ -984,7 +1013,10 @@ mod tests {
             ops.iter()
                 .filter_map(|op| {
                     if let RowIdentifier::PrimaryKey { columns } = &op.row_identifier {
-                        columns.first().map(|c| c.1.clone())
+                        columns.first().and_then(|column| match &column.1 {
+                            ColumnValue::Literal(value) => Some(value.clone()),
+                            _ => None,
+                        })
                     } else {
                         None
                     }

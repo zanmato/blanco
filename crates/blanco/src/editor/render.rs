@@ -409,9 +409,9 @@ impl EditorPanel {
                         .icon(IconName::Copy)
                         .label("Duplicate")
                         .disabled(commit_in_progress)
-                        .on_click(cx.listener(|this, _, _window, cx| {
+                        .on_click(cx.listener(|this, _, window, cx| {
                             this.with_active_results_panel(cx, |panel, cx| {
-                                panel.duplicate_row(cx);
+                                panel.duplicate_row(window, cx);
                             });
                         })),
                 )

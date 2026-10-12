@@ -6,6 +6,17 @@ All notable changes to this project will be documented in this file.
 
 ### Features
 
+- Binary values: a binary cell expands into a viewer with a hex dump and an
+  ASCII column, a preview when the bytes are an image (PNG, JPEG, GIF, WebP,
+  BMP, TIFF, ICO or SVG), Save to File and Load File. Binary columns read as
+  `0x` and hex on every database, and a value typed that way is written as
+  bytes. A filter on a binary column compares hex as bytes, and the export
+  dialog writes binary to CSV and JSON as hex or base64
+- Defer Values Larger Than in the Database settings leaves large text and
+  binary values on the server when a table is read with `SELECT *`. Such a
+  cell shows the start of its value and its size, and the full value loads
+  when the cell is opened, copied, compared or its row duplicated. Table
+  exports always write full values. Off by default
 - Sort a result by several columns: Shift-click another column's sort icon
   to add it as the next sort key. With more than one key, each sorted header
   shows its place, and a plain click goes back to sorting by one column
@@ -192,6 +203,12 @@ All notable changes to this project will be documented in this file.
 
 ### Fixes
 
+- PostgreSQL `bytea` values are shown as their bytes. They used to read as
+  text when the bytes happened to be UTF-8 and as a marker otherwise
+- Editing a binary cell writes bytes. The hex digits used to be stored as a
+  string, and a row with a binary primary key could not be updated
+- SQLite shows the bytes of a blob returned by an expression, such as
+  `randomblob(16)`, instead of trying to read it as text
 - Formatting JSON in the cell editor and the cell comparison no longer sorts
   object keys or rounds large numbers
 - Exporting an empty table as SQL wrote an INSERT without any rows; the file

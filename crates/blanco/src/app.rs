@@ -198,6 +198,15 @@ pub struct SetCellNull {
     pub col: usize,
 }
 
+/// Copy a result cell's value, fetching it first when the grid holds only
+/// a preview of it.
+#[derive(Action, Clone, PartialEq, Eq)]
+#[action(namespace = blanco_app, no_json)]
+pub struct CopyCellValue {
+    pub row: usize,
+    pub col: usize,
+}
+
 /// Filter the result's table on the server by a cell's value.
 #[derive(Action, Clone, PartialEq, Eq)]
 #[action(namespace = blanco_app, no_json)]
@@ -3094,6 +3103,12 @@ fn init_menus(cx: &mut App) {
             "secondary-r",
             ToggleCellExpression,
             Some("ExpandedCellEditor"),
+        ),
+        // The viewer holds no input whose own escape binding would reach it.
+        gpui::KeyBinding::new(
+            "escape",
+            gpui_component::input::Escape,
+            Some("BinaryViewer"),
         ),
     ]);
 

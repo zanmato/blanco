@@ -1,4 +1,4 @@
-use crate::{DataTransformer, SelectedTableData, TransformError};
+use crate::{BinaryEncoding, DataTransformer, SelectedTableData, TransformError};
 use blanco_core::ColumnType;
 use serde::{Deserialize, Serialize};
 
@@ -79,11 +79,21 @@ impl Default for CsvOptions {
 #[derive(Default)]
 pub struct CsvTransformer {
     options: CsvOptions,
+    binary: BinaryEncoding,
 }
 
 impl CsvTransformer {
     pub fn new(options: CsvOptions) -> Self {
-        Self { options }
+        Self {
+            options,
+            binary: BinaryEncoding::default(),
+        }
+    }
+
+    /// How binary columns are written.
+    pub fn binary_encoding(mut self, binary: BinaryEncoding) -> Self {
+        self.binary = binary;
+        self
     }
 
     fn header_line(&self, columns: &[String]) -> String {
@@ -101,13 +111,17 @@ impl CsvTransformer {
         output
     }
 
-    fn write_row<'a>(&self, values: impl Iterator<Item = Option<&'a str>>, output: &mut String) {
-        for (i, value) in values.enumerate() {
+    fn write_row<'a>(
+        &self,
+        values: impl Iterator<Item = (Option<&'a str>, Option<&'a ColumnType>)>,
+        output: &mut String,
+    ) {
+        for (i, (value, column_type)) in values.enumerate() {
             if i > 0 {
                 output.push(self.options.delimiter);
             }
             match value {
-                Some(value) => self.write_value(value, output),
+                Some(value) => self.write_value(&self.binary.apply(value, column_type), output),
                 None => output.push_str(&self.options.null_text),
             }
         }
@@ -177,7 +191,9 @@ impl DataTransformer for CsvTransformer {
         rows.sort_by_key(|row| row.row);
         for row in rows {
             self.write_row(
-                row.cells.iter().map(|cell| cell.value.as_deref()),
+                row.cells
+                    .iter()
+                    .map(|cell| (cell.value.as_deref(), cell.column_type.as_ref())),
                 &mut output,
             );
         }
@@ -197,10 +213,16 @@ impl DataTransformer for CsvTransformer {
         &self,
         row_data: &[Option<String>],
         _columns: &[String],
-        _column_types: &[ColumnType],
+        column_types: &[ColumnType],
     ) -> Result<String, TransformError> {
         let mut output = String::with_capacity(row_data.len() * 50 + 10);
-        self.write_row(row_data.iter().map(|value| value.as_deref()), &mut output);
+        self.write_row(
+            row_data
+                .iter()
+                .enumerate()
+                .map(|(index, value)| (value.as_deref(), column_types.get(index))),
+            &mut output,
+        );
         Ok(output)
     }
 

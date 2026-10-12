@@ -30,6 +30,7 @@ use crate::copy_handler::CopyHandler;
 use filter_bar::FilterBar;
 pub use transformers::{SelectedCell, SelectedRow, SelectedTableData};
 
+mod binary_viewer;
 mod cell_edit_state;
 #[cfg(test)]
 mod cell_edit_test;
@@ -44,6 +45,9 @@ mod compare;
 #[cfg(test)]
 mod csv_copy_test;
 mod date_time_picker;
+pub(crate) mod deferred_values;
+#[cfg(test)]
+mod deferred_values_test;
 mod export_actions;
 pub mod filter_bar;
 mod foreign_key_popover;
@@ -325,6 +329,19 @@ impl ResultsPanel {
     ) {
         let payloads = results.into_iter().map(ResultPayload::Tabular).collect();
         self.set_result_payloads(payloads, connection_id, window, cx);
+    }
+
+    /// Mark the cells of the result just shown that hold previews of values
+    /// left on the server.
+    pub(crate) fn set_deferred_values(
+        &mut self,
+        deferred: deferred_values::DeferredValues,
+        cx: &mut Context<Self>,
+    ) {
+        self.table_state.update(cx, |state, cx| {
+            state.delegate_mut().set_deferred_values(deferred);
+            state.refresh(cx);
+        });
     }
 
     /// Show a single Redis key/value payload in a fresh tab and activate it.
@@ -725,6 +742,27 @@ impl ResultsPanel {
             .pending_new_rows
             .contains(&row);
 
+        // A cell holding a preview is opened on its value.
+        if self.load_deferred_values_then([row], Some(col), window, cx, move |panel, window, cx| {
+            panel.start_cell_edit(row, col, window, cx)
+        }) {
+            return;
+        }
+
+        // Bytes too long for a single-line input open in the viewer, which
+        // is also where they can be replaced from a file.
+        let opens_viewer = {
+            let delegate = self.table_state.read(cx).delegate();
+            delegate.opens_in_binary_viewer(row, col)
+                && delegate.binary_exceeds_inline_input(row, col)
+        };
+        if opens_viewer {
+            self.table_state.update(cx, |state, cx| {
+                ResultsTableDelegate::open_binary_viewer(state, row, col, window, cx);
+            });
+            return;
+        }
+
         // Create input state for editing with the current cell value
         let display_value = current_value.clone().unwrap_or_default();
         let input = cx.new(|cx| InputState::new(window, cx).default_value(&display_value));
@@ -977,6 +1015,22 @@ impl ResultsPanel {
         let Some((row, col)) = self.get_current_editing_cell(cx) else {
             return;
         };
+
+        if self
+            .table_state
+            .read(cx)
+            .delegate()
+            .edit_state
+            .binary_viewer
+            .is_some()
+        {
+            self.table_state.update(cx, |state, cx| {
+                state.delegate_mut().finish_binary_viewer();
+                state.refresh(cx);
+            });
+            cx.notify();
+            return;
+        }
 
         let editing_input = self
             .table_state
@@ -1734,6 +1788,7 @@ impl Render for ResultsPanel {
             .on_action(cx.listener(Self::on_copy_as_values))
             .on_action(cx.listener(Self::on_copy_as_markdown))
             .on_action(cx.listener(Self::on_copy_column_values))
+            .on_action(cx.listener(Self::on_copy_cell_value))
             .on_action(cx.listener(Self::on_export_as_csv))
             .on_action(cx.listener(Self::on_export_as_tsv))
             .on_action(cx.listener(Self::on_export_as_json))

@@ -1281,3 +1281,149 @@ async fn test_date_display_format_and_picker_keep_values_raw(cx: &mut TestAppCon
         "Now on a date cell is today"
     );
 }
+
+/// A 1x1 PNG, long enough that its cell opens in the viewer.
+const PNG_HEX: &str = "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d4944415478da636460f85f0f0002870180eb47ba920000000049454e44ae426082";
+
+async fn setup_binary_table(
+    harness: &TestHarness,
+    cx: &mut VisualTestContext,
+) -> gpui::Entity<crate::results_panel::ResultsPanel> {
+    for sql in [
+        "CREATE TABLE files (id INTEGER PRIMARY KEY, body BLOB)".to_string(),
+        format!("INSERT INTO files (id, body) VALUES (1, X'{PNG_HEX}'), (2, X'0102')"),
+        "SELECT * FROM files".to_string(),
+    ] {
+        set_editor_text(harness, &sql, cx);
+        run_query(harness, cx);
+        wait_for_query(harness, cx).await;
+    }
+    harness.editor_panel.read_with(cx, |panel, _| {
+        panel
+            .active_query_tab()
+            .expect("query tab should exist")
+            .results_panel
+            .clone()
+    })
+}
+
+/// A long binary value opens in the viewer, which recognises and decodes
+/// the image. Looking at it is not an edit; loading a file into it is.
+#[gpui::test]
+async fn test_binary_cell_opens_in_the_viewer(cx: &mut TestAppContext) {
+    use crate::results_panel::binary_viewer::{BinaryViewerEvent, ImageKind};
+
+    let harness = TestHarness::new(cx);
+    let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+    cx.executor().allow_parking();
+
+    let results_panel = setup_binary_table(&harness, &mut cx).await;
+    let table_state = results_panel.read_with(&cx, |panel, _| panel.table_state().clone());
+    assert_eq!(
+        result_cell(&harness, 0, 1, &cx).flatten(),
+        Some(format!("0x{PNG_HEX}"))
+    );
+
+    results_panel.update_in(&mut cx, |panel, window, cx| {
+        panel.start_cell_edit(0, 1, window, cx);
+    });
+    cx.run_until_parked();
+    let viewer = table_state
+        .read_with(&cx, |state, _| {
+            let edit_state = &state.delegate().edit_state;
+            assert!(edit_state.get_editing_input().is_none());
+            edit_state.binary_viewer.clone()
+        })
+        .expect("a long binary value opens in the viewer");
+    assert_eq!(
+        viewer.read_with(&cx, |viewer, _| viewer.image_kind()),
+        Some(ImageKind::Png)
+    );
+    // The decode runs off the main thread.
+    for _ in 0..200 {
+        if viewer.read_with(&cx, |viewer, _| viewer.has_preview()) {
+            break;
+        }
+        cx.executor()
+            .timer(std::time::Duration::from_millis(10))
+            .await;
+        cx.run_until_parked();
+    }
+    assert!(viewer.read_with(&cx, |viewer, _| viewer.has_preview()));
+
+    results_panel.update(&mut cx, |panel, cx| panel.finalize_active_cell_edit(cx));
+    cx.run_until_parked();
+    assert!(results_panel.read_with(&cx, |panel, cx| panel.preview_pending_sql(cx).is_empty()));
+    assert!(table_state.read_with(&cx, |state, _| {
+        state.delegate().edit_state.binary_viewer.is_none()
+    }));
+
+    results_panel.update_in(&mut cx, |panel, window, cx| {
+        panel.start_cell_edit(0, 1, window, cx);
+    });
+    cx.run_until_parked();
+    let viewer = table_state
+        .read_with(&cx, |state, _| {
+            state.delegate().edit_state.binary_viewer.clone()
+        })
+        .expect("viewer reopens");
+    viewer.update(&mut cx, |_, cx| {
+        cx.emit(BinaryViewerEvent::Loaded(std::sync::Arc::new(vec![
+            0x00, 0xff, 0x10,
+        ])));
+    });
+    cx.run_until_parked();
+    results_panel.update(&mut cx, |panel, cx| panel.finalize_active_cell_edit(cx));
+    cx.run_until_parked();
+    assert_eq!(
+        results_panel.read_with(&cx, |panel, cx| panel.preview_pending_sql(cx)),
+        vec![r#"UPDATE "files" SET "body" = X'00ff10' WHERE "id" = '1'"#.to_string()]
+    );
+}
+
+/// A short binary value edits inline as hex, is written as bytes, and hex
+/// that is not whole bytes is refused before anything is sent.
+#[gpui::test]
+async fn test_short_binary_cell_edits_inline_as_hex(cx: &mut TestAppContext) {
+    let harness = TestHarness::new(cx);
+    let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+    cx.executor().allow_parking();
+
+    let results_panel = setup_binary_table(&harness, &mut cx).await;
+    let table_state = results_panel.read_with(&cx, |panel, _| panel.table_state().clone());
+
+    let edit = |text: &'static str, cx: &mut VisualTestContext| {
+        results_panel.update_in(cx, |panel, window, cx| {
+            panel.start_cell_edit(1, 1, window, cx);
+        });
+        cx.run_until_parked();
+        let input = table_state.read_with(cx, |state, _| {
+            match state.delegate().edit_state.get_editing_input() {
+                Some(CellInput::Inline(input)) => input,
+                _ => panic!("a short binary value edits inline"),
+            }
+        });
+        input.update_in(cx, |input, window, cx| {
+            input.replace_all(text, window, cx);
+        });
+        cx.run_until_parked();
+        results_panel.update(cx, |panel, cx| panel.finalize_active_cell_edit(cx));
+        cx.run_until_parked();
+    };
+
+    edit("0xCAFE", &mut cx);
+    assert_eq!(
+        results_panel.read_with(&cx, |panel, cx| panel.preview_pending_sql(cx)),
+        vec![r#"UPDATE "files" SET "body" = X'cafe' WHERE "id" = '2'"#.to_string()]
+    );
+    assert_eq!(
+        table_state.read_with(&cx, |state, _| state.delegate().invalid_binary_edit()),
+        None
+    );
+
+    edit("0xCAF", &mut cx);
+    let problem = table_state
+        .read_with(&cx, |state, _| state.delegate().invalid_binary_edit())
+        .expect("half a byte is refused");
+    assert!(problem.contains("Row 2, body"), "{problem}");
+}

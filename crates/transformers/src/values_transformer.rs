@@ -62,6 +62,11 @@ fn format_row_values(
         match cell {
             None => output.push_str("NULL"),
             Some(val) if val.is_empty() => output.push_str("''"),
+            Some(val)
+                if *col_type == ColumnType::Binary && blanco_core::binary::is_hex_notation(val) =>
+            {
+                output.push_str(&db_type.dialect().value_literal(val, *col_type));
+            }
             Some(val) => {
                 if should_quote_value(col_type) {
                     output.push('\'');

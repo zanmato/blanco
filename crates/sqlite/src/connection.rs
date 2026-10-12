@@ -3,7 +3,6 @@ mod connection_impl;
 use anyhow::Result;
 use blanco_core::{QueryResult, connection_trait::ColumnType};
 use futures::StreamExt;
-use hex;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
 use sqlx::{Column, ConnectOptions, Row, TypeInfo, ValueRef};
 use std::str::FromStr;
@@ -155,14 +154,7 @@ impl SqliteConnection {
                             .map(|col| col.name().to_string())
                             .collect();
 
-                        let (types, raw_types): (Vec<ColumnType>, Vec<String>) = row
-                            .columns()
-                            .iter()
-                            .map(|col| {
-                                let raw_type = col.type_info().name().to_string();
-                                (Self::map_sqlite_type(&raw_type), raw_type)
-                            })
-                            .unzip();
+                        let (types, raw_types) = result_column_types(&row);
                         column_types = types;
                         raw_column_types = raw_types;
                     }
@@ -396,6 +388,32 @@ fn handle_datetime_type(
     None
 }
 
+/// The type each column of a result is read as, with SQLite's own name for
+/// it: the declared type of a table column. An expression has none, so it is
+/// read as what its value in `row`, the first of the result, is.
+pub(crate) fn result_column_types(row: &sqlx::sqlite::SqliteRow) -> (Vec<ColumnType>, Vec<String>) {
+    row.columns()
+        .iter()
+        .enumerate()
+        .map(|(index, column)| {
+            let declared = column.type_info().name();
+            let raw_type = if declared.eq_ignore_ascii_case("null") {
+                value_type_name(row, index).unwrap_or_else(|| declared.to_string())
+            } else {
+                declared.to_string()
+            };
+            (SqliteConnection::map_sqlite_type(&raw_type), raw_type)
+        })
+        .unzip()
+}
+
+/// What the value at `column_index` is stored as: `INTEGER`, `REAL`, `TEXT`,
+/// `BLOB` or `NULL`.
+fn value_type_name(row: &sqlx::sqlite::SqliteRow, column_index: usize) -> Option<String> {
+    let value = row.try_get_raw(column_index).ok()?;
+    Some(value.type_info().name().to_string())
+}
+
 /// Helper function for SQLite type conversion using column-type-first approach
 fn convert_sqlite_row_value_to_string(
     row: &sqlx::sqlite::SqliteRow,
@@ -443,11 +461,18 @@ fn convert_sqlite_row_value_to_string(
         }
         ColumnType::Binary => {
             if let Ok(Some(v)) = row.try_get::<Option<Vec<u8>>, _>(column_index) {
-                return Some(format!("0x{}", hex::encode(v)));
+                return Some(blanco_core::binary::encode(&v));
             }
             None
         }
         ColumnType::Unknown => {
+            // An untyped column takes each value as it is stored. Bytes are
+            // read as bytes: as text they are lost unless they are UTF-8.
+            if value_type_name(row, column_index).is_some_and(|name| name == "BLOB")
+                && let Ok(Some(v)) = row.try_get::<Option<Vec<u8>>, _>(column_index)
+            {
+                return Some(blanco_core::binary::encode(&v));
+            }
             // SQLite's dynamic typing: try common types in order
             if let Ok(Some(v)) = row.try_get::<Option<i64>, _>(column_index) {
                 return Some(v.to_string());
@@ -483,14 +508,7 @@ impl SqliteStatementAcc {
                 .iter()
                 .map(|col| col.name().to_string())
                 .collect();
-            let (types, raw_types): (Vec<ColumnType>, Vec<String>) = row
-                .columns()
-                .iter()
-                .map(|col| {
-                    let raw_type = col.type_info().name().to_string();
-                    (SqliteConnection::map_sqlite_type(&raw_type), raw_type)
-                })
-                .unzip();
+            let (types, raw_types) = result_column_types(row);
             self.column_types = types;
             self.raw_column_types = raw_types;
         }

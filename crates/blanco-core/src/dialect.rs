@@ -408,18 +408,43 @@ impl Dialect {
         format!("'{}'", self.escape_string_literal(value))
     }
 
+    /// A literal for the bytes written as `hex` digits (no prefix), in the
+    /// backend's own spelling.
+    pub fn binary_literal(&self, hex: &str) -> String {
+        match self.0 {
+            DatabaseType::PostgreSQL => format!("'\\x{hex}'::bytea"),
+            DatabaseType::MySQL | DatabaseType::SQLite => format!("X'{hex}'"),
+            DatabaseType::MsSql => format!("0x{hex}"),
+            DatabaseType::ClickHouse | DatabaseType::Redis => format!("unhex('{hex}')"),
+        }
+    }
+
+    /// The literal for a cell's text in a column of `column_type`: the bytes
+    /// of a binary column written as hex, a quoted string for everything
+    /// else. Binary text that is not hex notation is sent as the string it is.
+    pub fn value_literal(&self, value: &str, column_type: crate::ColumnType) -> String {
+        if column_type == crate::ColumnType::Binary
+            && let Some(hex) = crate::binary::hex_digits(value)
+        {
+            return self.binary_literal(&hex);
+        }
+        self.string_literal(value)
+    }
+
     // ----- statement shapes -----
 
     /// The rows of `table` (a possibly schema-qualified path) whose `column`
     /// equals `value`, as for following a foreign key to the row it
     /// references. A numeric value is written bare when `numeric`, since
     /// ClickHouse does not compare a number column with a string.
+    /// The hex notation of a `binary` column is compared as bytes.
     pub fn referenced_row_query(
         &self,
         table: &str,
         column: &str,
         value: &str,
         numeric: bool,
+        binary: bool,
     ) -> String {
         let number = value.trim();
         let is_number = number
@@ -428,6 +453,8 @@ impl Dialect {
             && number.parse::<f64>().is_ok();
         let literal = if numeric && is_number {
             number.to_string()
+        } else if binary {
+            self.value_literal(value, crate::ColumnType::Binary)
         } else {
             self.string_literal(value)
         };
@@ -602,22 +629,29 @@ mod tests {
                 "public.users",
                 "id",
                 "42",
-                true
+                true,
+                false
             ),
             r#"SELECT * FROM "public"."users" WHERE "id" = 42"#
         );
         assert_eq!(
-            dialect(DatabaseType::MySQL).referenced_row_query("users", "code", "O'Brien", false),
+            dialect(DatabaseType::MySQL)
+                .referenced_row_query("users", "code", "O'Brien", false, false),
             "SELECT * FROM `users` WHERE `code` = 'O''Brien'"
         );
         // Not a number after all: quoted rather than spliced in.
         assert_eq!(
-            dialect(DatabaseType::MsSql).referenced_row_query("users", "id", "1; DROP", true),
+            dialect(DatabaseType::MsSql)
+                .referenced_row_query("users", "id", "1; DROP", true, false),
             "SELECT * FROM [users] WHERE [id] = '1; DROP'"
         );
         assert_eq!(
-            dialect(DatabaseType::SQLite).referenced_row_query("t", "x", "NaN", true),
+            dialect(DatabaseType::SQLite).referenced_row_query("t", "x", "NaN", true, false),
             r#"SELECT * FROM "t" WHERE "x" = 'NaN'"#
+        );
+        assert_eq!(
+            dialect(DatabaseType::MySQL).referenced_row_query("t", "id", "0xCAFE", false, true),
+            "SELECT * FROM `t` WHERE `id` = X'cafe'"
         );
     }
 

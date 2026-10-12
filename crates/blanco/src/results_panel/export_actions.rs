@@ -62,9 +62,7 @@ impl ResultsPanel {
 
     /// Export selected data in the specified format
     fn export_selected_as(&mut self, format: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let table_state = self.table_state.read(cx);
-        let selected_rows = table_state.selected_rows().clone();
-        let delegate = table_state.delegate();
+        let selected_rows = self.table_state.read(cx).selected_rows().clone();
 
         if selected_rows.is_empty() {
             tracing::error!(
@@ -73,6 +71,19 @@ impl ResultsPanel {
             );
             return;
         }
+
+        // An export holds values, not previews of them.
+        let format_for_retry = format.to_string();
+        if self.load_deferred_values_then(
+            selected_rows.iter().copied(),
+            None,
+            window,
+            cx,
+            move |panel, window, cx| panel.export_selected_as(&format_for_retry, window, cx),
+        ) {
+            return;
+        }
+        let delegate = self.table_state.read(cx).delegate();
 
         let selected_data = self.get_selected_data_for_rows(&selected_rows, delegate);
         let table_name = selected_data

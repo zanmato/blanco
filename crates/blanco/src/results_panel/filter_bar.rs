@@ -331,6 +331,7 @@ impl FilterBar {
                     operator,
                     value,
                     numeric: column.column_type.is_numeric(),
+                    binary: column.column_type == blanco_core::ColumnType::Binary,
                 })
             })
             .collect()

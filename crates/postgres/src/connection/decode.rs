@@ -541,6 +541,20 @@ impl PostgresConnection {
         Self::as_text_or_marker(row, column_index, column_type)
     }
 
+    /// The bytes of a `bytea` value as hex. Its raw text is no use: in the
+    /// binary protocol those are the bytes themselves, which only read as
+    /// text when they happen to be UTF-8.
+    fn handle_binary_type(
+        row: &sqlx::postgres::PgRow,
+        column_index: usize,
+        column_type: &str,
+    ) -> Option<String> {
+        match row.try_get::<Option<Vec<u8>>, _>(column_index) {
+            Ok(bytes) => bytes.map(|bytes| blanco_core::binary::encode(&bytes)),
+            Err(_) => Self::as_text_or_marker(row, column_index, column_type),
+        }
+    }
+
     /// Convert a PostgreSQL row value to string representation. `None` means SQL NULL.
     pub(super) fn convert_row_value_to_string(
         &self,
@@ -574,7 +588,7 @@ impl PostgresConnection {
             ColumnType::DateTime => self.handle_timestamp_type(row, column_index, raw_type),
             ColumnType::Uuid => self.handle_uuid_type(row, column_index, raw_type),
             ColumnType::Json => self.handle_json_type(row, column_index, raw_type),
-            ColumnType::Binary => self.handle_unknown_type(row, column_index, raw_type),
+            ColumnType::Binary => Self::handle_binary_type(row, column_index, raw_type),
             ColumnType::Unknown => self.handle_unknown_type(row, column_index, raw_type),
         };
 

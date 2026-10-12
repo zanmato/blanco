@@ -3,6 +3,7 @@ use gpui_component::{WindowExt as _, notification::NotificationType};
 
 use database::DatabaseService;
 
+use super::deferred_values::{self, DeferredRead};
 use super::table_operations::TableChangeOperation;
 use super::{ChangeType, ResultsPanel, TableOperationResponse};
 use crate::result_ext::ResultExt;
@@ -33,7 +34,11 @@ impl ResultsPanel {
 
         // Invalid JSON for a JSON column is refused by the server anyway; say
         // which cell it is before sending anything.
-        if let Some(problem) = self.table_state.read(cx).delegate().invalid_json_edit() {
+        let delegate = self.table_state.read(cx).delegate();
+        if let Some(problem) = delegate
+            .invalid_json_edit()
+            .or_else(|| delegate.invalid_binary_edit())
+        {
             window.push_notification((NotificationType::Error, SharedString::from(problem)), cx);
             return;
         }
@@ -63,6 +68,14 @@ impl ResultsPanel {
         // The query that produced this grid, re-run after a successful commit
         // so server-generated values (sequences, defaults, triggers) show up.
         let original_query = delegate.original_query.clone();
+        let deferred_read = original_query.as_deref().and_then(|query| {
+            DeferredRead::plan(
+                database_type,
+                query,
+                delegate.table_columns(),
+                deferred_values::threshold(cx),
+            )
+        });
 
         // Spawn background task to execute table operations
         let db_service = DatabaseService::global(cx).clone();
@@ -228,13 +241,17 @@ impl ResultsPanel {
                                     Some(&database_name),
                                 )
                                 .await?;
-                            connection
-                                .execute_query(&query, Some(&database_name), None)
-                                .await
+                            deferred_values::execute_read(
+                                &connection,
+                                &query,
+                                &database_name,
+                                deferred_read.as_ref(),
+                            )
+                            .await
                         }
                     });
                     match refresh_task.await {
-                        Ok(result) => {
+                        Ok((result, deferred)) => {
                             entity
                                 .update(cx, |_panel, cx| {
                                     table_entity.update(cx, |state, cx| {
@@ -248,6 +265,7 @@ impl ResultsPanel {
                                             // column order; keep the grid's.
                                             delegate.rows =
                                                 delegate.arrange_source_rows(result.rows);
+                                            delegate.set_deferred_values(deferred);
                                             state.refresh(cx);
                                         } else {
                                             tracing::warn!(

@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use blanco_core::ColumnType;
+
 use super::ResultsTableDelegate;
 use crate::results_panel::cell_edit_state::ChangeType;
 use crate::results_panel::table_operations::{
@@ -43,6 +45,29 @@ impl ResultsTableDelegate {
         } else {
             None
         }
+    }
+
+    pub(crate) fn column_type(&self, column_index: usize) -> ColumnType {
+        self.column_types
+            .get(column_index)
+            .copied()
+            .unwrap_or(ColumnType::Unknown)
+    }
+
+    /// Primary key values as they go into a WHERE clause, typed by their
+    /// column so a binary key is compared as bytes.
+    fn key_values(&self, key: Vec<(String, String)>) -> Vec<(String, ColumnValue)> {
+        key.into_iter()
+            .map(|(name, value)| {
+                let column_type = self
+                    .columns
+                    .iter()
+                    .position(|column| column.name.as_str() == name)
+                    .map_or(ColumnType::Unknown, |index| self.column_type(index));
+                let value = ColumnValue::data(value, column_type);
+                (name, value)
+            })
+            .collect()
     }
 
     /// The columns an INSERT of this row names: every column except the
@@ -118,7 +143,7 @@ impl ResultsTableDelegate {
                         operation_type: OperationType::Delete,
                         table_name: change.table_name.clone(),
                         row_identifier: RowIdentifier::PrimaryKey {
-                            columns: pk_columns,
+                            columns: self.key_values(pk_columns),
                         },
                         changes: vec![],
                     });
@@ -142,10 +167,11 @@ impl ResultsTableDelegate {
 
                     let column_change = ColumnChange {
                         column_name,
-                        value: ColumnValue::from_cell(
+                        value: ColumnValue::from_typed_cell(
                             change.new_value.clone(),
                             self.edit_state
                                 .is_expression(change.row_index, column_index),
+                            self.column_type(column_index),
                         ),
                     };
 
@@ -185,9 +211,10 @@ impl ResultsTableDelegate {
                         .filter_map(|data_index| {
                             Some(ColumnChange {
                                 column_name: self.columns.get(data_index)?.name.to_string(),
-                                value: ColumnValue::from_cell(
+                                value: ColumnValue::from_typed_cell(
                                     self.stored_cell_value(change.row_index, data_index),
                                     self.edit_state.is_expression(change.row_index, data_index),
+                                    self.column_type(data_index),
                                 ),
                             })
                         })
@@ -211,7 +238,7 @@ impl ResultsTableDelegate {
                 operation_type: OperationType::Update,
                 table_name,
                 row_identifier: RowIdentifier::PrimaryKey {
-                    columns: pk_columns,
+                    columns: self.key_values(pk_columns),
                 },
                 changes: column_changes,
             });

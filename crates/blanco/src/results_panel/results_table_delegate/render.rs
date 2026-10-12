@@ -25,16 +25,28 @@ use blanco_core::connection_trait::ColumnType;
 use super::{ResultsTableDelegate, results_settings};
 use crate::app::{
     AddRow, ClearCompareSelection, CompareCellWithSelected, CompareRowWithSelected, CopyAsCSV,
-    CopyAsJSON, CopyAsMarkdown, CopyAsSQL, CopyAsTSV, CopyAsVALUES, CopyColumnValues, DeleteRow,
-    DuplicateRow, ExportAsCSV, ExportAsJSON, ExportAsMarkdown, ExportAsSQL, ExportAsTSV,
-    FilterByCellValue, HideResultColumn, OpenReferencedRow, PinResultColumn, SelectCellForCompare,
-    SelectRowForCompare, SetCellDefault, SetCellNull, ToggleCellExpression,
+    CopyAsJSON, CopyAsMarkdown, CopyAsSQL, CopyAsTSV, CopyAsVALUES, CopyCellValue,
+    CopyColumnValues, DeleteRow, DuplicateRow, ExportAsCSV, ExportAsJSON, ExportAsMarkdown,
+    ExportAsSQL, ExportAsTSV, FilterByCellValue, HideResultColumn, OpenReferencedRow,
+    PinResultColumn, SelectCellForCompare, SelectRowForCompare, SetCellDefault, SetCellNull,
+    ToggleCellExpression,
 };
+use crate::results_panel::binary_viewer::BinaryViewer;
 use crate::results_panel::cell_edit_state::{CellInput, compare_numeric, format_value_for_display};
 use crate::results_panel::compare::CompareKind;
 use crate::results_panel::foreign_key_popover::ForeignKeyPopover;
 use crate::results_panel::temporal::TemporalShape;
 use blanco_ui::IconName;
+
+/// How a cell reads while its value is on the server: the start of the
+/// value and its full size.
+fn deferred_display_text(preview: &str, size: u64, loading: bool) -> String {
+    const SHOWN_CHARACTERS: usize = 48;
+    let shown: String = preview.chars().take(SHOWN_CHARACTERS).collect();
+    let size = blanco_core::binary::format_size(usize::try_from(size).unwrap_or(usize::MAX));
+    let state = if loading { ", loading" } else { "" };
+    format!("{}… ({size}{state})", format_value_for_display(&shown))
+}
 
 /// Drag payload for the expanded cell editor's resize grip.
 #[derive(Clone)]
@@ -245,43 +257,92 @@ impl ResultsTableDelegate {
                                         .child(Icon::new(IconName::Minimize).text_xs()),
                                 ),
                         )
-                        // The overlay floats over the table rather than sharing
-                        // a container with a sibling, so a resizable panel has
-                        // nothing to resize against: this grip drags its size.
-                        .child(
-                            div()
-                                .id(("expanded-cell-resize", row_ix * 1000 + col_ix))
-                                .absolute()
-                                .left(px(0.))
-                                .bottom(px(0.))
-                                .size(px(14.))
-                                .cursor(CursorStyle::ResizeUpRightDownLeft)
-                                .child(render_resize_grip(cx.theme().muted_foreground))
-                                .on_drag(ResizeExpandedCell, {
-                                    let table_state = cx.entity();
-                                    move |_, _, _, cx| {
-                                        table_state.update(cx, |table, _| {
-                                            table
-                                                .delegate_mut()
-                                                .edit_state
-                                                .expanded_size
-                                                .start_drag()
-                                        });
-                                        cx.new(|_| ResizeExpandedCell)
-                                    }
-                                })
-                                .on_drag_move(cx.listener(
-                                    |table, event: &DragMoveEvent<ResizeExpandedCell>, _, cx| {
-                                        let position = event.event.position;
-                                        table
-                                            .delegate_mut()
-                                            .edit_state
-                                            .expanded_size
-                                            .drag_to(position);
-                                        cx.notify();
-                                    },
-                                )),
-                        ),
+                        .child(self.render_expanded_resize_handle(row_ix, col_ix, cx)),
+                )
+                .with_priority(99),
+            )
+    }
+
+    /// The overlay floats over the table rather than sharing a container
+    /// with a sibling, so a resizable panel has nothing to resize against:
+    /// this grip drags its size.
+    fn render_expanded_resize_handle(
+        &self,
+        row_ix: usize,
+        col_ix: usize,
+        cx: &mut Context<TableState<Self>>,
+    ) -> impl IntoElement {
+        div()
+            .id(("expanded-cell-resize", row_ix * 1000 + col_ix))
+            .absolute()
+            .left(px(0.))
+            .bottom(px(0.))
+            .size(px(14.))
+            .cursor(CursorStyle::ResizeUpRightDownLeft)
+            .child(render_resize_grip(cx.theme().muted_foreground))
+            .on_drag(ResizeExpandedCell, {
+                let table_state = cx.entity();
+                move |_, _, _, cx| {
+                    table_state.update(cx, |table, _| {
+                        table.delegate_mut().edit_state.expanded_size.start_drag()
+                    });
+                    cx.new(|_| ResizeExpandedCell)
+                }
+            })
+            .on_drag_move(
+                cx.listener(|table, event: &DragMoveEvent<ResizeExpandedCell>, _, cx| {
+                    let position = event.event.position;
+                    table
+                        .delegate_mut()
+                        .edit_state
+                        .expanded_size
+                        .drag_to(position);
+                    cx.notify();
+                }),
+            )
+    }
+
+    /// A binary cell expanded into its viewer, floating over the grid like
+    /// the expanded text editor.
+    fn render_binary_cell(
+        &self,
+        viewer: Entity<BinaryViewer>,
+        row_ix: usize,
+        col_ix: usize,
+        cx: &mut Context<TableState<Self>>,
+    ) -> impl IntoElement {
+        let overlay_size = self.edit_state.expanded_size.size();
+        div()
+            .size_full()
+            .border_2()
+            .border_color(cx.theme().yellow)
+            .child(
+                gpui::deferred(
+                    div()
+                        .absolute()
+                        .right(px(0.))
+                        .top(px(0.))
+                        .w(overlay_size.width)
+                        .h(overlay_size.height)
+                        .bg(cx.theme().background)
+                        .border_1()
+                        .border_color(cx.theme().border)
+                        .shadow_lg()
+                        // As for the expanded text editor: without these the
+                        // grid underneath scrolls, opens its row menu and
+                        // moves its selection.
+                        .occlude()
+                        .key_context("BinaryViewer")
+                        .on_action(cx.listener(
+                            |table, _: &gpui_component::input::Escape, window, cx| {
+                                Self::close_binary_viewer(table, window, cx);
+                            },
+                        ))
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
+                        .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
+                        .child(viewer)
+                        .child(self.render_expanded_resize_handle(row_ix, col_ix, cx)),
                 )
                 .with_priority(99),
             )
@@ -470,12 +531,17 @@ impl ResultsTableDelegate {
         // Untouched cells of a pending new row show the server default that
         // will apply because the column is omitted from the INSERT.
         let uses_default = is_null && self.cell_uses_default(row_ix, col_ix);
+        // The cell holds the start of a value left on the server.
+        let deferred_size = self.deferred_size(row_ix, col_ix);
         let display_text = match current_value.as_deref() {
             None if uses_default => "DEFAULT".to_string(),
             None => "NULL".to_string(),
             // Until it is applied, an expression is SQL text, not a value.
             Some(value) if is_expression => format_value_for_display(value),
-            Some(value) => self.display_value(col_ix, value, &results_settings(cx)),
+            Some(value) => match deferred_size {
+                Some(size) => deferred_display_text(value, size, self.is_loading_deferred(row_ix)),
+                None => self.display_value(col_ix, value, &results_settings(cx)),
+            },
         };
         // The clipboard and the foreign key lookup get the stored value, not
         // the single-line rendering with its ⏎ / ⇥ markers or a reformatted
@@ -513,10 +579,29 @@ impl ResultsTableDelegate {
                 div()
                     .invisible()
                     .group_hover("", |this| this.visible())
-                    .child(
-                        Clipboard::new(format!("cell-clipboard-{}-{}", row_ix, col_ix))
-                            .value(stored_text.clone()),
-                    ),
+                    .map(|this| match deferred_size {
+                        // The value is not here to hand to the clipboard:
+                        // the panel fetches it first.
+                        Some(_) => this.child(
+                            Button::new(("cell-copy-deferred", row_ix * 1000 + col_ix))
+                                .icon(IconName::Copy)
+                                .ghost()
+                                .xsmall()
+                                .on_click(move |_, window, cx| {
+                                    window.dispatch_action(
+                                        Box::new(CopyCellValue {
+                                            row: row_ix,
+                                            col: col_ix,
+                                        }),
+                                        cx,
+                                    );
+                                }),
+                        ),
+                        None => this.child(
+                            Clipboard::new(format!("cell-clipboard-{}-{}", row_ix, col_ix))
+                                .value(stored_text.clone()),
+                        ),
+                    }),
             )
             // By name, as the header does: the result's columns need not be
             // in the table's order.
@@ -615,6 +700,9 @@ impl ResultsTableDelegate {
                     .pl_2()
                     .border_l_2()
                     .border_color(cx.theme().yellow)
+            })
+            .when(deferred_size.is_some(), |this| {
+                this.text_color(cx.theme().muted_foreground)
             })
             .when(is_null, |this| {
                 this.text_color(cx.theme().muted_foreground).italic()
@@ -837,6 +925,11 @@ impl TableDelegate for ResultsTableDelegate {
         let is_editing = self.edit_state.is_editing(row_ix, col_ix);
 
         if is_editing {
+            if let Some(viewer) = self.edit_state.binary_viewer.clone() {
+                return self
+                    .render_binary_cell(viewer, row_ix, col_ix, cx)
+                    .into_any_element();
+            }
             // Embed Input directly in the cell
             match self.edit_state.get_editing_input() {
                 Some(CellInput::Expanded(input)) if self.edit_state.is_expanded(row_ix, col_ix) => {

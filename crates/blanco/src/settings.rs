@@ -390,6 +390,9 @@ impl Settings {
                 "results.show_row_numbers" => {
                     settings.results.show_row_numbers = value.parse().unwrap_or(true);
                 }
+                "results.defer_values_over_kb" => {
+                    settings.results.defer_values_over_kb = value.parse().unwrap_or_default();
+                }
                 key if key.starts_with("keybinding.") => {
                     let action = key.trim_start_matches("keybinding.").to_string();
                     if !action.is_empty() {
@@ -422,6 +425,11 @@ pub struct ResultsSettings {
     /// The zone a timestamp with a time zone is shown in.
     #[serde(default)]
     pub time_zone: TimeZoneDisplay,
+    /// Text and binary values larger than this many kilobytes are left on
+    /// the server when a table is read and fetched when their cell is
+    /// opened or copied. 0 reads every value in full.
+    #[serde(default)]
+    pub defer_values_over_kb: u32,
 }
 
 impl Default for ResultsSettings {
@@ -432,6 +440,7 @@ impl Default for ResultsSettings {
             show_row_numbers: true,
             date_format: DateDisplayFormat::default(),
             time_zone: TimeZoneDisplay::default(),
+            defer_values_over_kb: 0,
         }
     }
 }

@@ -3,6 +3,7 @@ use std::collections::{HashMap, HashSet};
 use gpui::{App, Entity, Pixels, Point, Size, px, size};
 use gpui_component::input::{EditorState, InputState};
 
+use super::binary_viewer::BinaryViewer;
 use super::date_time_picker::DateTimePicker;
 
 /// Starting size of the expanded cell editor, before the user drags it.
@@ -152,6 +153,9 @@ pub struct CellEditState {
     pub json_error: Option<String>,
     /// The open date and time picker of the cell being edited.
     pub date_picker: Option<Entity<DateTimePicker>>,
+    /// The viewer a binary cell is expanded into. It takes the place of the
+    /// text editors, so `editing_input` is empty while it is open.
+    pub binary_viewer: Option<Entity<BinaryViewer>>,
     pub changes: Vec<TableChange>, // Track all changes for SQL generation
     pub selected_rows: HashSet<usize>, // Track selected rows
     pub current_column: usize,     // Track current column for selection
@@ -201,6 +205,7 @@ impl CellEditState {
         self.editing_input = None;
         self.expanded_cell = None;
         self.date_picker = None;
+        self.binary_viewer = None;
         self.editing_as_expression = false;
     }
 
@@ -223,6 +228,7 @@ impl CellEditState {
         self.editing_input = None;
         self.expanded_cell = None;
         self.date_picker = None;
+        self.binary_viewer = None;
     }
 
     pub fn clear_all(&mut self) {
@@ -235,6 +241,7 @@ impl CellEditState {
         self.editing_input = None;
         self.expanded_cell = None;
         self.date_picker = None;
+        self.binary_viewer = None;
         self.changes.clear();
         self.selected_rows.clear();
         self.current_column = 1; // Start with first data column
@@ -303,6 +310,7 @@ impl CellEditState {
         if let Some((r, c)) = self.expanded_cell {
             if r == row_index {
                 self.expanded_cell = None;
+                self.binary_viewer = None;
             } else if r > row_index {
                 self.expanded_cell = Some((r - 1, c));
             }

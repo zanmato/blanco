@@ -11,6 +11,7 @@ use std::rc::Rc;
 
 use crate::app_settings::AppSettings;
 use crate::result_ext::ResultExt;
+use crate::results_panel::deferred_values::DeferredRead;
 use crate::sql::{extract_statement_info, extract_statement_info_with_styles};
 use crate::status_bar::{ActivityReporter, ActivityResult};
 use crate::time_format;
@@ -318,26 +319,66 @@ impl EditorPanel {
             // in `abort_query_task` so the user can cancel: dropping the task
             // cancels the in-flight future, which causes `tx` to be dropped
             // and the foreground task sees `rx.await` return `Err(Canceled)`.
+            let defer_threshold = crate::results_panel::deferred_values::threshold(cx);
             let (tx, rx) = futures::channel::oneshot::channel();
             let query_task = cx.background_spawn(async move {
                 let start_time = std::time::Instant::now();
-                let execution_future = db_service.execute_script(
-                    connection_id,
-                    Some(&database_name_for_background),
-                    &query_clone,
-                );
-                let execution_result = match query_timeout {
-                    Some(timeout) => {
-                        let deadline = async {
-                            smol::Timer::after(timeout).await;
-                            Err(anyhow::anyhow!(
-                                "Query exceeded the configured {}s timeout",
-                                timeout.as_secs()
-                            ))
-                        };
-                        smol::future::or(execution_future, deadline).await
+                let run = async |sql: &str| {
+                    let execution_future = db_service.execute_script(
+                        connection_id,
+                        Some(&database_name_for_background),
+                        sql,
+                    );
+                    match query_timeout {
+                        Some(timeout) => {
+                            let deadline = async {
+                                smol::Timer::after(timeout).await;
+                                Err(anyhow::anyhow!(
+                                    "Query exceeded the configured {}s timeout",
+                                    timeout.as_secs()
+                                ))
+                            };
+                            smol::future::or(execution_future, deadline).await
+                        }
+                        None => execution_future.await,
                     }
-                    None => execution_future.await,
+                };
+
+                // A plain read of one table can leave its large values on the
+                // server. Looking the table up costs a catalog query, so it
+                // is only done for a query that could qualify.
+                let deferred_read = if defer_threshold > 0
+                    && db_type.dialect().reads_one_table_in_full(&query_clone)
+                    && let Ok(connection) = db_service
+                        .get_or_create_connection_by_id(
+                            connection_id,
+                            Some(&database_name_for_background),
+                        )
+                        .await
+                {
+                    DeferredRead::resolve(&connection, db_type, &query_clone, defer_threshold).await
+                } else {
+                    None
+                };
+                let mut deferred_values = None;
+                let execution_result = match &deferred_read {
+                    Some(read) => match run(read.query()).await {
+                        Ok(mut results) => {
+                            if let [result] = results.as_mut_slice() {
+                                deferred_values = Some(read.finish(result));
+                            }
+                            Ok(results)
+                        }
+                        // The rewrite must never be why a table does not
+                        // open: read it as written instead.
+                        Err(error) => {
+                            tracing::warn!(
+                                "Reading with deferred values failed, reading in full: {error:#}"
+                            );
+                            run(&query_clone).await
+                        }
+                    },
+                    None => run(&query_clone).await,
                 };
 
                 let elapsed = start_time.elapsed();
@@ -355,7 +396,7 @@ impl EditorPanel {
                         "query execution failed"
                     ),
                 }
-                let _ = tx.send((execution_result, elapsed));
+                let _ = tx.send((execution_result, elapsed, deferred_values));
             });
             self.abort_query_task = Some(query_task);
 
@@ -379,7 +420,7 @@ impl EditorPanel {
 
             self._run_query_task = cx.spawn_in(window, async move |editor_panel_entity, window| {
                 let activity = activity;
-                let Ok((execution_result, query_duration)) = rx.await else {
+                let Ok((execution_result, query_duration, deferred_values)) = rx.await else {
                     // Background task was dropped (user clicked Abort).
                     window
                         .update(|window, cx| {
@@ -526,7 +567,7 @@ impl EditorPanel {
                         // The final result set as the MCP bridge reports it,
                         // built before the results move into the grid. Capped
                         // rows keep this cheap on every run.
-                        let run_outcome = results
+                        let mut run_outcome = results
                             .last()
                             .map(|result| {
                                 crate::mcp::tools::result_to_json(
@@ -535,6 +576,16 @@ impl EditorPanel {
                                 )
                             })
                             .unwrap_or(serde_json::Value::Null);
+                        // Previews must not pass for values with an agent.
+                        if deferred_values
+                            .as_ref()
+                            .is_some_and(|deferred| !deferred.is_empty())
+                            && run_outcome.is_object()
+                        {
+                            run_outcome["partial_values"] = serde_json::json!(
+                                "Large text and binary values were read as previews of their first 256 characters or bytes. Select the column by name to read a value in full."
+                            );
+                        }
 
                         window
                             .update(move |window, cx| {
@@ -546,6 +597,9 @@ impl EditorPanel {
                                         window,
                                         cx,
                                     );
+                                    if let Some(deferred_values) = deferred_values {
+                                        panel.set_deferred_values(deferred_values, cx);
+                                    }
                                 });
 
                                 // Blanco loads whole results on purpose, so

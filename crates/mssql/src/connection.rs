@@ -289,7 +289,7 @@ impl MssqlConnection {
                 .try_get::<&[u8], _>(col_index)
                 .ok()
                 .flatten()
-                .map(hex::encode),
+                .map(blanco_core::binary::encode),
             _ => try_str(col_index),
         }
     }

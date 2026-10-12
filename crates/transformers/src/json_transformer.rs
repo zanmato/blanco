@@ -1,16 +1,35 @@
-use crate::{DataTransformer, SelectedTableData, TransformError};
+use crate::{BinaryEncoding, DataTransformer, SelectedTableData, TransformError};
 use blanco_core::ColumnType;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 pub struct JsonTransformer {
     first_row: AtomicBool,
+    binary: BinaryEncoding,
 }
 
 impl JsonTransformer {
     pub fn new() -> Self {
         Self {
             first_row: AtomicBool::new(true),
+            binary: BinaryEncoding::default(),
+        }
+    }
+
+    /// How binary columns are written.
+    pub fn binary_encoding(mut self, binary: BinaryEncoding) -> Self {
+        self.binary = binary;
+        self
+    }
+
+    fn json_value(&self, value: Option<&str>, column_type: &ColumnType) -> serde_json::Value {
+        match (value, column_type) {
+            // Bytes are a string in either encoding, never a number that
+            // happens to read like their digits.
+            (Some(value), ColumnType::Binary) => {
+                serde_json::Value::String(self.binary.apply(value, Some(column_type)).into_owned())
+            }
+            _ => convert_to_json_value(value, column_type),
         }
     }
 }
@@ -34,7 +53,7 @@ impl DataTransformer for JsonTransformer {
                 for cell in &row.cells {
                     if let Some(col_name) = &cell.column_name {
                         let column_type = cell.column_type.unwrap_or(ColumnType::Text);
-                        let json_value = convert_to_json_value(cell.value.as_deref(), &column_type);
+                        let json_value = self.json_value(cell.value.as_deref(), &column_type);
                         obj.insert(col_name.clone(), json_value);
                     }
                 }
@@ -67,7 +86,7 @@ impl DataTransformer for JsonTransformer {
         for (i, value) in row_data.iter().enumerate() {
             if let Some(col_name) = columns.get(i) {
                 let column_type = column_types.get(i).copied().unwrap_or(ColumnType::Text);
-                let json_value = convert_to_json_value(value.as_deref(), &column_type);
+                let json_value = self.json_value(value.as_deref(), &column_type);
                 obj.insert(col_name.clone(), json_value);
             }
         }
