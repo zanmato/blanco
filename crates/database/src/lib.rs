@@ -7,6 +7,7 @@ mod connection_config;
 mod factories;
 mod secret_prompt;
 mod service;
+pub mod ssh_config;
 mod ssh_tunnel;
 mod tokio_connection;
 

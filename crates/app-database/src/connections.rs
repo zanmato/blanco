@@ -50,7 +50,7 @@ impl AppDatabase {
                         ssh_private_key_path = ?,
                         ssl_mode = ?, ssl_key_path = ?, ssl_cert_path = ?, ssl_ca_cert_path = ?,
                         trust_server_certificate = ?, read_only = ?,
-                        only_configured_database = ?, idle_timeout_minutes = ?, ask_secrets = ?
+                        only_configured_database = ?, idle_timeout_minutes = ?, ask_secrets = ?, ssh_jump_hosts = ?
                     WHERE id = ?
                     "#,
                 )
@@ -77,6 +77,7 @@ impl AppDatabase {
                 .bind(if conn.only_configured_database { 1 } else { 0 })
                 .bind(conn.idle_timeout_minutes.map(i64::from))
                 .bind(ask_secrets_column(&conn.ask_secrets))
+                .bind(&conn.ssh_jump_hosts)
                 .bind(id)
                 .execute(&pool)
                 .await?;
@@ -85,8 +86,8 @@ impl AppDatabase {
                 // Insert new connection
                 let result = sqlx::query(
                     r#"
-                    INSERT INTO connections (name, db_type, host, port, database_name, username, database_path, last_used_at, created_at, is_active, environment_type, ssh_host, ssh_port, ssh_user, ssh_private_key_path, ssl_mode, ssl_key_path, ssl_cert_path, ssl_ca_cert_path, trust_server_certificate, read_only, only_configured_database, idle_timeout_minutes, ask_secrets)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO connections (name, db_type, host, port, database_name, username, database_path, last_used_at, created_at, is_active, environment_type, ssh_host, ssh_port, ssh_user, ssh_private_key_path, ssl_mode, ssl_key_path, ssl_cert_path, ssl_ca_cert_path, trust_server_certificate, read_only, only_configured_database, idle_timeout_minutes, ask_secrets, ssh_jump_hosts)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     "#,
                 )
                 .bind(&conn.name)
@@ -113,6 +114,7 @@ impl AppDatabase {
                 .bind(if conn.only_configured_database { 1 } else { 0 })
                 .bind(conn.idle_timeout_minutes.map(i64::from))
                 .bind(ask_secrets_column(&conn.ask_secrets))
+                .bind(&conn.ssh_jump_hosts)
                 .execute(&pool)
                 .await?;
 
@@ -129,7 +131,7 @@ impl AppDatabase {
             .run(async move {
             let rows = sqlx::query(
                 r#"
-                SELECT id, name, db_type, host, port, database_name, username, database_path, last_used_at, is_active, environment_type, ssh_host, ssh_port, ssh_user, ssh_private_key_path, ssl_mode, ssl_key_path, ssl_cert_path, ssl_ca_cert_path, trust_server_certificate, read_only, only_configured_database, idle_timeout_minutes, ask_secrets
+                SELECT id, name, db_type, host, port, database_name, username, database_path, last_used_at, is_active, environment_type, ssh_host, ssh_port, ssh_user, ssh_private_key_path, ssl_mode, ssl_key_path, ssl_cert_path, ssl_ca_cert_path, trust_server_certificate, read_only, only_configured_database, idle_timeout_minutes, ask_secrets, ssh_jump_hosts
                 FROM connections
                 ORDER BY name
                 "#,
@@ -165,6 +167,7 @@ impl AppDatabase {
                         ssh_password: None,
                         ssh_private_key_path: row.get("ssh_private_key_path"),
                         ssh_private_key_password: None,
+                        ssh_jump_hosts: row.get("ssh_jump_hosts"),
                         ssl_mode: row.get("ssl_mode"),
                         ssl_key_path: row.get("ssl_key_path"),
                         ssl_cert_path: row.get("ssl_cert_path"),
@@ -427,6 +430,37 @@ mod tests {
                 .first()
                 .is_some_and(|connection| connection.trust_server_certificate)
         );
+    }
+
+    #[tokio::test]
+    async fn ssh_jump_hosts_round_trip() {
+        let database = AppDatabase::new_in_memory(tokio::runtime::Handle::current())
+            .await
+            .expect("Failed to create in-memory database");
+        let mut connection = ConnectionData::new_postgres(
+            "pg".to_string(),
+            "db.internal".to_string(),
+            5432,
+            "app".to_string(),
+            "postgres".to_string(),
+            String::new(),
+        )
+        .with_ssh("prod".to_string(), 22, String::new(), None, None, None);
+        connection.ssh_jump_hosts = Some("alice@bastion:2222".to_string());
+        database.save_connection(&connection).await.expect("save");
+
+        let loaded = database.load_connections().await.expect("load");
+        assert_eq!(
+            loaded[0].ssh_jump_hosts.as_deref(),
+            Some("alice@bastion:2222")
+        );
+        let config = loaded[0].to_connection_config().expect("config");
+        let tunnel = config
+            .ssh_tunnel_config("db.internal", 5432, 40000)
+            .expect("tunnel config");
+        assert_eq!(tunnel.jump_hosts.as_deref(), Some("alice@bastion:2222"));
+        // An empty SSH user is resolved from ~/.ssh/config when connecting.
+        assert_eq!(tunnel.ssh_user, "");
     }
 
     #[tokio::test]

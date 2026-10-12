@@ -12,7 +12,7 @@ use gpui_component::{
 use app_database::{ConnectionData, EnvironmentType};
 
 use super::NewConnectionModal;
-use super::shared::{make_input, render_ssh_section, secret_field};
+use super::shared::{make_input, render_ssh_section, secret_field, validate_ssh_section};
 use database::SecretKind;
 
 pub(super) struct RedisForm {
@@ -28,6 +28,7 @@ pub(super) struct RedisForm {
     pub ssh_password_input: Entity<InputState>,
     pub ssh_private_key_input: Entity<InputState>,
     pub ssh_private_key_password_input: Entity<InputState>,
+    pub ssh_jump_hosts_input: Entity<InputState>,
 }
 
 impl RedisForm {
@@ -86,7 +87,7 @@ impl RedisForm {
         let ssh_user_input = make_input(
             window,
             cx,
-            "SSH Username",
+            "SSH Username (optional)",
             false,
             conn.and_then(|c| c.ssh_user.as_deref()),
         );
@@ -111,6 +112,13 @@ impl RedisForm {
             true,
             conn.and_then(|c| c.ssh_private_key_password.as_deref()),
         );
+        let ssh_jump_hosts_input = make_input(
+            window,
+            cx,
+            "From ~/.ssh/config, or user@bastion:22, other",
+            false,
+            conn.and_then(|c| c.ssh_jump_hosts.as_deref()),
+        );
 
         let ssh_enabled = conn.map(|c| c.uses_ssh_tunnel()).unwrap_or(false);
 
@@ -127,6 +135,7 @@ impl RedisForm {
             ssh_password_input,
             ssh_private_key_input,
             ssh_private_key_password_input,
+            ssh_jump_hosts_input,
         }
     }
 
@@ -135,6 +144,12 @@ impl RedisForm {
     }
 
     pub fn validate(&self, cx: &App) -> Option<String> {
+        if self.ssh_enabled
+            && let Some(error) =
+                validate_ssh_section(&self.ssh_host_input, &self.ssh_jump_hosts_input, cx)
+        {
+            return Some(error);
+        }
         let host = self.host_input.read(cx).value();
         let port_str = self.port_input.read(cx).value();
         let database = self.database_input.read(cx).value();
@@ -183,7 +198,7 @@ impl RedisForm {
             let ssh_port_str = self.ssh_port_input.read(cx).value();
             let ssh_user = self.ssh_user_input.read(cx).value();
 
-            if ssh_host.is_empty() || ssh_user.is_empty() {
+            if ssh_host.is_empty() {
                 return None;
             }
             let ssh_port = if ssh_port_str.is_empty() {
@@ -207,6 +222,16 @@ impl RedisForm {
             ConnectionData::new_redis(name, host, port, database, username, password)
         };
         connection.environment_type = environment_type;
+        if self.ssh_enabled {
+            connection.ssh_jump_hosts = Some(
+                self.ssh_jump_hosts_input
+                    .read(cx)
+                    .value()
+                    .trim()
+                    .to_string(),
+            )
+            .filter(|hosts| !hosts.is_empty());
+        }
         Some(connection)
     }
 }
@@ -294,6 +319,7 @@ pub(super) fn render(
                 &form.ssh_private_key_input,
                 &form.ssh_private_key_password_input,
                 &modal.ask_secrets,
+                &form.ssh_jump_hosts_input,
                 cx,
             ))
         })

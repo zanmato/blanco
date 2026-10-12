@@ -33,6 +33,7 @@ serde = { workspace = true }
 # UUID for generating unique IDs
 uuid = { workspace = true }
 url = { workspace = true }
+dirs = { workspace = true }
 
 [dev-dependencies]
 tokio-test = "0.4"

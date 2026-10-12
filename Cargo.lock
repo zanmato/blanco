@@ -1919,6 +1919,7 @@ dependencies = [
  "async-trait",
  "blanco-core",
  "clickhouse",
+ "dirs 5.0.1",
  "futures",
  "gpui-pre",
  "mssql",
