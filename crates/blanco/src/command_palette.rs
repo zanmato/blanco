@@ -17,14 +17,15 @@ use database::{DatabaseService, DatabaseType};
 use crate::{
     app::{
         ActivateEditorTab, ActivateNextTab, ActivatePreviousTab, BackupDatabase, CancelQuery,
-        ClearCompareSelection, CloseActiveTab, CommitChanges, ConnectToConnection, CopyAsCSV,
-        CopyAsJSON, CopyAsMarkdown, CopyAsSQL, CopyAsTSV, CreateNewQueryTab, CreateNewScriptTab,
-        ExplainQuery, ExportAsCSV, ExportAsJSON, ExportAsMarkdown, ExportAsSQL, ExportAsTSV,
-        ExportConnections, ExportTableData, FormatQuery, ImportConnections, ImportTableData,
-        NewQueryTab, NewSnippet, OpenNewConnectionModal, OpenSettings, OpenSqlFile, OpenSqliteFile,
-        OpenTerminal, RefreshConnections, ReopenClosedTab, RestoreDatabase, RollbackChanges,
-        RunQuery, RunSqlFile, SaveTab, SaveTabAs, SwitchTheme, ToggleFilterBar,
-        ToggleRenderWhitespace, ToggleResults, ToggleSidebar, ToggleWordWrap,
+        ClearCompareSelection, CloseActiveTab, CloseWindow, CommitChanges, ConnectToConnection,
+        CopyAsCSV, CopyAsJSON, CopyAsMarkdown, CopyAsSQL, CopyAsTSV, CreateNewQueryTab,
+        CreateNewScriptTab, ExplainQuery, ExportAsCSV, ExportAsJSON, ExportAsMarkdown, ExportAsSQL,
+        ExportAsTSV, ExportConnections, ExportTableData, FormatQuery, ImportConnections,
+        ImportTableData, MoveTabToNewWindow, NewQueryTab, NewSnippet, NewWindow,
+        OpenNewConnectionModal, OpenSettings, OpenSqlFile, OpenSqliteFile, OpenTerminal,
+        RefreshConnections, ReopenClosedTab, RestoreDatabase, RollbackChanges, RunQuery,
+        RunSqlFile, SaveTab, SaveTabAs, SwitchTheme, ToggleFilterBar, ToggleRenderWhitespace,
+        ToggleResults, ToggleSidebar, ToggleWordWrap,
     },
     connections::ConnectionsPanel,
     editor::EditorPanel,
@@ -131,6 +132,9 @@ pub enum CommandType {
     ToggleWordWrap,
     CloseActiveTab,
     NewQueryTab,
+    NewWindow,
+    CloseWindow,
+    MoveTabToNewWindow,
     ActivateNextTab,
     ActivatePreviousTab,
     ToggleResults,
@@ -764,6 +768,8 @@ fn keybinding_for_command(cmd: &CommandType, window: &Window) -> Option<gpui_com
         CommandType::ToggleSidebar => Box::new(ToggleSidebar),
         CommandType::CloseActiveTab => Box::new(CloseActiveTab),
         CommandType::NewQueryTab => Box::new(NewQueryTab),
+        CommandType::NewWindow => Box::new(NewWindow),
+        CommandType::CloseWindow => Box::new(CloseWindow),
         CommandType::ActivateNextTab => Box::new(ActivateNextTab),
         CommandType::ActivatePreviousTab => Box::new(ActivatePreviousTab),
         CommandType::ToggleResults => Box::new(ToggleResults),
@@ -815,6 +821,9 @@ fn execute_command(cmd: &CommandType, window: &mut Window, cx: &mut App) {
         CommandType::ToggleWordWrap => window.dispatch_action(Box::new(ToggleWordWrap), cx),
         CommandType::CloseActiveTab => window.dispatch_action(Box::new(CloseActiveTab), cx),
         CommandType::NewQueryTab => window.dispatch_action(Box::new(NewQueryTab), cx),
+        CommandType::NewWindow => window.dispatch_action(Box::new(NewWindow), cx),
+        CommandType::CloseWindow => window.dispatch_action(Box::new(CloseWindow), cx),
+        CommandType::MoveTabToNewWindow => window.dispatch_action(Box::new(MoveTabToNewWindow), cx),
         CommandType::ActivateNextTab => window.dispatch_action(Box::new(ActivateNextTab), cx),
         CommandType::ActivatePreviousTab => {
             window.dispatch_action(Box::new(ActivatePreviousTab), cx)
@@ -1242,6 +1251,13 @@ fn build_commands(
         leaf("Word Wrap", "View", CommandType::ToggleWordWrap),
         leaf("Close Tab", "Tab", CommandType::CloseActiveTab),
         leaf("New Query Tab", "Tab", CommandType::NewQueryTab),
+        leaf(
+            "Move Tab to New Window",
+            "Tab",
+            CommandType::MoveTabToNewWindow,
+        ),
+        leaf("New Window", "Window", CommandType::NewWindow),
+        leaf("Close Window", "Window", CommandType::CloseWindow),
         leaf("Next Tab", "Tab", CommandType::ActivateNextTab),
         leaf("Previous Tab", "Tab", CommandType::ActivatePreviousTab),
         leaf("Toggle Results Pane", "View", CommandType::ToggleResults),
@@ -1521,7 +1537,7 @@ mod tests {
 #[cfg(test)]
 mod visual_tests {
     use database::DatabaseService;
-    use gpui::{AppContext, Focusable, TestAppContext, VisualTestContext};
+    use gpui::{Focusable, TestAppContext, VisualTestContext};
     use gpui_component::Root;
 
     use crate::app::{BlancoApp, ToggleCommandPalette};
@@ -1561,12 +1577,12 @@ mod visual_tests {
             let settings = AppSettings::new(Settings::default());
             cx.set_global(settings);
 
-            cx.open_window(Default::default(), |window, cx| {
-                let blanco_app = cx.new(|cx| BlancoApp::new(window, cx));
-                app = Some(blanco_app.clone());
-                cx.new(|cx| Root::new(blanco_app, window, cx))
-            })
-            .expect("failed to open window")
+            crate::app::init_menus(cx);
+            crate::windows::init(cx);
+            let (window_handle, blanco_app) =
+                crate::windows::open_new(None, cx).expect("failed to open window");
+            app = Some(blanco_app);
+            window_handle
         });
 
         (app.expect("app should be set"), window_handle)

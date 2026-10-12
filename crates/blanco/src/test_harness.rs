@@ -6,11 +6,9 @@ use gpui_component::Root;
 use crate::app_settings::AppSettings;
 use crate::editor::{EditorPanel, TabCreationParams};
 use crate::settings::Settings;
-use crate::status_bar::{ActivityMessage, ActivityReporter, StatusBarState, StatusLine};
+use crate::status_bar::{StatusBarState, StatusLine};
 use app_database::AppDatabase;
 
-use gpui::Task;
-use smol::channel;
 use std::sync::atomic::{AtomicI64, Ordering};
 
 static NEXT_CONNECTION_ID: AtomicI64 = AtomicI64::new(1);
@@ -25,8 +23,9 @@ pub struct TestHarness {
     pub status_bar: gpui::Entity<StatusBarState>,
     /// The temp-SQLite connection every tab in this harness is bound to.
     pub connection_id: i64,
+    /// The `windows` row the panel's tabs are stored under.
+    pub window_id: i64,
     pub db_type: database::DatabaseType,
-    _activity_task: Task<()>,
 }
 
 impl TestHarness {
@@ -64,27 +63,13 @@ impl TestHarness {
 
         let mut editor_panel: Option<gpui::Entity<EditorPanel>> = None;
         let mut status_bar: Option<gpui::Entity<StatusBarState>> = None;
-        let mut activity_task: Option<Task<()>> = None;
         let mut harness_connection_id: Option<i64> = None;
+        let mut harness_window_id: Option<i64> = None;
         let window_handle = cx.update(|cx| {
             gpui_component::init(cx);
             gpui_tokio::init(cx);
 
-            // Mirror app.rs: an activity channel feeding the status bar entity.
-            let status_bar_entity = cx.new(|_| StatusBarState::default());
-            let (activity_sender, activity_receiver) = channel::unbounded::<ActivityMessage>();
-            cx.set_global(ActivityReporter::new(activity_sender));
-            activity_task = Some(cx.spawn({
-                let status_bar = status_bar_entity.downgrade();
-                async move |cx| {
-                    while let Ok(message) = activity_receiver.recv().await {
-                        status_bar
-                            .update(cx, |state, cx| state.apply(message, cx))
-                            .ok();
-                    }
-                }
-            }));
-            status_bar = Some(status_bar_entity);
+            status_bar = Some(StatusBarState::shared(cx));
 
             let runtime_handle = gpui_tokio::Tokio::handle(cx);
 
@@ -113,8 +98,16 @@ impl TestHarness {
                 db_service.add_connection_config(sqlite_config).await;
             });
 
+            let app_database = AppDatabase::global(cx).clone();
+            let window_id = runtime_handle
+                .block_on(async move { app_database.create_window(None, None).await })
+                .expect("failed to store the window");
+            harness_window_id = Some(window_id);
+
             cx.open_window(Default::default(), |window, cx| {
-                let panel = cx.new(|cx| EditorPanel::new_with_saved_tabs(window, cx, vec![]));
+                let panel = cx.new(|cx| {
+                    EditorPanel::new_with_saved_tabs(window, cx, window_id, None, vec![])
+                });
 
                 let params = TabCreationParams {
                     title: "Test Query".into(),
@@ -149,8 +142,8 @@ impl TestHarness {
             window_handle,
             status_bar: status_bar.expect("status_bar should be set"),
             connection_id: harness_connection_id.expect("connection_id should be set"),
+            window_id: harness_window_id.expect("window_id should be set"),
             db_type,
-            _activity_task: activity_task.expect("activity_task should be set"),
         }
     }
 
@@ -187,33 +180,15 @@ impl TestHarness {
 pub struct FullAppHarness {
     pub app: gpui::Entity<crate::app::BlancoApp>,
     pub window_handle: gpui::WindowHandle<Root>,
-    _activity_task: Task<()>,
 }
 
 impl FullAppHarness {
     pub fn new(cx: &mut TestAppContext) -> Self {
         cx.executor().allow_parking();
 
-        let mut app: Option<gpui::Entity<crate::app::BlancoApp>> = None;
-        let mut activity_task: Option<Task<()>> = None;
-
-        let window_handle = cx.update(|cx| {
+        let (window_handle, app) = cx.update(|cx| {
             gpui_component::init(cx);
             gpui_tokio::init(cx);
-
-            let status_bar_entity = cx.new(|_| StatusBarState::default());
-            let (activity_sender, activity_receiver) = channel::unbounded::<ActivityMessage>();
-            cx.set_global(ActivityReporter::new(activity_sender));
-            activity_task = Some(cx.spawn({
-                let status_bar = status_bar_entity.downgrade();
-                async move |cx| {
-                    while let Ok(message) = activity_receiver.recv().await {
-                        status_bar
-                            .update(cx, |state, cx| state.apply(message, cx))
-                            .ok();
-                    }
-                }
-            }));
 
             let runtime_handle = gpui_tokio::Tokio::handle(cx);
 
@@ -242,44 +217,36 @@ impl FullAppHarness {
                 db_service.add_connection_config(sqlite_config).await;
             });
 
-            cx.open_window(Default::default(), |window, cx| {
-                let blanco_app = cx.new(|cx| crate::app::BlancoApp::new(window, cx));
+            crate::app::init_menus(cx);
+            crate::windows::init(cx);
+            let (window_handle, app) =
+                crate::windows::open_new(None, cx).expect("failed to open window");
 
-                let params = TabCreationParams {
-                    title: "Test Query".into(),
-
-                    content: None,
-
-                    db_id: None,
-
-                    last_run_at: None,
-
-                    context: ConnectionContext {
-                        connection_id,
-                        db_type: database::DatabaseType::SQLite,
-                        connection_name: "test".into(),
-                        database_name: "main".into(),
-                        schema_name: None,
-                        environment_type: None,
-                    },
-                };
-                blanco_app.update(cx, |app, cx| {
-                    app.editor_panel().clone().update(cx, |panel, cx| {
+            let params = TabCreationParams {
+                title: "Test Query".into(),
+                content: None,
+                db_id: None,
+                last_run_at: None,
+                context: ConnectionContext {
+                    connection_id,
+                    db_type: database::DatabaseType::SQLite,
+                    connection_name: "test".into(),
+                    database_name: "main".into(),
+                    schema_name: None,
+                    environment_type: None,
+                },
+            };
+            window_handle
+                .update(cx, |_, window, cx| {
+                    app.read(cx).editor_panel().clone().update(cx, |panel, cx| {
                         panel.create_and_add_tab_with_connection(window, params, cx);
                     });
-                });
-
-                app = Some(blanco_app.clone());
-                cx.new(|cx| Root::new(blanco_app, window, cx))
-            })
-            .expect("failed to open window")
+                })
+                .expect("failed to add a tab");
+            (window_handle, app)
         });
 
-        Self {
-            app: app.expect("app should be set"),
-            window_handle,
-            _activity_task: activity_task.expect("activity_task should be set"),
-        }
+        Self { app, window_handle }
     }
 
     pub fn editor_panel(&self, cx: &VisualTestContext) -> gpui::Entity<EditorPanel> {

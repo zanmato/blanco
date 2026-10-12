@@ -7,11 +7,13 @@ mod schema;
 mod settings;
 mod snippets;
 mod types;
+mod windows;
 
 pub use connections::LegacyConnectionCredentials;
 pub use schema::{app_db_path, init_schema};
 pub use types::{
     ConnectionData, EditorKind, EnvironmentType, QueryHistoryData, QueryTabData, SnippetData,
+    WindowData, WindowGeometry,
 };
 
 use gpui::{App, Global};

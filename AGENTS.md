@@ -146,6 +146,26 @@ is set. Tests that connect without a password call
 `DatabaseService::set_password_file` with a temporary path, so they do not
 depend on the home directory of whoever runs them.
 
+## Windows
+
+`windows.rs` owns Blanco's windows. Each window is a `BlancoApp` with its own tabs,
+sidebar and command palette over the shared `DatabaseService`, and a row in the app
+database's `windows` table (geometry, display UUID, active tab, last activation);
+`query_tabs.window_id` says which window shows a tab. `windows::restore` reopens every
+row at startup, the most recently active last, on the display whose UUID was saved.
+Closing one of several windows deletes its row and, by cascade, its tabs (unsaved file
+changes are asked about first); the last window closing quits and keeps its row.
+Anything that is not one window's runs once in `windows::init`: database service
+messages, the idle disconnect sweep, files the platform asks to open (frontmost
+window), MCP requests (the window holding the tab named by id, else the frontmost) and
+the status bar (`StatusBarState::shared`). Moving a tab rebuilds it in the new window
+from `MovedTab`, keeping its row, because tab entities belong to the window that made
+them. Code that must reach every window (sidebar reloads after a connection changes,
+tabs of a saved temporary connection) goes through `windows::reload_connections` and
+`windows::move_tabs_to_connection`, which defer so they can be called from inside any
+panel's update. Call `update_window`, not `WindowHandle::update`, to run app code in a
+window: the latter holds the `Root` view that dialogs and notifications read.
+
 ## Updates
 
 `update_manager::UpdateManager` (a global installed in `main.rs`) asks GitHub for the
@@ -165,7 +185,8 @@ so change both together. Tests build `BlancoApp` without the global, hence `try_
 
 ### File Structure
 
-- `main.rs` - GPUI application initialization, window setup
+- `main.rs` - GPUI application initialization
+- `windows.rs` - Opening, restoring and closing windows, and the services they share
 - `app.rs` - Main application layout with title bar, sidebar, editor, results
 - `editor_panel.rs` - Tabbed SQL editor with run/format buttons
 - `results_panel.rs` - Table view for query results

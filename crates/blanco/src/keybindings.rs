@@ -1,7 +1,7 @@
 use crate::app::{
-    ActivateNextTab, ActivatePreviousTab, CancelQuery, CloseActiveTab, CommitChanges,
+    ActivateNextTab, ActivatePreviousTab, CancelQuery, CloseActiveTab, CloseWindow, CommitChanges,
     DecreaseEditorFontSize, ExplainQuery, ExportTableData, FormatQuery, ImportTableData,
-    IncreaseEditorFontSize, NewQueryTab, OpenReferencedRow, OpenSettings, OpenTerminal,
+    IncreaseEditorFontSize, NewQueryTab, NewWindow, OpenReferencedRow, OpenSettings, OpenTerminal,
     RefreshConnections, ReopenClosedTab, ResetEditorFontSize, RollbackChanges, RunQuery, SaveTab,
     SaveTabAs, ToggleCommandPalette, ToggleFilterBar, ToggleResults, ToggleSidebar,
 };
@@ -64,6 +64,20 @@ pub const CUSTOMIZABLE_BINDINGS: &[BindingDef] = &[
         label: "Format SQL",
         group: "Query",
         default: "shift-alt-f",
+        context: None,
+    },
+    BindingDef {
+        action: "NewWindow",
+        label: "New window",
+        group: "File",
+        default: "secondary-shift-n",
+        context: None,
+    },
+    BindingDef {
+        action: "CloseWindow",
+        label: "Close window",
+        group: "File",
+        default: "secondary-shift-w",
         context: None,
     },
     BindingDef {
@@ -307,6 +321,8 @@ fn key_binding(action: &str, keystrokes: &str, context: Option<&str>) -> Option<
         "FormatQuery" => gpui::KeyBinding::new(keystrokes, FormatQuery, context),
         "ToggleCommandPalette" => gpui::KeyBinding::new(keystrokes, ToggleCommandPalette, context),
         "ToggleFilterBar" => gpui::KeyBinding::new(keystrokes, ToggleFilterBar, context),
+        "NewWindow" => gpui::KeyBinding::new(keystrokes, NewWindow, context),
+        "CloseWindow" => gpui::KeyBinding::new(keystrokes, CloseWindow, context),
         "SaveTab" => gpui::KeyBinding::new(keystrokes, SaveTab, context),
         "SaveTabAs" => gpui::KeyBinding::new(keystrokes, SaveTabAs, context),
         "CommitChanges" => gpui::KeyBinding::new(keystrokes, CommitChanges, context),

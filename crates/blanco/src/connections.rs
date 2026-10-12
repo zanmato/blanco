@@ -1296,8 +1296,8 @@ impl ConnectionsPanel {
                     Err(error) => failures.push(format!("{}: {error}", connection.name)),
                 }
             }
-            this.update_in(cx, |this, window, cx| {
-                this.reload_connections(cx);
+            this.update_in(cx, |_, window, cx| {
+                crate::windows::reload_connections(cx);
                 let note = if failures.is_empty() {
                     (
                         NotificationType::Success,
@@ -1426,6 +1426,7 @@ impl ConnectionsPanel {
                                                 this.forget_connection(connection_id);
                                                 this.update_tree_items(cx);
                                                 cx.notify();
+                                                crate::windows::reload_connections(cx);
                                             })
                                             .log_err();
                                     })

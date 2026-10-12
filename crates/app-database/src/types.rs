@@ -64,6 +64,31 @@ pub struct QueryTabData {
     pub last_run_at: Option<i64>,
     /// The `.sql` file the tab was opened from or saved to.
     pub file_path: Option<String>,
+    /// The `windows` row of the window showing the tab.
+    pub window_id: Option<i64>,
+}
+
+/// A window's size and place, in the coordinates GPUI reports for the
+/// display it is on. The place is best effort: some platforms, such as
+/// Wayland, ignore the position a window asks for.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WindowGeometry {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    pub maximized: bool,
+}
+
+/// A window stored in the `windows` table, restored on the next start.
+#[derive(Debug, Clone)]
+pub struct WindowData {
+    pub id: i64,
+    /// `None` until the window first reports its bounds.
+    pub geometry: Option<WindowGeometry>,
+    /// The display the window was on, as GPUI's display UUID.
+    pub display_uuid: Option<String>,
+    pub active_tab_id: Option<i64>,
 }
 
 /// A single recorded query execution, stored in the `query_history` table.

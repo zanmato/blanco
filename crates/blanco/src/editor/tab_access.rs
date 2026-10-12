@@ -220,6 +220,11 @@ impl EditorPanel {
 
     /// Turn a selector into an index: by id first, then by index, else the
     /// active tab.
+    /// Whether this panel shows the tab with the stable id `id`.
+    pub(crate) fn has_tab_id(&self, id: u64) -> bool {
+        self.tabs.iter().any(|tab| tab_id(tab) == Some(id))
+    }
+
     pub(crate) fn resolve_tab(&self, selector: TabSelector) -> Result<usize, String> {
         if let Some(id) = selector.id {
             return self

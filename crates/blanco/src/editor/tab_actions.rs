@@ -1,10 +1,21 @@
-//! Tab strip operations: reorder, duplicate, pin and the bulk closes.
+//! Tab strip operations: reorder, duplicate, pin, move to another window and
+//! the bulk closes.
 
 use app_database::AppDatabase;
 use gpui::{Context, Window};
 
+use super::tabs::TabFile;
 use super::{EditorPanel, TabCreationParams, TabType};
 use crate::result_ext::ResultExt as _;
+
+/// A query or script tab taken out of one window to be shown in another.
+/// The tab's entities belong to the window they were made in, so the other
+/// window rebuilds the tab from this, keeping its row in the app database.
+pub struct MovedTab {
+    is_script: bool,
+    params: TabCreationParams,
+    file: Option<TabFile>,
+}
 
 impl EditorPanel {
     pub(super) fn is_pinned(&self, ix: usize) -> bool {
@@ -97,6 +108,106 @@ impl EditorPanel {
         self.scroll_tabbar_to_tab(target, Some(scroll_offset), window);
         self.save_tab_positions(cx);
         cx.notify();
+    }
+
+    pub(crate) fn active_tab_index(&self) -> usize {
+        self.active_tab_ix
+    }
+
+    /// The names of the files whose tabs have unsaved changes.
+    pub(crate) fn unsaved_file_names(&self) -> Vec<String> {
+        self.tabs
+            .iter()
+            .filter_map(TabType::connection_tab)
+            .filter_map(|tab| tab.file.as_ref())
+            .filter(|file| file.dirty)
+            .map(TabFile::name)
+            .collect()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn tab_db_id(&self, ix: usize) -> Option<i64> {
+        self.tabs.get(ix).and_then(TabType::db_id)
+    }
+
+    /// Whether the tab at `ix` can go to a window of its own: a query or
+    /// script tab, and not the only tab, which is a window already.
+    pub(crate) fn can_move_tab_to_new_window(&self, ix: usize) -> bool {
+        self.tabs.len() > 1
+            && self
+                .tabs
+                .get(ix)
+                .is_some_and(|tab| tab.connection_tab().is_some())
+    }
+
+    /// Take the tab at `ix` out of this window for `adopt_tab` in another.
+    /// Unlike closing it, its row stays and it is not offered by Reopen
+    /// Closed Tab.
+    pub(crate) fn take_tab(&mut self, ix: usize, cx: &mut Context<Self>) -> Option<MovedTab> {
+        if !self.can_move_tab_to_new_window(ix) {
+            return None;
+        }
+        let is_script = matches!(self.tabs.get(ix), Some(TabType::Script(_)));
+        let connection_tab = self.tabs.get_mut(ix)?.connection_tab_mut()?;
+        // The other window saves the tab as soon as it has it.
+        self.autosave_tasks
+            .remove(&connection_tab.editor.entity_id());
+        let moved = MovedTab {
+            is_script,
+            file: connection_tab.file.take(),
+            params: TabCreationParams {
+                title: connection_tab.title.clone(),
+                content: Some(connection_tab.editor.read(cx).text().to_string()),
+                db_id: connection_tab.db_id,
+                last_run_at: connection_tab.last_run_at,
+                context: connection_tab.context.clone(),
+            },
+        };
+        self.tabs.remove(ix);
+        if ix < self.pinned_count {
+            self.pinned_count -= 1;
+        }
+        if ix < self.active_tab_ix {
+            self.active_tab_ix -= 1;
+        } else if self.active_tab_ix >= self.tabs.len() {
+            self.active_tab_ix = self.tabs.len().saturating_sub(1);
+        }
+        self.save_tab_positions(cx);
+        cx.notify();
+        Some(moved)
+    }
+
+    /// Give the tab at `ix` a window of its own.
+    pub(crate) fn move_tab_to_new_window(&mut self, ix: usize, cx: &mut Context<Self>) {
+        let Some(tab) = self.take_tab(ix, cx) else {
+            return;
+        };
+        // The new window's app is built while this panel is still updating.
+        cx.defer(move |cx| {
+            crate::windows::open_new(Some(tab), cx).log_err();
+        });
+    }
+
+    /// Show a tab taken from another window as this window's last tab, and
+    /// store it as this window's.
+    pub(crate) fn adopt_tab(
+        &mut self,
+        moved: MovedTab,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if moved.is_script {
+            self.create_and_add_script_tab(window, moved.params, cx);
+        } else {
+            self.create_and_add_tab_with_connection(window, moved.params, cx);
+        }
+        let Some(tab) = self.tabs.last_mut().and_then(TabType::connection_tab_mut) else {
+            return;
+        };
+        tab.file = moved.file;
+        let editor = tab.editor.entity_id();
+        self.save_tab_for_editor(editor, cx);
+        self.focus_active_tab(window, cx);
     }
 
     /// Close every unpinned tab but the one at `keep`.

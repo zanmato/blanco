@@ -44,8 +44,9 @@ struct RunningServer {
 /// switch and the running listener, if any.
 pub(crate) struct McpService {
     client: McpBridgeClient,
-    /// Handed to `BlancoApp` when the window opens. Requests sent before that
-    /// queue in the channel.
+    /// Handed to the window manager when it starts, which answers each
+    /// request in the window it concerns. Requests sent before that queue in
+    /// the channel.
     receiver: Option<smol::channel::Receiver<McpRequest>>,
     allow_writes: Arc<AtomicBool>,
     running: Option<RunningServer>,
@@ -55,8 +56,8 @@ pub(crate) struct McpService {
 impl Global for McpService {}
 
 impl McpService {
-    /// Create the global. Called once at startup before the window opens so
-    /// `BlancoApp` can take the bridge receiver.
+    /// Create the global. Called once at startup before `windows::init`, which
+    /// takes the bridge receiver.
     pub(crate) fn init(cx: &mut App) {
         let (client, receiver) = McpBridgeClient::channel();
         cx.set_global(Self {
@@ -73,8 +74,7 @@ impl McpService {
     }
 
     /// The bridge receiver, once. `None` after the first call and when the
-    /// service was never initialised (visual tests that build `BlancoApp`
-    /// directly).
+    /// service was never initialised (visual tests without MCP).
     pub(crate) fn take_bridge_receiver(
         cx: &mut App,
     ) -> Option<smol::channel::Receiver<McpRequest>> {

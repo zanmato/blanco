@@ -3,12 +3,13 @@ use std::path::PathBuf;
 
 /// Schema version stored in SQLite's `PRAGMA user_version`. Bump it and append
 /// a step to [`MIGRATIONS`] for every schema change.
-pub const SCHEMA_VERSION: i64 = 8;
+pub const SCHEMA_VERSION: i64 = 9;
 
 /// The complete schema for a fresh database, at [`SCHEMA_VERSION`]. Keep it in
 /// sync with the migrations: a database created from this must be identical
 /// to one migrated step by step.
 const BASELINE: &[&str] = &[
+    WINDOWS_TABLE,
     r#"
     CREATE TABLE connections (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -54,6 +55,7 @@ const BASELINE: &[&str] = &[
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
         file_path TEXT,
+        window_id INTEGER REFERENCES windows(id) ON DELETE CASCADE,
         FOREIGN KEY (connection_id) REFERENCES connections(id) ON DELETE SET NULL
     )
     "#,
@@ -107,6 +109,22 @@ const BASELINE: &[&str] = &[
     "#,
 ];
 
+const WINDOWS_TABLE: &str = r#"
+    CREATE TABLE windows (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        x REAL,
+        y REAL,
+        width REAL,
+        height REAL,
+        maximized INTEGER NOT NULL DEFAULT 0,
+        display_uuid TEXT,
+        active_tab_id INTEGER,
+        last_active_at INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+    )
+    "#;
+
 /// Migration steps. `MIGRATIONS[n]` upgrades a database from version `n` to
 /// `n + 1`. Step 0 brings the unversioned, pre-`user_version` layout (which
 /// accumulated columns through `ADD COLUMN IF MISSING` calls) up to the
@@ -122,6 +140,7 @@ const MIGRATIONS: &[Migration] = &[
     |pool| Box::pin(migrate_v5_to_v6(pool)),
     |pool| Box::pin(migrate_v6_to_v7(pool)),
     |pool| Box::pin(migrate_v7_to_v8(pool)),
+    |pool| Box::pin(migrate_v8_to_v9(pool)),
 ];
 
 /// Columns that may be missing from an unversioned database, per table, in the
@@ -231,6 +250,50 @@ async fn migrate_v7_to_v8(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
     Ok(())
+}
+
+/// The single window's geometry and active tab move from the `window.*` and
+/// `session.active_tab` settings into a `windows` row that owns every tab.
+async fn migrate_v8_to_v9(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    let mut transaction = pool.begin().await?;
+    sqlx::query(WINDOWS_TABLE)
+        .execute(&mut *transaction)
+        .await?;
+    sqlx::query(
+        "ALTER TABLE query_tabs ADD COLUMN window_id INTEGER REFERENCES windows(id) ON DELETE CASCADE",
+    )
+    .execute(&mut *transaction)
+    .await?;
+    let now = chrono::Utc::now().timestamp();
+    let window_id = sqlx::query(
+        r#"
+        INSERT INTO windows (x, y, width, height, maximized, active_tab_id, created_at, updated_at)
+        VALUES (
+            (SELECT CAST(value AS REAL) FROM settings WHERE key = 'window.x'),
+            (SELECT CAST(value AS REAL) FROM settings WHERE key = 'window.y'),
+            (SELECT CAST(value AS REAL) FROM settings WHERE key = 'window.width'),
+            (SELECT CAST(value AS REAL) FROM settings WHERE key = 'window.height'),
+            COALESCE((SELECT value = 'true' FROM settings WHERE key = 'window.maximized'), 0),
+            (SELECT CAST(value AS INTEGER) FROM settings WHERE key = 'session.active_tab'),
+            ?, ?
+        )
+        "#,
+    )
+    .bind(now)
+    .bind(now)
+    .execute(&mut *transaction)
+    .await?
+    .last_insert_rowid();
+    sqlx::query("UPDATE query_tabs SET window_id = ?")
+        .bind(window_id)
+        .execute(&mut *transaction)
+        .await?;
+    sqlx::query(
+        "DELETE FROM settings WHERE key IN ('window.x', 'window.y', 'window.width', 'window.height', 'window.maximized', 'session.active_tab')",
+    )
+    .execute(&mut *transaction)
+    .await?;
+    transaction.commit().await
 }
 
 async fn existing_columns(pool: &SqlitePool, table: &str) -> Result<Vec<String>, sqlx::Error> {
@@ -367,6 +430,7 @@ mod tests {
         let fresh = self::pool().await;
         init_schema(&fresh).await.expect("fresh init");
         for table in [
+            "windows",
             "connections",
             "query_tabs",
             "query_history",
@@ -389,6 +453,57 @@ mod tests {
         .expect("migrated row");
         assert_eq!(row.get::<i64, _>(0), 0);
         assert_eq!(row.get::<i64, _>(1), 0);
+    }
+
+    #[tokio::test]
+    async fn single_window_settings_become_a_window_owning_every_tab() {
+        let pool = pool().await;
+        for statement in [
+            "CREATE TABLE connections (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, db_type TEXT NOT NULL, host TEXT, port INTEGER, database_name TEXT, username TEXT, database_path TEXT, last_used_at INTEGER, created_at INTEGER NOT NULL, is_active INTEGER DEFAULT 1)",
+            "CREATE TABLE query_tabs (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, content TEXT NOT NULL, position INTEGER NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
+            "CREATE TABLE query_history (id INTEGER PRIMARY KEY AUTOINCREMENT, query_text TEXT NOT NULL, executed_at INTEGER NOT NULL, duration_ms INTEGER, rows_affected INTEGER, row_count INTEGER, success INTEGER NOT NULL, error_message TEXT)",
+            "CREATE TABLE snippets (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, content TEXT NOT NULL, parent_id INTEGER, is_group INTEGER NOT NULL DEFAULT 0, position INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
+            "CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, is_secret INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
+            "INSERT INTO query_tabs (title, content, position, created_at, updated_at) VALUES ('a', '', 0, 0, 0), ('b', '', 1, 0, 0)",
+            "INSERT INTO settings (key, value, created_at, updated_at) VALUES ('window.x', '12.5', 0, 0), ('window.y', '40', 0, 0), ('window.width', '1600', 0, 0), ('window.height', '1000', 0, 0), ('window.maximized', 'true', 0, 0), ('session.active_tab', '2', 0, 0), ('general.check_for_updates', 'true', 0, 0)",
+        ] {
+            sqlx::query(statement)
+                .execute(&pool)
+                .await
+                .expect("legacy ddl");
+        }
+
+        init_schema(&pool).await.expect("migrate");
+
+        let window =
+            sqlx::query("SELECT id, x, y, width, height, maximized, active_tab_id FROM windows")
+                .fetch_one(&pool)
+                .await
+                .expect("one window");
+        assert_eq!(window.get::<f64, _>(1), 12.5);
+        assert_eq!(window.get::<f64, _>(2), 40.0);
+        assert_eq!(window.get::<f64, _>(3), 1600.0);
+        assert_eq!(window.get::<f64, _>(4), 1000.0);
+        assert_eq!(window.get::<i64, _>(5), 1);
+        assert_eq!(window.get::<i64, _>(6), 2);
+
+        let owners: Vec<Option<i64>> = sqlx::query("SELECT window_id FROM query_tabs")
+            .fetch_all(&pool)
+            .await
+            .expect("tabs")
+            .iter()
+            .map(|row| row.get(0))
+            .collect();
+        assert_eq!(owners, vec![Some(window.get::<i64, _>(0)); 2]);
+
+        let keys: Vec<String> = sqlx::query("SELECT key FROM settings")
+            .fetch_all(&pool)
+            .await
+            .expect("settings")
+            .iter()
+            .map(|row| row.get(0))
+            .collect();
+        assert_eq!(keys, vec!["general.check_for_updates".to_string()]);
     }
 
     #[tokio::test]

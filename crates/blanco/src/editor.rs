@@ -25,6 +25,7 @@ mod table_structure;
 mod tabs;
 mod terminal_pane;
 
+pub(crate) use tab_actions::MovedTab;
 pub use tabs::{
     ConnectionBackedTab, ObjectDdlParams, OutlinedStatement, QueryTab, ScriptTab, SettingsTab,
     TabCreationParams, TabType, TableStructureParams,
@@ -111,8 +112,10 @@ pub struct EditorPanel {
     autosave_inserting: HashSet<EntityId>,
     /// Recently closed tabs, most recent last, for Reopen Closed Tab.
     closed_tabs: Vec<ClosedTab>,
-    /// The active tab as last written to the settings, to restore it.
+    /// The active tab as last written to the window's row, to restore it.
     persisted_active_tab: Option<i64>,
+    /// The `windows` row this panel's tabs are stored under.
+    window_id: i64,
 }
 
 /// A closed tab, kept so Reopen Closed Tab can bring it back.
@@ -497,6 +500,7 @@ impl EditorPanel {
             },
             last_run_at: connection_tab.last_run_at,
             file_path: connection_tab.file.as_ref().map(|file| file.path_string()),
+            window_id: Some(self.window_id),
         };
         let inserting = tab_data.id.is_none();
         if inserting {
@@ -557,13 +561,10 @@ impl EditorPanel {
         let Some(active) = active else {
             return;
         };
-        AppSettings::global_mut(cx).settings.session.active_tab = Some(active);
+        let window_id = self.window_id;
         let app_database = AppDatabase::global(cx).clone();
         cx.spawn(async move |_, _| {
-            if let Err(error) = app_database
-                .save_setting("session.active_tab", &active.to_string(), false)
-                .await
-            {
+            if let Err(error) = app_database.set_window_active_tab(window_id, active).await {
                 error!("Failed to remember the active tab: {error}");
             }
         })
@@ -884,11 +885,13 @@ impl EditorPanel {
         }
     }
 
-    /// Load saved query tabs from the app database
-    /// This should be called from BlancoApp initialization
+    /// A panel for the window stored as `window_id`, showing its saved tabs
+    /// with `active_tab` in front.
     pub fn new_with_saved_tabs(
         window: &mut Window,
         cx: &mut Context<Self>,
+        window_id: i64,
+        active_tab: Option<i64>,
         saved_tabs: Vec<QueryTabData>,
     ) -> Self {
         info!("Loading {} saved tabs", saved_tabs.len());
@@ -919,7 +922,8 @@ impl EditorPanel {
             autosave_tasks: HashMap::new(),
             autosave_inserting: HashSet::new(),
             closed_tabs: Vec::new(),
-            persisted_active_tab: AppSettings::global(cx).settings.session.active_tab,
+            persisted_active_tab: active_tab,
+            window_id,
         };
 
         panel.restore_saved_tabs_with_connections_sync(saved_tabs, window, cx);
