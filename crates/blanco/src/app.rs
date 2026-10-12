@@ -60,6 +60,7 @@ actions!(
         OpenNewConnectionModal,
         ImportConnections,
         ExportConnections,
+        OpenSqliteFile,
         NewSnippet,
         CommitChanges,
         RollbackChanges,
@@ -1780,6 +1781,32 @@ impl BlancoApp {
             .update(cx, |sidebar, cx| sidebar.import_connections(window, cx));
     }
 
+    fn on_open_sqlite_file(
+        &mut self,
+        _: &OpenSqliteFile,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let paths = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: true,
+            prompt: Some("Open SQLite database".into()),
+        });
+        cx.spawn_in(window, async move |app, cx| {
+            let Ok(Ok(Some(paths))) = paths.await else {
+                return;
+            };
+            app.update_in(cx, |app, window, cx| {
+                for path in &paths {
+                    app.open_database_file(path, window, cx);
+                }
+            })
+            .log_err();
+        })
+        .detach();
+    }
+
     fn on_export_connections(
         &mut self,
         _: &ExportConnections,
@@ -2732,6 +2759,7 @@ impl Render for BlancoApp {
             .on_action(cx.listener(Self::on_toggle_command_palette))
             .on_action(cx.listener(Self::on_import_connections))
             .on_action(cx.listener(Self::on_export_connections))
+            .on_action(cx.listener(Self::on_open_sqlite_file))
             .on_action(cx.listener(Self::on_new_query_tab))
             .on_action(cx.listener(Self::on_activate_next_tab))
             .on_action(cx.listener(Self::on_activate_previous_tab))
@@ -2926,6 +2954,11 @@ fn build_menu() -> Vec<Menu> {
     // the app's name, and that is where Settings and Quit belong there.
     let mut file_items = vec![
         MenuItem::action("New Connection", OpenNewConnectionModal),
+        MenuItem::submenu(Menu {
+            name: "Open".into(),
+            items: vec![MenuItem::action("SQLite Database…", OpenSqliteFile)],
+            disabled: false,
+        }),
         MenuItem::action("Import Connections…", ImportConnections),
         MenuItem::action("Export Connections…", ExportConnections),
         MenuItem::action("Toggle Terminal", OpenTerminal),

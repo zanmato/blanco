@@ -79,8 +79,9 @@ All notable changes to this project will be documented in this file.
   the ends
 - Toggle Results Pane hides the results under the editor and keeps the
   toolbar with Run
-- Open a SQLite database directly: pass its path when starting Blanco, drop
-  the file on the window, or open it from the file manager. Files are
+- Open a SQLite database directly: choose it under Open in the File menu or
+  from the command palette, pass its path when starting Blanco, drop the
+  file on the window, or open it from the file manager. Files are
   recognised by their header, so any extension works. A file without a saved
   connection opens as an unsaved connection in the sidebar, which Save
   Connection in its context menu turns into a saved one, tabs included. The
