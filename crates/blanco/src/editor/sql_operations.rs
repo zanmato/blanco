@@ -186,8 +186,7 @@ impl EditorPanel {
                             use gpui_component::highlighter::Diagnostic;
 
                             // Calculate the statement start position
-                            let start_char = state.text().byte_to_char_idx(byte_range.start);
-                            let start_pos = state.text().offset_to_position(start_char);
+                            let start_pos = state.text().offset_to_position(byte_range.start);
 
                             // Adjust diagnostics by adding the statement start position
                             let adjusted_diagnostics: Vec<Diagnostic> = diagnostics
@@ -294,16 +293,12 @@ impl EditorPanel {
                         editor_panel.tabs.get_mut(editor_panel.active_tab_ix)
                     {
                         query_tab.editor.update(cx, |state, cx| {
-                            // Replace the statement range with formatted text
-                            // Create an LSP TextEdit for the replacement
-                            let start = state.text().byte_to_char_idx(byte_range.start);
-                            let end = state.text().byte_to_char_idx(byte_range.end);
-                            let start_pos = state.text().offset_to_position(start);
-                            let end_pos = state.text().offset_to_position(end);
+                            // Replace the statement with its formatted text.
+                            // `offset_to_position` takes byte offsets.
                             let text_edit = lsp_types::TextEdit {
                                 range: lsp_types::Range {
-                                    start: start_pos,
-                                    end: end_pos,
+                                    start: state.text().offset_to_position(byte_range.start),
+                                    end: state.text().offset_to_position(byte_range.end),
                                 },
                                 new_text: formatted,
                             };
@@ -319,5 +314,50 @@ impl EditorPanel {
             Ok(())
         })
         .detach();
+    }
+}
+
+#[cfg(test)]
+mod format_tests {
+    use gpui::{TestAppContext, VisualTestContext};
+
+    use crate::test_harness::{TestHarness, set_editor_text};
+
+    /// Format replaces exactly the statement at the cursor when multibyte
+    /// characters come before it, where byte and character offsets differ.
+    #[gpui::test]
+    async fn format_after_multibyte_text_replaces_the_right_range(cx: &mut TestAppContext) {
+        let harness = TestHarness::new(cx);
+        let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+        let sql = "select 'åäö';\nselect   a from t;";
+        set_editor_text(&harness, sql, &mut cx);
+        let editor = harness.editor_panel.read_with(&cx, |panel, _| {
+            panel
+                .active_query_tab()
+                .expect("query tab")
+                .base
+                .editor
+                .clone()
+        });
+        let second = sql.find("select   a").expect("second statement");
+        editor.update_in(&mut cx, |editor, window, cx| {
+            editor.set_selected_range(second + 3..second + 3, window, cx);
+        });
+        harness
+            .editor_panel
+            .update_in(&mut cx, |panel, window, cx| {
+                panel.format_current_query(window, cx);
+            });
+        cx.run_until_parked();
+
+        let text = editor.read_with(&cx, |editor, _| editor.text().to_string());
+        assert!(
+            text.starts_with("select 'åäö';\n"),
+            "the first statement is untouched: {text:?}"
+        );
+        assert!(
+            !text.contains("select   a") && text.trim_end().ends_with("from t;"),
+            "the second statement is formatted in place: {text:?}"
+        );
     }
 }

@@ -262,10 +262,8 @@ impl EditorPanel {
                             let diagnostics: Vec<Diagnostic> = errors
                                 .iter()
                                 .map(|error| {
-                                    let start =
-                                        text.offset_to_position(text.byte_to_char_idx(error.start));
-                                    let end =
-                                        text.offset_to_position(text.byte_to_char_idx(error.end));
+                                    let start = text.offset_to_position(error.start);
+                                    let end = text.offset_to_position(error.end);
                                     Diagnostic::new(start..end, error.message.clone())
                                         .with_severity(lsp_types::DiagnosticSeverity::ERROR)
                                 })
