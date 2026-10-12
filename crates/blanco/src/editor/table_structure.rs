@@ -1041,6 +1041,11 @@ impl ColumnsTableDelegate {
                 width: px(150.),
                 ..Default::default()
             },
+            Column {
+                name: "Comment".into(),
+                width: px(200.),
+                ..Default::default()
+            },
         ];
 
         Self {
@@ -1136,6 +1141,7 @@ impl TableDelegate for ColumnsTableDelegate {
                 .as_ref()
                 .map(|fk| format!("{}({})", fk.foreign_table_name, fk.foreign_column_name))
                 .unwrap_or_default(),
+            6 => col.comment.clone().unwrap_or_default(),
             _ => String::new(),
         };
 

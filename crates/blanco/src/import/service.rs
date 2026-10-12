@@ -309,6 +309,7 @@ mod tests {
                 default_value: None,
                 character_maximum_length: None,
                 foreign_key: None,
+                comment: None,
             })
             .collect()
     }

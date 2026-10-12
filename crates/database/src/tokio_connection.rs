@@ -326,6 +326,16 @@ impl Connection for TokioConnection {
             .await
     }
 
+    async fn get_object_comments(
+        &self,
+        schema: Option<&str>,
+    ) -> Result<blanco_core::ObjectComments> {
+        let inner = Arc::clone(&self.inner);
+        let schema = schema.map(str::to_string);
+        self.run(async move { inner.get_object_comments(schema.as_deref()).await })
+            .await
+    }
+
     async fn object_ddl(
         &self,
         kind: RoutineKind,

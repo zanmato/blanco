@@ -213,10 +213,29 @@ impl Connection for ClickhouseConnection {
             .collect())
     }
 
+    async fn get_object_comments(
+        &self,
+        schema: Option<&str>,
+    ) -> Result<blanco_core::ObjectComments> {
+        let db = schema.unwrap_or(&self.database);
+        let sql = format!(
+            "SELECT name, comment FROM system.tables WHERE database = '{}' AND comment != ''",
+            db.replace('\'', "''")
+        );
+        let tsv = self.raw_query_tsv(&sql, None).await?;
+        let mut comments = blanco_core::ObjectComments::default();
+        for mut row in tsv.rows {
+            if let (Some(comment), Some(name)) = (row.pop().flatten(), row.pop().flatten()) {
+                comments.insert_row("r", name, comment);
+            }
+        }
+        Ok(comments)
+    }
+
     async fn get_queryable_entities(&self, schema: Option<&str>) -> Result<Vec<QueryableEntity>> {
         let db = schema.unwrap_or(&self.database);
         let sql = format!(
-            "SELECT name, engine FROM system.tables WHERE database = '{}' ORDER BY name",
+            "SELECT name, engine, comment FROM system.tables WHERE database = '{}' ORDER BY name",
             db.replace('\'', "''")
         );
         let tsv = self.raw_query_tsv(&sql, None).await?;
@@ -224,6 +243,7 @@ impl Connection for ClickhouseConnection {
             .rows
             .into_iter()
             .filter_map(|mut row| {
+                let comment = row.pop().flatten().filter(|v| !v.is_empty());
                 let engine = row.pop().flatten()?;
                 let name = row.pop().flatten()?;
                 let entity_type = match engine.as_str() {
@@ -231,7 +251,11 @@ impl Connection for ClickhouseConnection {
                     "MaterializedView" => EntityType::MaterializedView,
                     _ => EntityType::Table,
                 };
-                Some(QueryableEntity { name, entity_type })
+                Some(QueryableEntity {
+                    name,
+                    entity_type,
+                    comment,
+                })
             })
             .collect())
     }
@@ -247,7 +271,7 @@ impl Connection for ClickhouseConnection {
     ) -> Result<Vec<ColumnInfo>> {
         let db = schema.unwrap_or(&self.database);
         let sql = format!(
-            "SELECT name, type, default_expression, is_in_primary_key, is_in_partition_key FROM system.columns WHERE database = '{}' AND table = '{}' ORDER BY position",
+            "SELECT name, type, default_expression, is_in_primary_key, is_in_partition_key, comment FROM system.columns WHERE database = '{}' AND table = '{}' ORDER BY position",
             db.replace('\'', "''"),
             table_name.replace('\'', "''")
         );
@@ -256,6 +280,7 @@ impl Connection for ClickhouseConnection {
             .rows
             .into_iter()
             .map(|mut row| {
+                let comment = row.pop().flatten().filter(|v| !v.is_empty());
                 // Partition-key membership is selected for parity with the
                 // schema query but not surfaced on ColumnInfo.
                 row.pop();
@@ -272,6 +297,7 @@ impl Connection for ClickhouseConnection {
                     default_value: default_expr,
                     character_maximum_length: None,
                     foreign_key: None,
+                    comment,
                 }
             })
             .collect())

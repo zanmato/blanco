@@ -486,4 +486,77 @@ mod tests {
 
         Ok(())
     }
+
+    #[tokio::test]
+    async fn test_table_and_column_comments() -> Result<(), Box<dyn std::error::Error>> {
+        use crate::PostgresConnection;
+        use blanco_core::Connection as _;
+
+        let test_name = "test_table_and_column_comments";
+        let pool = match PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&default_connection_string())
+            .await
+        {
+            Ok(pool) => pool,
+            Err(e) => return handle_unreachable(test_name, &e),
+        };
+        for statement in [
+            "DROP TABLE IF EXISTS \"Commented Things\"",
+            "CREATE TABLE \"Commented Things\" (id INT, \"Label\" TEXT, bare TEXT)",
+            "ALTER TABLE \"Commented Things\" DROP COLUMN id",
+            "COMMENT ON TABLE \"Commented Things\" IS 'things with notes'",
+            "COMMENT ON COLUMN \"Commented Things\".\"Label\" IS 'shown to users'",
+            "CREATE OR REPLACE PROCEDURE commented_proc() LANGUAGE sql AS 'SELECT 1'",
+            "COMMENT ON PROCEDURE commented_proc() IS 'does nothing'",
+        ] {
+            sqlx::query(statement).execute(&pool).await?;
+        }
+
+        let mut conn = PostgresConnection::from_connection_string(&default_connection_string())?;
+        conn.connect(&default_connection_string()).await?;
+
+        let entity = conn
+            .get_queryable_entities(Some("public"))
+            .await?
+            .into_iter()
+            .find(|entity| entity.name == "Commented Things")
+            .expect("table is listed");
+        assert_eq!(entity.comment.as_deref(), Some("things with notes"));
+
+        // A dropped column leaves a gap in attnum, which must not shift the
+        // comments onto the wrong columns.
+        let columns = conn
+            .get_columns_for_table("Commented Things", Some("public"))
+            .await?;
+        let comments: Vec<_> = columns
+            .iter()
+            .map(|column| (column.name.as_str(), column.comment.as_deref()))
+            .collect();
+        assert_eq!(
+            comments,
+            [("Label", Some("shown to users")), ("bare", None)]
+        );
+
+        let objects = conn.get_object_comments(Some("public")).await?;
+        assert_eq!(
+            objects
+                .relations
+                .get("Commented Things")
+                .map(String::as_str),
+            Some("things with notes")
+        );
+        assert_eq!(
+            objects.routines.get("commented_proc").map(String::as_str),
+            Some("does nothing")
+        );
+        sqlx::query("DROP PROCEDURE commented_proc()")
+            .execute(&pool)
+            .await?;
+
+        sqlx::query("DROP TABLE \"Commented Things\"")
+            .execute(&pool)
+            .await?;
+        Ok(())
+    }
 }

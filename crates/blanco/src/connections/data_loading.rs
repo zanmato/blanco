@@ -46,6 +46,24 @@ pub struct DatabaseTable {
     /// Size normalized against siblings within the same schema, on a `log2`
     /// scale in `[0.0, 1.0]`. `None` when no siblings reported a size.
     pub relative_size: Option<f32>,
+    /// The comment stored on the object, shown in its tooltip.
+    pub comment: Option<String>,
+}
+
+/// The stored comment for an item of `kind` named `name`.
+fn item_comment(
+    comments: &blanco_core::ObjectComments,
+    kind: DatabaseItemType,
+    name: &str,
+) -> Option<String> {
+    let map = match kind {
+        DatabaseItemType::Table | DatabaseItemType::View | DatabaseItemType::MaterializedView => {
+            &comments.relations
+        }
+        DatabaseItemType::Procedure | DatabaseItemType::Function => &comments.routines,
+        DatabaseItemType::Trigger => return None,
+    };
+    map.get(name).cloned()
 }
 
 /// Type of database item (table, view, materialized view, or stored
@@ -179,6 +197,10 @@ impl ConnectionsPanel {
                             .get_object_sizes(Some(schema_name))
                             .await
                             .unwrap_or_default();
+                        let comments = connection
+                            .get_object_comments(Some(schema_name))
+                            .await
+                            .unwrap_or_default();
                         let push = |items: &mut Vec<DatabaseTable>,
                                     v: Vec<String>,
                                     kind: DatabaseItemType,
@@ -193,6 +215,7 @@ impl ConnectionsPanel {
                                     None
                                 };
                                 items.push(DatabaseTable {
+                                    comment: item_comment(&comments, kind, &n),
                                     name: n,
                                     _schema: Some(schema_name.clone()),
                                     item_type: kind,
@@ -456,6 +479,10 @@ impl ConnectionsPanel {
                         .get_object_sizes(Some(&schema_name))
                         .await
                         .unwrap_or_default();
+                    let comments = connection
+                        .get_object_comments(Some(&schema_name))
+                        .await
+                        .unwrap_or_default();
 
                     let mut all_items: Vec<DatabaseTable> = Vec::new();
                     let push_named = |items: &mut Vec<DatabaseTable>,
@@ -472,6 +499,7 @@ impl ConnectionsPanel {
                                 None
                             };
                             items.push(DatabaseTable {
+                                comment: item_comment(&comments, kind, &n),
                                 name: n,
                                 _schema: Some(schema_name.clone()),
                                 item_type: kind,

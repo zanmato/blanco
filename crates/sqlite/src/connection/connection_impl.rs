@@ -254,7 +254,12 @@ impl Connection for SqliteConnection {
                         "VIEW" => EntityType::View,
                         _ => EntityType::Table,
                     };
-                    Some(QueryableEntity { name, entity_type })
+                    // SQLite has no comments.
+                    Some(QueryableEntity {
+                        name,
+                        entity_type,
+                        comment: None,
+                    })
                 } else {
                     None
                 }
@@ -319,6 +324,7 @@ impl Connection for SqliteConnection {
                     default_value: default_value.filter(|v| !v.is_empty()),
                     character_maximum_length: None, // SQLite doesn't provide this info in PRAGMA
                     foreign_key: foreign_keys.get(&column_name).cloned(),
+                    comment: None,
                 };
                 columns.push(column_info);
             }

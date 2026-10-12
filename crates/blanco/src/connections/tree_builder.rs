@@ -40,6 +40,7 @@ impl ConnectionsPanel {
             loading: false,
             size_bytes: None,
             relative_size: None,
+            comment: None,
         };
 
         let label = if connection.is_temporary() {
@@ -91,6 +92,7 @@ impl ConnectionsPanel {
                         loading: false,
                         size_bytes: None,
                         relative_size: None,
+                        comment: None,
                     };
 
                     let schema_items: Vec<TreeItem<TreeItemMetadata>> = database
@@ -118,6 +120,7 @@ impl ConnectionsPanel {
                                 loading: false,
                                 size_bytes: None,
                                 relative_size: None,
+                                comment: None,
                             };
 
                             let category_items: Vec<TreeItem<TreeItemMetadata>> = if schema
@@ -274,6 +277,7 @@ impl ConnectionsPanel {
                     loading: false,
                     size_bytes: None,
                     relative_size: None,
+                    comment: None,
                 };
 
                 // Backends that namespace object names with a separator (e.g.
@@ -356,6 +360,7 @@ fn build_object_item(
         loading: false,
         size_bytes: table.size_bytes,
         relative_size: table.relative_size,
+        comment: table.comment.clone(),
     };
 
     (

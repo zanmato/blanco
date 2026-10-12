@@ -37,6 +37,11 @@ All notable changes to this project will be documented in this file.
   from the command palette, selects that tab's table, view or routine,
   loading and opening the groups above it and scrolling it into view. Follow
   Active Tab in the General settings turns it off
+- Table, column, function and procedure comments stored in the database are
+  shown: in the sidebar tooltip, in the result header tooltip, beside table
+  and column suggestions in the editor, and in a Comment column on the
+  structure tab. PostgreSQL, MySQL, SQL Server and ClickHouse; SQLite has no
+  comments
 - A search field in the title bar opens the command palette and shows its
   shortcut
 - Blanco checks for new releases hourly and shows an Update button in the
@@ -141,6 +146,9 @@ All notable changes to this project will be documented in this file.
   `UPDATE users SET` or `DELETE FROM users WHERE`
 - Completion no longer opens while a number is typed, and offers only columns
   after `alias.`
+- PostgreSQL tables whose names need quoting (mixed case, spaces) listed no
+  columns, and a table name shared by two schemas could pick up the other
+  schema's keys
 - Clicking a cell in the results table no longer starts a text selection in
   the SQL view that follows the pointer with no button held
 

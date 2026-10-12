@@ -648,6 +648,7 @@ mod tests {
                     default_value: None,
                     character_maximum_length: None,
                     foreign_key: None,
+                    comment: None,
                 },
                 ColumnInfo {
                     name: "name".to_string(),
@@ -657,6 +658,7 @@ mod tests {
                     default_value: None,
                     character_maximum_length: None,
                     foreign_key: None,
+                    comment: None,
                 },
             ],
             columns: vec![
@@ -714,6 +716,7 @@ mod tests {
             default_value: default_value.map(str::to_string),
             character_maximum_length: None,
             foreign_key: None,
+            comment: None,
         }
     }
 
