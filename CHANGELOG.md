@@ -72,6 +72,10 @@ All notable changes to this project will be documented in this file.
   come from `~/.ssh/config`, following Include lines, and one or more jump
   hosts can be set in the connection dialog. known_hosts is checked for every
   hop. On Windows the SSH agent is not used
+- A PostgreSQL connection without a password takes one from `~/.pgpass`, or
+  the file `PGPASSFILE` names, using libpq's matching rules. The file is read
+  each time a connection opens, and an SSH tunnelled connection is matched on
+  its real host and port
 - A search field in the title bar opens the command palette and shows its
   shortcut
 - Blanco checks for new releases hourly and shows an Update button in the
