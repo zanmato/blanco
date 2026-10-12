@@ -614,4 +614,138 @@ mod tests {
         assert_eq!(type_of("note"), Some("text"));
         Ok(())
     }
+
+    #[tokio::test]
+    async fn test_table_parents_group_partitions_and_inheritance_children()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use blanco_core::TableParent;
+
+        let test_name = "test_table_parents_group_partitions_and_inheritance_children";
+        let connection_string = default_connection_string();
+        let pool = match PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&connection_string)
+            .await
+        {
+            Ok(pool) => pool,
+            Err(e) => return handle_unreachable(test_name, &e),
+        };
+
+        // Each statement runs on its own so a failure names the statement.
+        // The schemas are private to this test because other tests share the
+        // database.
+        let setup = [
+            "DROP SCHEMA IF EXISTS blanco_partitions CASCADE",
+            "DROP SCHEMA IF EXISTS blanco_partitions_archive CASCADE",
+            "CREATE SCHEMA blanco_partitions",
+            "CREATE SCHEMA blanco_partitions_archive",
+            "CREATE TABLE blanco_partitions.measurements (
+                logged_at date NOT NULL,
+                region text NOT NULL,
+                reading numeric
+            ) PARTITION BY RANGE (logged_at)",
+            "CREATE TABLE blanco_partitions.measurements_2025
+                PARTITION OF blanco_partitions.measurements
+                FOR VALUES FROM ('2025-01-01') TO ('2026-01-01')",
+            "CREATE TABLE blanco_partitions.measurements_2026
+                PARTITION OF blanco_partitions.measurements
+                FOR VALUES FROM ('2026-01-01') TO ('2027-01-01')
+                PARTITION BY LIST (region)",
+            "CREATE TABLE blanco_partitions.measurements_2026_eu
+                PARTITION OF blanco_partitions.measurements_2026
+                FOR VALUES IN ('eu')",
+            "CREATE TABLE blanco_partitions.measurements_2026_us
+                PARTITION OF blanco_partitions.measurements_2026
+                FOR VALUES IN ('us')",
+            "CREATE TABLE blanco_partitions_archive.measurements_2024
+                PARTITION OF blanco_partitions.measurements
+                FOR VALUES FROM ('2024-01-01') TO ('2025-01-01')",
+            "CREATE INDEX measurements_logged_at ON blanco_partitions.measurements (logged_at)",
+            "INSERT INTO blanco_partitions.measurements VALUES
+                ('2024-06-01', 'eu', 1), ('2025-06-01', 'eu', 2),
+                ('2026-06-01', 'eu', 3), ('2026-06-01', 'us', 4)",
+            "CREATE TABLE blanco_partitions.cities (name text, population integer)",
+            "CREATE TABLE blanco_partitions.capitals (country text)
+                INHERITS (blanco_partitions.cities)",
+            "CREATE TABLE blanco_partitions.standalone (id integer)",
+        ];
+        for statement in setup {
+            sqlx::query(statement).execute(&pool).await?;
+        }
+
+        let mut connection = crate::PostgresConnection::from_connection_string(&connection_string)?;
+        connection.connect(&connection_string).await?;
+
+        let mut tables = connection.get_tables(Some("blanco_partitions")).await?;
+        tables.sort();
+        assert_eq!(
+            tables,
+            [
+                "capitals",
+                "cities",
+                "measurements",
+                "measurements_2025",
+                "measurements_2026",
+                "measurements_2026_eu",
+                "measurements_2026_us",
+                "standalone",
+            ],
+            "partitioned tables and their partitions stay in the plain table listing"
+        );
+
+        let parents = connection
+            .get_table_parents(Some("blanco_partitions"))
+            .await?;
+        let partition_of = |name: &str| {
+            Some(TableParent {
+                name: name.to_string(),
+                is_partition: true,
+            })
+        };
+        assert_eq!(
+            parents.get("measurements_2025").cloned(),
+            partition_of("measurements")
+        );
+        assert_eq!(
+            parents.get("measurements_2026").cloned(),
+            partition_of("measurements")
+        );
+        assert_eq!(
+            parents.get("measurements_2026_eu").cloned(),
+            partition_of("measurements_2026")
+        );
+        assert_eq!(
+            parents.get("measurements_2026_us").cloned(),
+            partition_of("measurements_2026")
+        );
+        assert_eq!(
+            parents.get("capitals").cloned(),
+            Some(TableParent {
+                name: "cities".to_string(),
+                is_partition: false,
+            })
+        );
+        assert_eq!(
+            parents.len(),
+            5,
+            "only tables have parents, not index partitions or top-level tables: {parents:?}"
+        );
+
+        let archive_parents = connection
+            .get_table_parents(Some("blanco_partitions_archive"))
+            .await?;
+        assert!(
+            archive_parents.is_empty(),
+            "a partition whose parent lives in another schema stays ungrouped: {archive_parents:?}"
+        );
+
+        for statement in [
+            "DROP SCHEMA blanco_partitions_archive CASCADE",
+            "DROP SCHEMA blanco_partitions CASCADE",
+        ] {
+            sqlx::query(statement).execute(&pool).await?;
+        }
+
+        Ok(())
+    }
 }

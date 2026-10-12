@@ -97,6 +97,9 @@ pub struct ConnectionsPanel {
     expanded_categories: std::collections::HashSet<String>,
     /// An object the tree is opening its way to, see [`Self::reveal`].
     pending_reveal: Option<reveal::PendingReveal>,
+    /// Tables with partitions or inheritance children that the user expanded,
+    /// keyed by tree item id. They default to collapsed.
+    expanded_tables: std::collections::HashSet<String>,
     // Live per-database connection status, keyed by connection id. This is the
     // single source of truth for the "connected" icon color: it is read while
     // *building* tree items so that a rebuild (or the tree widget
@@ -156,6 +159,18 @@ pub struct TreeItemMetadata {
     pub relative_size: Option<f32>,
     /// The comment stored on the object, shown in its tooltip.
     pub comment: Option<String>,
+    /// The partitions or inheritance children nested under this table, `None`
+    /// for every node without them.
+    pub child_tables: Option<ChildTables>,
+}
+
+/// What a table node holds when other tables are nested under it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ChildTables {
+    /// Direct children only: a sub-partitioned partition counts its own.
+    pub count: usize,
+    /// Partitions rather than inheritance children.
+    pub are_partitions: bool,
 }
 
 /// Trait to convert metadata into CreateNewQueryTab actions
@@ -224,6 +239,7 @@ impl ConnectionsPanel {
         let loaded_connections = std::collections::HashSet::new();
         let expanded_connections = std::collections::HashSet::new();
         let expanded_categories = std::collections::HashSet::new();
+        let expanded_tables = std::collections::HashSet::new();
         let connected_databases = std::collections::HashMap::new();
 
         // Create delegate with parent reference
@@ -245,6 +261,7 @@ impl ConnectionsPanel {
             expanded_connections,
             expanded_categories,
             pending_reveal: None,
+            expanded_tables,
             connected_databases,
             initial_load_completed: false,
         };
@@ -565,7 +582,8 @@ impl ConnectionsPanel {
                         }
                     }
                 }
-                TreeItemKind::Table | TreeItemKind::View | TreeItemKind::MaterializedView => {}
+                TreeItemKind::Table => self.record_table_expansion(item_id, cx),
+                TreeItemKind::View | TreeItemKind::MaterializedView => {}
                 TreeItemKind::Category => {
                     // The tree widget toggles the clicked folder's expansion
                     // itself (on mouse-down, before this click handler). We only
@@ -708,6 +726,17 @@ impl ConnectionsPanel {
             self.expanded_categories.remove(category_key);
         } else {
             self.expanded_categories.insert(category_key.to_string());
+        }
+    }
+
+    /// Record a table's expansion after the tree widget toggled it. Only
+    /// tables with partitions or inheritance children are folders; for any
+    /// other table the widget leaves it collapsed and nothing is recorded.
+    fn record_table_expansion(&mut self, item_id: &str, cx: &mut Context<Self>) {
+        if self.widget_expansion(item_id, cx) {
+            self.expanded_tables.insert(item_id.to_string());
+        } else {
+            self.expanded_tables.remove(item_id);
         }
     }
 
@@ -1535,6 +1564,7 @@ mod tests {
             size_bytes: None,
             relative_size: None,
             comment: None,
+            child_tables: None,
         }
     }
 

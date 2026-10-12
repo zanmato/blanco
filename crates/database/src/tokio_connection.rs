@@ -19,7 +19,7 @@ use blanco_core::{
         RoutineKind,
     },
     write_guard, BatchFailure, BatchOutcome, ColumnInfo, Connection, DatabaseType,
-    FunctionSignatureInfo, KeyValueResult, QueryResult, StatementAccess,
+    FunctionSignatureInfo, KeyValueResult, QueryResult, StatementAccess, TableParent,
 };
 use futures::Stream;
 use std::future::Future;
@@ -336,6 +336,16 @@ impl Connection for TokioConnection {
         let inner = Arc::clone(&self.inner);
         let schema = schema.map(str::to_string);
         self.run(async move { inner.get_object_comments(schema.as_deref()).await })
+            .await
+    }
+
+    async fn get_table_parents(
+        &self,
+        schema: Option<&str>,
+    ) -> Result<std::collections::HashMap<String, TableParent>> {
+        let inner = Arc::clone(&self.inner);
+        let schema = schema.map(str::to_string);
+        self.run(async move { inner.get_table_parents(schema.as_deref()).await })
             .await
     }
 

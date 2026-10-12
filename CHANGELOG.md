@@ -144,6 +144,9 @@ All notable changes to this project will be documented in this file.
   dumps, gzip included, and confirm again on PROD. Progress, live output,
   Stop and a notification when done. SSH tunnels work, and the password goes
   to the tool through its environment, never its command line
+- PostgreSQL partitions and inheritance children are grouped under their
+  parent table in the sidebar, collapsed, with the number of partitions next
+  to the parent. The sidebar filter still finds a partition by name
 
 ### Fixes
 

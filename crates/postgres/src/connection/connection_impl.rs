@@ -2,7 +2,7 @@ use anyhow::{Context as _, Result};
 use async_trait::async_trait;
 use blanco_core::{
     ColumnInfo, ColumnType, Connection, ForeignKeyConstraint, ForeignKeyInfo,
-    FunctionSignatureInfo, IndexInfo, QueryResult, RoutineKind,
+    FunctionSignatureInfo, IndexInfo, QueryResult, RoutineKind, TableParent,
 };
 use futures::{Stream, StreamExt};
 use sqlx::{Column, Executor, Row, TypeInfo};
@@ -469,6 +469,53 @@ impl Connection for PostgresConnection {
             }
         }
         Ok(comments)
+    }
+
+    async fn get_table_parents(
+        &self,
+        schema: Option<&str>,
+    ) -> Result<std::collections::HashMap<String, TableParent>> {
+        let schema_filter = schema.unwrap_or("public");
+        // A table with several `INHERITS` parents is grouped under the first
+        // one (`inhseqno = 1`). Index partitions also live in pg_inherits, and
+        // foreign table partitions are not listed as tables, hence the relkind
+        // filter.
+        let query = "
+            SELECT child.relname, parent.relname, child.relispartition
+            FROM pg_inherits i
+            JOIN pg_class child ON child.oid = i.inhrelid
+            JOIN pg_class parent ON parent.oid = i.inhparent
+            JOIN pg_namespace n ON n.oid = child.relnamespace
+            WHERE n.nspname = $1
+              AND parent.relnamespace = child.relnamespace
+              AND i.inhseqno = 1
+              AND child.relkind IN ('r', 'p')
+              AND parent.relkind IN ('r', 'p')
+        ";
+        let result = self
+            .execute_query(
+                query,
+                self.initial_database.as_deref(),
+                Some(&[schema_filter.to_string()]),
+            )
+            .await?;
+        Ok(result
+            .rows
+            .into_iter()
+            .filter_map(|row| {
+                let mut cells = row.into_iter();
+                let child = cells.next().flatten()?;
+                let parent = cells.next().flatten()?;
+                let is_partition = cells.next().flatten().as_deref() == Some("true");
+                Some((
+                    child,
+                    TableParent {
+                        name: parent,
+                        is_partition,
+                    },
+                ))
+            })
+            .collect())
     }
 
     async fn object_ddl(

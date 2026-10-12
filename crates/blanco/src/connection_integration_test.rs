@@ -1326,3 +1326,84 @@ fn test_describe_query_columns_on_empty_result() {
             .unwrap_or_else(|error| panic!("{label}: drop: {error:#}"));
     }
 }
+
+/// The sidebar reads table parents through `DatabaseService`, whose
+/// connections wrap the driver in `TokioConnection`; a method the wrapper does
+/// not forward silently falls back to the trait's empty default.
+#[test]
+fn test_postgres_table_parents_through_database_service() {
+    use database::ConnectionConfig;
+
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let postgres = postgres_case();
+    let config = ConnectionConfig::new(
+        9201,
+        postgres.name.to_string(),
+        postgres.db_type,
+        postgres.host.clone(),
+        postgres.port.parse().expect("port"),
+        postgres.database.clone(),
+        postgres.username.clone(),
+        Some(postgres.password.clone()),
+    );
+    let database = Some(postgres.database.as_str());
+    let service = DatabaseService::new(runtime.handle().clone());
+
+    let connection = runtime.block_on(async {
+        service.add_connection_config(config.clone()).await;
+        let connection = service
+            .get_or_create_connection(config.id, database)
+            .await?;
+        connection.ping().await?;
+        anyhow::Ok(connection)
+    });
+    let connection = match connection {
+        Ok(connection) => connection,
+        Err(error) if strict() => panic!("PostgreSQL: server unreachable: {error:#}"),
+        Err(error) => {
+            eprintln!(
+                "skip PostgreSQL: server unreachable ({error:#}). Set BLANCO_RUN_DB_TESTS=1 to require."
+            );
+            return;
+        }
+    };
+
+    for statement in [
+        "DROP SCHEMA IF EXISTS blanco_sidebar_partitions CASCADE",
+        "CREATE SCHEMA blanco_sidebar_partitions",
+        "CREATE TABLE blanco_sidebar_partitions.events (id integer, kind text)
+            PARTITION BY LIST (kind)",
+        "CREATE TABLE blanco_sidebar_partitions.events_click
+            PARTITION OF blanco_sidebar_partitions.events FOR VALUES IN ('click')",
+        "CREATE TABLE blanco_sidebar_partitions.events_view
+            PARTITION OF blanco_sidebar_partitions.events FOR VALUES IN ('view')",
+    ] {
+        runtime
+            .block_on(connection.execute_write(statement, database, &[]))
+            .unwrap_or_else(|error| panic!("setup `{statement}`: {error:#}"));
+    }
+
+    let parents = runtime
+        .block_on(connection.get_table_parents(Some("blanco_sidebar_partitions")))
+        .unwrap_or_else(|error| panic!("table parents: {error:#}"));
+    let mut grouped: Vec<(&str, &str, bool)> = parents
+        .iter()
+        .map(|(child, parent)| (child.as_str(), parent.name.as_str(), parent.is_partition))
+        .collect();
+    grouped.sort();
+    assert_eq!(
+        grouped,
+        [
+            ("events_click", "events", true),
+            ("events_view", "events", true),
+        ]
+    );
+
+    runtime
+        .block_on(connection.execute_write(
+            "DROP SCHEMA blanco_sidebar_partitions CASCADE",
+            database,
+            &[],
+        ))
+        .unwrap_or_else(|error| panic!("drop: {error:#}"));
+}

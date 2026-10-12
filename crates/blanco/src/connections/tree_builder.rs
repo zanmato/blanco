@@ -5,6 +5,9 @@
 //! among everything else). All state still lives on `ConnectionsPanel`; this
 //! file just hosts an additional inherent impl block.
 
+use std::collections::{HashMap, HashSet};
+
+use blanco_core::TableParent;
 use blanco_ui::IconName;
 use blanco_ui::tree::TreeItem;
 use gpui::Context;
@@ -13,7 +16,7 @@ use gpui_component::ActiveTheme as _;
 use app_database::ConnectionData;
 
 use super::data_loading::{DatabaseItemType, DatabaseTable};
-use super::{ConnectionsPanel, TreeItemIcon, TreeItemKind, TreeItemMetadata};
+use super::{ChildTables, ConnectionsPanel, TreeItemIcon, TreeItemKind, TreeItemMetadata};
 
 impl ConnectionsPanel {
     /// Build a TreeItem for a connection including its children if loaded.
@@ -41,6 +44,7 @@ impl ConnectionsPanel {
             size_bytes: None,
             relative_size: None,
             comment: None,
+            child_tables: None,
         };
 
         let label = if connection.is_temporary() {
@@ -93,6 +97,7 @@ impl ConnectionsPanel {
                         size_bytes: None,
                         relative_size: None,
                         comment: None,
+                        child_tables: None,
                     };
 
                     let schema_items: Vec<TreeItem<TreeItemMetadata>> = database
@@ -121,6 +126,7 @@ impl ConnectionsPanel {
                                 size_bytes: None,
                                 relative_size: None,
                                 comment: None,
+                                child_tables: None,
                             };
 
                             let category_items: Vec<TreeItem<TreeItemMetadata>> = if schema
@@ -146,6 +152,11 @@ impl ConnectionsPanel {
                                         )
                                     })
                                     .collect();
+                                let children = nest_child_tables(
+                                    children,
+                                    &table_parents(&schema.tables),
+                                    &self.expanded_tables,
+                                );
                                 self.group_into_categories(
                                     connection,
                                     connection_id,
@@ -183,7 +194,7 @@ impl ConnectionsPanel {
                 .schemas
                 .iter()
                 .flat_map(|schema| {
-                    schema
+                    let items = schema
                         .tables
                         .iter()
                         .map(|table| {
@@ -200,7 +211,8 @@ impl ConnectionsPanel {
                                 cx,
                             )
                         })
-                        .collect::<Vec<_>>()
+                        .collect();
+                    nest_child_tables(items, &table_parents(&schema.tables), &self.expanded_tables)
                 })
                 .collect();
             let category_items = self.group_into_categories(
@@ -278,6 +290,7 @@ impl ConnectionsPanel {
                     size_bytes: None,
                     relative_size: None,
                     comment: None,
+                    child_tables: None,
                 };
 
                 // Backends that namespace object names with a separator (e.g.
@@ -361,12 +374,118 @@ fn build_object_item(
         size_bytes: table.size_bytes,
         relative_size: table.relative_size,
         comment: table.comment.clone(),
+        child_tables: None,
     };
 
     (
         table.item_type,
         TreeItem::new(item_key, table.name.clone(), metadata),
     )
+}
+
+/// The parent of each table in one schema's listing, keyed by table name.
+fn table_parents(tables: &[DatabaseTable]) -> HashMap<String, TableParent> {
+    tables
+        .iter()
+        .filter(|table| table.item_type == DatabaseItemType::Table)
+        .filter_map(|table| Some((table.name.clone(), table.parent.clone()?)))
+        .collect()
+}
+
+/// Nest partitions and inheritance children under their parent table, so a
+/// partitioned table with hundreds of partitions is one collapsed node.
+/// Nesting repeats for sub-partitioned partitions. `items` is one schema's
+/// objects and `parents` maps a table name to its parent. A table whose
+/// parent is not among the items stays at the top level. A parent starts
+/// collapsed unless its id is in `expanded_tables`.
+fn nest_child_tables(
+    items: Vec<(DatabaseItemType, TreeItem<TreeItemMetadata>)>,
+    parents: &HashMap<String, TableParent>,
+    expanded_tables: &HashSet<String>,
+) -> Vec<(DatabaseItemType, TreeItem<TreeItemMetadata>)> {
+    let table_names: HashSet<String> = items
+        .iter()
+        .filter(|(item_type, _)| *item_type == DatabaseItemType::Table)
+        .filter_map(|(_, item)| item.metadata.table_name.clone())
+        .collect();
+    let nested_parent = |name: &str| -> Option<String> {
+        let parent = parents.get(name)?;
+        if !table_names.contains(&parent.name) {
+            return None;
+        }
+        // A table must not end up below itself, or it would vanish from the
+        // tree along with its ancestors.
+        let mut ancestor = parent.name.as_str();
+        for _ in 0..parents.len() {
+            if ancestor == name {
+                return None;
+            }
+            match parents.get(ancestor) {
+                Some(next) => ancestor = next.name.as_str(),
+                None => break,
+            }
+        }
+        Some(parent.name.clone())
+    };
+
+    let mut top_level = Vec::new();
+    let mut children_by_parent: HashMap<String, Vec<TreeItem<TreeItemMetadata>>> = HashMap::new();
+    for (item_type, item) in items {
+        let parent = match (item_type, item.metadata.table_name.as_deref()) {
+            (DatabaseItemType::Table, Some(name)) => nested_parent(name),
+            _ => None,
+        };
+        match parent {
+            Some(parent) => children_by_parent.entry(parent).or_default().push(item),
+            None => top_level.push((item_type, item)),
+        }
+    }
+
+    top_level
+        .into_iter()
+        .map(|(item_type, item)| {
+            let item = if item_type == DatabaseItemType::Table {
+                attach_child_tables(item, &mut children_by_parent, parents, expanded_tables)
+            } else {
+                item
+            };
+            (item_type, item)
+        })
+        .collect()
+}
+
+fn attach_child_tables(
+    mut item: TreeItem<TreeItemMetadata>,
+    children_by_parent: &mut HashMap<String, Vec<TreeItem<TreeItemMetadata>>>,
+    parents: &HashMap<String, TableParent>,
+    expanded_tables: &HashSet<String>,
+) -> TreeItem<TreeItemMetadata> {
+    let Some(children) = item
+        .metadata
+        .table_name
+        .as_ref()
+        .and_then(|name| children_by_parent.remove(name))
+    else {
+        return item;
+    };
+    let are_partitions = children.iter().any(|child| {
+        child
+            .metadata
+            .table_name
+            .as_ref()
+            .and_then(|name| parents.get(name))
+            .is_some_and(|parent| parent.is_partition)
+    });
+    let children: Vec<TreeItem<TreeItemMetadata>> = children
+        .into_iter()
+        .map(|child| attach_child_tables(child, children_by_parent, parents, expanded_tables))
+        .collect();
+    item.metadata.child_tables = Some(ChildTables {
+        count: children.len(),
+        are_partitions,
+    });
+    let is_expanded = expanded_tables.contains(item.id.as_ref());
+    item.expanded(is_expanded).children(children)
 }
 
 /// Fold a flat list of namespaced leaf items into a nested folder tree by
@@ -504,5 +623,196 @@ fn icon_for_item_type(
             TreeItemKind::Function,
         ),
         DatabaseItemType::Trigger => (IconName::Zap, cx.theme().red.into(), TreeItemKind::Trigger),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn object(
+        item_type: DatabaseItemType,
+        name: &str,
+    ) -> (DatabaseItemType, TreeItem<TreeItemMetadata>) {
+        let metadata = TreeItemMetadata {
+            connection_id: 1,
+            connection_name: "local".to_string(),
+            kind: TreeItemKind::Table,
+            db_type: database::DatabaseType::PostgreSQL,
+            database_name: Some("blanco".to_string()),
+            schema_name: Some("public".to_string()),
+            table_name: Some(name.to_string()),
+            icon: TreeItemIcon {
+                icon: IconName::Sheet,
+                color: gpui::rgba(0),
+            },
+            environment_type: None,
+            loading: false,
+            size_bytes: None,
+            relative_size: None,
+            comment: None,
+            child_tables: None,
+        };
+        (
+            item_type,
+            TreeItem::new(format!("table:{name}"), name.to_string(), metadata),
+        )
+    }
+
+    fn table(name: &str) -> (DatabaseItemType, TreeItem<TreeItemMetadata>) {
+        object(DatabaseItemType::Table, name)
+    }
+
+    fn parents(entries: &[(&str, &str, bool)]) -> HashMap<String, TableParent> {
+        entries
+            .iter()
+            .map(|(child, parent, is_partition)| {
+                (
+                    child.to_string(),
+                    TableParent {
+                        name: parent.to_string(),
+                        is_partition: *is_partition,
+                    },
+                )
+            })
+            .collect()
+    }
+
+    fn measurements_schema() -> (
+        Vec<(DatabaseItemType, TreeItem<TreeItemMetadata>)>,
+        HashMap<String, TableParent>,
+    ) {
+        let items = vec![
+            table("capitals"),
+            table("cities"),
+            table("measurements"),
+            table("measurements_2025"),
+            table("measurements_2026"),
+            table("measurements_2026_eu"),
+            table("measurements_2026_us"),
+            object(DatabaseItemType::Function, "measurements_2026_us"),
+            table("standalone"),
+        ];
+        let parents = parents(&[
+            ("capitals", "cities", false),
+            ("measurements_2025", "measurements", true),
+            ("measurements_2026", "measurements", true),
+            ("measurements_2026_eu", "measurements_2026", true),
+            ("measurements_2026_us", "measurements_2026", true),
+        ]);
+        (items, parents)
+    }
+
+    fn ids(items: &[TreeItem<TreeItemMetadata>]) -> Vec<&str> {
+        items.iter().map(|item| item.id.as_ref()).collect()
+    }
+
+    #[test]
+    fn partitions_nest_collapsed_under_their_parent_with_a_count() {
+        let (items, parents) = measurements_schema();
+        let nested = nest_child_tables(items, &parents, &HashSet::new());
+
+        let top_level: Vec<&str> = nested.iter().map(|(_, item)| item.id.as_ref()).collect();
+        assert_eq!(
+            top_level,
+            [
+                "table:cities",
+                "table:measurements",
+                "table:measurements_2026_us",
+                "table:standalone",
+            ],
+            "children leave the top level; a function sharing a partition's name stays"
+        );
+        assert_eq!(nested[2].0, DatabaseItemType::Function);
+
+        let measurements = &nested[1].1;
+        assert!(!measurements.is_expanded());
+        assert_eq!(
+            measurements.metadata.child_tables,
+            Some(ChildTables {
+                count: 2,
+                are_partitions: true,
+            })
+        );
+        assert_eq!(
+            ids(&measurements.children),
+            ["table:measurements_2025", "table:measurements_2026"]
+        );
+
+        let sub_partitioned = &measurements.children[1];
+        assert!(!sub_partitioned.is_expanded());
+        assert_eq!(
+            sub_partitioned
+                .metadata
+                .child_tables
+                .map(|child_tables| child_tables.count),
+            Some(2)
+        );
+        assert_eq!(
+            ids(&sub_partitioned.children),
+            ["table:measurements_2026_eu", "table:measurements_2026_us"]
+        );
+        assert_eq!(measurements.children[0].metadata.child_tables, None);
+
+        let cities = &nested[0].1;
+        assert_eq!(
+            cities.metadata.child_tables,
+            Some(ChildTables {
+                count: 1,
+                are_partitions: false,
+            })
+        );
+        assert_eq!(ids(&cities.children), ["table:capitals"]);
+    }
+
+    #[test]
+    fn expanded_parent_tables_stay_open() {
+        let (items, parents) = measurements_schema();
+        let expanded = HashSet::from(["table:measurements".to_string()]);
+        let nested = nest_child_tables(items, &parents, &expanded);
+        let measurements = &nested[1].1;
+        assert!(measurements.is_expanded());
+        assert!(!measurements.children[1].is_expanded());
+    }
+
+    #[test]
+    fn a_table_whose_parent_is_not_listed_stays_at_the_top_level() {
+        let items = vec![table("measurements_2024"), table("standalone")];
+        let parents = parents(&[
+            ("measurements_2024", "measurements", true),
+            ("standalone", "standalone", false),
+        ]);
+        let nested = nest_child_tables(items, &parents, &HashSet::new());
+        let top_level: Vec<&str> = nested.iter().map(|(_, item)| item.id.as_ref()).collect();
+        assert_eq!(top_level, ["table:measurements_2024", "table:standalone"]);
+        assert!(nested.iter().all(|(_, item)| item.children.is_empty()));
+    }
+
+    #[test]
+    fn filter_finds_a_partition_and_reveals_it_under_its_parents() {
+        let (items, parents) = measurements_schema();
+        let nested = nest_child_tables(items, &parents, &HashSet::new());
+        let (_, schema_metadata) = table("public");
+        let schema = TreeItem::new("schema:public", "public", schema_metadata.metadata)
+            .children(nested.into_iter().map(|(_, item)| item));
+
+        let filtered = crate::connections::filter_tree_items(&[schema], "2026_eu");
+        let measurements = &filtered[0].children[0];
+        assert_eq!(measurements.id.as_ref(), "table:measurements");
+        assert!(measurements.is_expanded());
+        assert_eq!(
+            measurements
+                .metadata
+                .child_tables
+                .map(|child_tables| child_tables.count),
+            Some(2),
+            "the parent keeps counting every partition while filtered"
+        );
+        let sub_partitioned = &measurements.children[0];
+        assert!(sub_partitioned.is_expanded());
+        assert_eq!(
+            ids(&sub_partitioned.children),
+            ["table:measurements_2026_eu"]
+        );
     }
 }
