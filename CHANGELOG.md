@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.1.3] - 2026-10-13
 
 ### Features
 
@@ -31,9 +31,9 @@ All notable changes to this project will be documented in this file.
 - Follow System Appearance in the Appearance settings switches between a
   light and a dark theme of your choice as the system appearance changes,
   live and at startup
-- Expand * into columns: with the caret on a `*` in a select list, Show
-  Code Actions (Ctrl+. or Cmd+.) replaces it with the columns of the tables
-  it covers. `alias.*` keeps its alias, and with several tables each column
+- Expand _ into columns: with the caret on a `_`in a select list, Show
+Code Actions (Ctrl+. or Cmd+.) replaces it with the columns of the tables
+it covers.`alias.\*` keeps its alias, and with several tables each column
   is prefixed with its table. Names are quoted only where the database needs
   it
 - A filter bar above a table's rows narrows them on the server. Build
