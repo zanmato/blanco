@@ -297,7 +297,9 @@ impl CompletionProvider for ScriptCompletionProvider {
 
     fn is_completion_trigger(&self, _offset: usize, new_text: &str, _cx: &mut App) -> bool {
         // `.` opens the member list; identifier characters narrow it.
-        new_text == "." || new_text.chars().all(|c| c.is_alphanumeric() || c == '_')
+        // A deletion arrives as empty text and never opens the list.
+        new_text == "."
+            || (!new_text.is_empty() && new_text.chars().all(|c| c.is_alphanumeric() || c == '_'))
     }
 }
 

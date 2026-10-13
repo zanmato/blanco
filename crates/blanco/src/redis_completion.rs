@@ -159,10 +159,12 @@ impl CompletionProvider for RedisCompletionProvider {
         // A space advances to the next token (command -> subcommand); otherwise
         // trigger as the user types a command/subcommand name. Module commands
         // contain `.` (e.g. `BF.ADD`), so allow it through too.
+        // A deletion arrives as empty text and never opens the list.
         new_text == " "
-            || new_text
-                .chars()
-                .all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == '.')
+            || (!new_text.is_empty()
+                && new_text
+                    .chars()
+                    .all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == '.'))
     }
 }
 
@@ -179,6 +181,17 @@ mod tests {
             .into_iter()
             .map(|item| item.label)
             .collect()
+    }
+
+    #[gpui::test]
+    fn deleting_text_does_not_trigger_completion(cx: &mut gpui::TestAppContext) {
+        let provider = RedisCompletionProvider::new();
+        cx.update(|cx| {
+            assert!(!provider.is_completion_trigger(0, "", cx));
+            for typed in ["g", " ", "."] {
+                assert!(provider.is_completion_trigger(0, typed, cx), "{typed:?}");
+            }
+        });
     }
 
     #[test]

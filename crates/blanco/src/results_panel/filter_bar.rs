@@ -745,7 +745,8 @@ impl CompletionProvider for ColumnCompletionProvider {
     }
 
     fn is_completion_trigger(&self, _offset: usize, new_text: &str, _cx: &mut App) -> bool {
-        new_text.chars().all(|c| c.is_alphanumeric() || c == '_')
+        // A deletion arrives as empty text and never opens the list.
+        !new_text.is_empty() && new_text.chars().all(|c| c.is_alphanumeric() || c == '_')
     }
 }
 

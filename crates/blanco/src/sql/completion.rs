@@ -1356,8 +1356,11 @@ impl CompletionProvider for SqlCompletionProvider {
     }
 
     fn is_completion_trigger(&self, _offset: usize, new_text: &str, _cx: &mut App) -> bool {
+        // A deletion arrives as empty text. The editor closes the list on
+        // every edit, so answering one would reopen it on each repeat of a
+        // held Delete or Backspace.
         matches!(new_text, " " | "." | "," | "(")
-            || new_text.chars().all(|c| c.is_alphanumeric() || c == '_')
+            || (!new_text.is_empty() && new_text.chars().all(|c| c.is_alphanumeric() || c == '_'))
     }
 }
 
@@ -1510,6 +1513,18 @@ mod tests {
         let _third = request_tables(&provider, cx);
         cx.run_until_parked();
         assert_eq!(service.attempts(), 2);
+    }
+
+    #[gpui::test]
+    fn deleting_text_does_not_trigger_completion(cx: &mut gpui::TestAppContext) {
+        let (provider, _service, _release) = stalled_provider(cx);
+        cx.update(|cx| {
+            assert!(!provider.is_completion_trigger(0, "", cx));
+            for typed in ["s", "_", "1", " ", ".", ",", "("] {
+                assert!(provider.is_completion_trigger(0, typed, cx), "{typed:?}");
+            }
+            assert!(!provider.is_completion_trigger(0, ";", cx));
+        });
     }
 
     #[gpui::test]
