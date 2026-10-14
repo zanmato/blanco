@@ -5,7 +5,8 @@ use std::rc::Rc;
 
 use crate::mcp::McpService;
 use crate::mcp::bridge::{
-    ConfirmReply, McpRequest, Reply as McpReply, WriteAnswer, WriteConfirmation, send_reply,
+    ConfirmReply, McpRequest, Reply as McpReply, TabSelector, WriteAnswer, WriteConfirmation,
+    send_reply,
 };
 use gpui::{
     Action, App, AppContext, Context, Entity, ExternalPaths, FocusHandle, Focusable,
@@ -691,7 +692,18 @@ impl BlancoApp {
                 });
                 send_reply(&reply, result);
             }
-            McpRequest::RunTab { tab, reply } => {
+            McpRequest::PrepareRunTab { tab, reply } => {
+                let panel = editor_panel.read(cx);
+                let result = panel
+                    .resolve_tab(tab)
+                    .and_then(|index| panel.prepare_query_tab_run_for_mcp(index, cx));
+                send_reply(&reply, result);
+            }
+            McpRequest::RunTab { run, reply } => {
+                let tab = TabSelector {
+                    index: None,
+                    id: Some(run.tab_id),
+                };
                 let index = match editor_panel.read(cx).resolve_tab(tab) {
                     Ok(index) => index,
                     Err(error) => {
@@ -703,7 +715,7 @@ impl BlancoApp {
                 // emits `QueryRunEnded` from inside `run_query_tab_for_mcp`.
                 self.mcp_run_replies.push_back((index, reply));
                 let outcome = editor_panel.update(cx, |panel, cx| {
-                    panel.run_query_tab_for_mcp(index, window, cx)
+                    panel.run_query_tab_for_mcp(index, &run, window, cx)
                 });
                 if let Err(error) = outcome {
                     self.resolve_mcp_run(index, Err(error));

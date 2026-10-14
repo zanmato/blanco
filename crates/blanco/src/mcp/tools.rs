@@ -40,6 +40,37 @@ pub(crate) fn write_policy(
     }
 }
 
+/// How a connection handles writes, reported by `list_connections` so an agent
+/// can tell the user what will happen instead of guessing from the tool texts.
+/// It describes `write_policy` for an ordinary write: destructive DDL confirms
+/// even under `Run`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ConnectionWrites {
+    Refused,
+    Confirm,
+    Run,
+}
+
+impl ConnectionWrites {
+    pub(crate) fn new(read_only: bool, confirms_writes: bool, allow_writes: bool) -> Self {
+        if read_only {
+            Self::Refused
+        } else if confirms_writes || !allow_writes {
+            Self::Confirm
+        } else {
+            Self::Run
+        }
+    }
+
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Refused => "refused",
+            Self::Confirm => "confirm",
+            Self::Run => "run",
+        }
+    }
+}
+
 /// Write kinds (`INSERT`, `UPDATE`, ...) the user chose not to be asked about
 /// again, per connection, for one MCP session.
 #[derive(Debug, Default)]
@@ -182,6 +213,26 @@ mod tests {
         assert_eq!(
             write_policy(StatementAccess::Write, true, false, true),
             WritePolicy::Confirm
+        );
+    }
+
+    #[test]
+    fn connection_writes_follow_read_only_environment_and_setting() {
+        assert_eq!(
+            ConnectionWrites::new(true, true, true),
+            ConnectionWrites::Refused
+        );
+        assert_eq!(
+            ConnectionWrites::new(false, true, true),
+            ConnectionWrites::Confirm
+        );
+        assert_eq!(
+            ConnectionWrites::new(false, false, true),
+            ConnectionWrites::Run
+        );
+        assert_eq!(
+            ConnectionWrites::new(false, false, false),
+            ConnectionWrites::Confirm
         );
     }
 

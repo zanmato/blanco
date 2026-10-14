@@ -32,6 +32,18 @@ pub(crate) struct TabSelector {
     pub id: Option<u64>,
 }
 
+/// The statement `run_tab` would execute in a tab, reported before it runs so
+/// the server can put it through the same write policy as `run_sql`.
+#[derive(Debug, Clone)]
+pub(crate) struct TabRun {
+    pub tab_id: u64,
+    pub connection_id: i64,
+    pub database: String,
+    /// The selection or the statement at the cursor, before bind parameters
+    /// are filled in.
+    pub sql: String,
+}
+
 /// The connection a tab works against, flattened to plain strings for the wire.
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub(crate) struct TabConnection {
@@ -176,11 +188,16 @@ pub(crate) enum McpRequest {
         tab: TabSelector,
         reply: Reply<TabConnection>,
     },
-    /// Run a query tab exactly as the Run button would, results landing in its
-    /// results panel. The reply carries the final result set as JSON once the
-    /// run ends, however it ends.
-    RunTab {
+    /// The statement the Run button would execute in a query tab.
+    PrepareRunTab {
         tab: TabSelector,
+        reply: Reply<TabRun>,
+    },
+    /// Run a statement `PrepareRunTab` reported, once the write policy allowed
+    /// it, results landing in the tab's results panel. The reply carries the
+    /// final result set as JSON once the run ends, however it ends.
+    RunTab {
+        run: TabRun,
         reply: Reply<serde_json::Value>,
     },
     /// Ask the user whether a write may run.
@@ -199,7 +216,8 @@ impl McpRequest {
             | Self::WriteTab { tab, .. }
             | Self::SetActiveTab { tab, .. }
             | Self::TabConnection { tab, .. }
-            | Self::RunTab { tab, .. } => tab.id,
+            | Self::PrepareRunTab { tab, .. } => tab.id,
+            Self::RunTab { run, .. } => Some(run.tab_id),
             Self::ListTabs { .. } | Self::CreateQueryTab { .. } | Self::ConfirmWrite { .. } => None,
         }
     }

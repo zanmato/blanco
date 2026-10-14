@@ -24,8 +24,9 @@ pub struct TerminalPane {
 }
 
 /// Start the user's shell in the agent workspace for the tab identified by
-/// `tab_id` and `context`. Agents read `BLANCO_TAB_ID` to address the tab
-/// through MCP even after the user switches tabs.
+/// `tab_id` and `context`. The workspace MCP configs send `BLANCO_TAB_ID` with
+/// every request, so the server knows which tab an agent belongs to even after
+/// the user switches tabs.
 pub fn spawn_tab_terminal(
     tab_id: u64,
     context: &ConnectionContext,

@@ -2,10 +2,12 @@
 //! server over the streamable HTTP transport, with the foreground bridge
 //! answered by a test task.
 
+use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
 use app_database::AppDatabase;
+use axum::http::{HeaderName, HeaderValue};
 use database::{ConnectionConfig, DatabaseService};
 use rmcp::ServiceExt as _;
 use rmcp::model::CallToolRequestParams;
@@ -14,7 +16,7 @@ use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig
 use tokio_util::sync::CancellationToken;
 
 use super::bridge::{McpBridgeClient, McpRequest, TabSummary, WriteAnswer, send_reply};
-use super::server::{BlancoMcpServer, bind, serve};
+use super::server::{AGENT_TAB_HEADER, BlancoMcpServer, bind, serve};
 
 struct TestServer {
     port: u16,
@@ -22,6 +24,8 @@ struct TestServer {
     /// `rememberable_kinds` of every write confirmation the fake foreground
     /// was asked for, in order. It answers each with `RunAndRemember`.
     confirmations: Arc<Mutex<Vec<Vec<String>>>>,
+    /// The tab id every foreground request named, in order.
+    requested_tabs: Arc<Mutex<Vec<Option<u64>>>>,
     cancellation: CancellationToken,
     _bridge_task: tokio::task::JoinHandle<()>,
     _serve_task: tokio::task::JoinHandle<anyhow::Result<()>>,
@@ -37,6 +41,7 @@ impl Drop for TestServer {
 /// one SQLite connection, with a fake foreground that answers `ListTabs`.
 async fn start_test_server() -> TestServer {
     let confirmations = Arc::new(Mutex::new(Vec::new()));
+    let requested_tabs = Arc::new(Mutex::new(Vec::new()));
     let runtime_handle = tokio::runtime::Handle::current();
     let app_database = AppDatabase::new_in_memory(runtime_handle.clone())
         .await
@@ -56,20 +61,33 @@ async fn start_test_server() -> TestServer {
     let (client, receiver) = McpBridgeClient::channel();
     let bridge_task = tokio::spawn({
         let confirmations = confirmations.clone();
+        let requested_tabs = requested_tabs.clone();
         async move {
             while let Ok(request) = receiver.recv().await {
+                requested_tabs
+                    .lock()
+                    .expect("requested tabs lock")
+                    .push(request.tab_id());
                 match request {
-                    McpRequest::ListTabs { reply } => send_reply(
+                    McpRequest::ListTabs { reply } => {
+                        send_reply(&reply, Ok(vec![fake_tab_summary()]))
+                    }
+                    McpRequest::CreateQueryTab { reply, .. }
+                    | McpRequest::SetActiveTab { reply, .. } => {
+                        send_reply(&reply, Ok(fake_tab_summary()))
+                    }
+                    McpRequest::PrepareRunTab { reply, .. } => send_reply(
                         &reply,
-                        Ok(vec![TabSummary {
-                            index: 0,
-                            id: Some(42),
-                            title: "Fake tab".to_string(),
-                            kind: "query",
-                            active: true,
-                            connection: None,
-                        }]),
+                        Ok(super::bridge::TabRun {
+                            tab_id: 42,
+                            connection_id: 1,
+                            database: "main".to_string(),
+                            sql: "CREATE TABLE from_tab (id INTEGER)".to_string(),
+                        }),
                     ),
+                    McpRequest::RunTab { reply, .. } => {
+                        send_reply(&reply, Ok(serde_json::json!({ "rows": [] })))
+                    }
                     McpRequest::ReadTab { reply, .. } => {
                         send_reply(&reply, Err("no tabs in this test".to_string()))
                     }
@@ -118,6 +136,7 @@ async fn start_test_server() -> TestServer {
         port,
         token,
         confirmations,
+        requested_tabs,
         cancellation,
         _bridge_task: bridge_task,
         _serve_task: serve_task,
@@ -262,10 +281,30 @@ async fn lists_tools_and_calls_them_over_http() {
     client.cancel().await.expect("close client");
 }
 
+fn fake_tab_summary() -> TabSummary {
+    TabSummary {
+        index: 0,
+        id: Some(42),
+        title: "Fake tab".to_string(),
+        kind: "query",
+        active: true,
+        connection: None,
+    }
+}
+
 async fn connect(server: &TestServer) -> rmcp::service::RunningService<rmcp::RoleClient, ()> {
+    connect_with_headers(server, HashMap::new()).await
+}
+
+async fn connect_with_headers(
+    server: &TestServer,
+    headers: HashMap<HeaderName, HeaderValue>,
+) -> rmcp::service::RunningService<rmcp::RoleClient, ()> {
     let url = format!("http://127.0.0.1:{}/mcp", server.port);
     let transport = StreamableHttpClientTransport::from_config(
-        StreamableHttpClientTransportConfig::with_uri(url).auth_header(server.token.clone()),
+        StreamableHttpClientTransportConfig::with_uri(url)
+            .auth_header(server.token.clone())
+            .custom_headers(headers),
     );
     ().serve(transport)
         .await
@@ -315,4 +354,121 @@ async fn remembered_write_kinds_skip_the_dialog_for_that_session_only() {
 
     first.cancel().await.expect("close first client");
     second.cancel().await.expect("close second client");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_agent_in_a_terminal_pane_stays_in_its_tab() {
+    let server = start_test_server().await;
+    let call = |name: &'static str, arguments: serde_json::Value| {
+        let arguments = match arguments {
+            serde_json::Value::Object(map) => map,
+            _ => serde_json::Map::new(),
+        };
+        CallToolRequestParams::new(name).with_arguments(arguments)
+    };
+
+    let outside = connect(&server).await;
+    let created = outside
+        .call_tool(call(
+            "create_query_tab",
+            serde_json::json!({ "connection_id": 1 }),
+        ))
+        .await
+        .expect("call create_query_tab");
+    assert_ne!(created.is_error, Some(true), "{created:?}");
+
+    let in_pane = connect_with_headers(
+        &server,
+        HashMap::from([(
+            HeaderName::from_static(AGENT_TAB_HEADER),
+            HeaderValue::from_static("42"),
+        )]),
+    )
+    .await;
+    let refused = in_pane
+        .call_tool(call(
+            "create_query_tab",
+            serde_json::json!({ "connection_id": 1 }),
+        ))
+        .await
+        .expect("call create_query_tab");
+    assert_eq!(refused.is_error, Some(true));
+    let switched_away = in_pane
+        .call_tool(call(
+            "set_active_tab",
+            serde_json::json!({ "tab": { "id": 7 } }),
+        ))
+        .await
+        .expect("call set_active_tab");
+    assert_eq!(switched_away.is_error, Some(true));
+    let own_tab = in_pane
+        .call_tool(call(
+            "set_active_tab",
+            serde_json::json!({ "tab": { "id": 42 } }),
+        ))
+        .await
+        .expect("call set_active_tab");
+    assert_ne!(own_tab.is_error, Some(true), "{own_tab:?}");
+
+    // Omitted tabs mean the agent's own, wherever the user has moved to.
+    server.requested_tabs.lock().expect("lock").clear();
+    in_pane
+        .call_tool(call("read_tab", serde_json::json!({})))
+        .await
+        .expect("call read_tab");
+    in_pane
+        .call_tool(call("run_sql", serde_json::json!({ "sql": "SELECT 1" })))
+        .await
+        .expect("call run_sql");
+    let unnamed = in_pane
+        .call_tool(call("set_active_tab", serde_json::json!({})))
+        .await
+        .expect("call set_active_tab");
+    assert_ne!(unnamed.is_error, Some(true), "{unnamed:?}");
+    outside
+        .call_tool(call("read_tab", serde_json::json!({})))
+        .await
+        .expect("call read_tab");
+    assert_eq!(
+        *server.requested_tabs.lock().expect("lock"),
+        [Some(42), Some(42), Some(42), None]
+    );
+
+    // Outside a pane `${BLANCO_TAB_ID:-}` expands to nothing.
+    let empty_header = connect_with_headers(
+        &server,
+        HashMap::from([(
+            HeaderName::from_static(AGENT_TAB_HEADER),
+            HeaderValue::from_static(""),
+        )]),
+    )
+    .await;
+    let created = empty_header
+        .call_tool(call(
+            "create_query_tab",
+            serde_json::json!({ "connection_id": 1 }),
+        ))
+        .await
+        .expect("call create_query_tab");
+    assert_ne!(created.is_error, Some(true), "{created:?}");
+
+    outside.cancel().await.expect("close client");
+    in_pane.cancel().await.expect("close client");
+    empty_header.cancel().await.expect("close client");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn run_tab_writes_go_through_the_write_policy() {
+    let server = start_test_server().await;
+    let client = connect(&server).await;
+    let result = client
+        .call_tool(CallToolRequestParams::new("run_tab"))
+        .await
+        .expect("call run_tab");
+    assert_ne!(result.is_error, Some(true), "{result:?}");
+    assert_eq!(
+        *server.confirmations.lock().expect("lock"),
+        [vec!["CREATE".to_string()]]
+    );
+    client.cancel().await.expect("close client");
 }

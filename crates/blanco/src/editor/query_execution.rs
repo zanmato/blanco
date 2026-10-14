@@ -1,4 +1,4 @@
-use gpui::{AppContext, Context, ParentElement, SharedString, Window, px};
+use gpui::{App, AppContext, Context, ParentElement, SharedString, Window, px};
 use gpui_component::{
     WindowExt as _,
     button::{Button, ButtonVariants as _},
@@ -23,10 +23,30 @@ use sql_parser::statement_parser::QueryParameter;
 use super::parameter_form::ParameterForm;
 use super::{EditorPanel, ProdWritePrompt, SQL_QUERY_LOG_MAX_LENGTH, TabType};
 
+/// A statement Run is about to execute, before its bind parameters are
+/// filled in.
+pub(crate) struct StatementToRun {
+    pub query: String,
+    pub parameters: Vec<QueryParameter>,
+}
+
 /// Thresholds above which a loaded result gets a size warning.
 const LARGE_RESULT_ROWS: usize = 100_000;
 const LARGE_RESULT_CELLS: usize = 1_000_000;
 const LARGE_RESULT_BYTES: usize = 64 * 1024 * 1024;
+
+/// The bind parameters in `query`, in the dialect's placeholder syntaxes.
+pub(super) fn statement_parameters(
+    db_type: blanco_core::DatabaseType,
+    query: &str,
+) -> Vec<QueryParameter> {
+    if !db_type.supports_sql() {
+        return Vec::new();
+    }
+    extract_statement_info_with_styles(&Rope::from_str(query), 0, db_type.parameter_styles())
+        .map(|info| info.parameters)
+        .unwrap_or_default()
+}
 
 impl EditorPanel {
     /// Handler for Run Query button/keyboard
@@ -62,86 +82,119 @@ impl EditorPanel {
             return;
         }
 
-        if let Some(tab) = self.tabs.get(tab_index)
-            && let TabType::Query(query_tab) = tab
-        {
-            // Get text, cursor position, and selection from editor
-            let editor = query_tab.editor.read(cx);
-            let full_text = editor.text().to_string();
-            let cursor_pos = editor.cursor();
-            let selected_text = editor.selected_text().to_string();
-
-            // Clone the values we need
-            let connection_id = query_tab.context.connection_id;
-            let database_name = query_tab.context.database_name.clone();
-            let db_type = query_tab.context.db_type;
-
-            // Non-SQL backends (Redis) have no grammar to parse and no bind
-            // parameters: treat the buffer as one command per line and run the
-            // line at the cursor (or the selection verbatim).
-            if !db_type.supports_sql() {
-                let command = if !selected_text.trim().is_empty() {
-                    selected_text.trim().to_string()
-                } else {
-                    crate::sql::extract_command_at_cursor(&full_text, cursor_pos)
-                        .unwrap_or_default()
-                };
-                if command.is_empty() {
-                    window.push_notification((NotificationType::Error, "No command to run"), cx);
-                    cx.emit(super::EditorPanelEvent::QueryRunEnded {
-                        tab_index,
-                        outcome: Err("No command to run".to_string()),
-                    });
-                    return;
-                }
-                self.execute_query(command, connection_id, &database_name, window, cx);
-                return;
-            }
-
-            // Only treat the dialect's actual placeholder syntaxes as parameters,
-            // so e.g. Postgres jsonb operators (`?`, `?|`, `?&`) don't trigger the
-            // parameter form.
-            let param_styles = db_type.parameter_styles();
-
-            // Use extract_statement_info to get parameters
-            // For selected text, parse from the selection; otherwise use cursor position
-            let statement_info = if !selected_text.trim().is_empty() {
-                let selected_text = Rope::from_str(&selected_text);
-                extract_statement_info_with_styles(&selected_text, 0, param_styles)
-            } else {
-                let full_text = Rope::from_str(&full_text);
-                extract_statement_info_with_styles(&full_text, cursor_pos, param_styles)
-            };
-
-            // Determine the query to execute: use selected text if available, otherwise extract from statement_info
-            let query = if !selected_text.trim().is_empty() {
-                selected_text
-            } else {
-                statement_info
-                    .as_ref()
-                    .map(|info| info.text.clone())
-                    .unwrap_or_default()
-            };
-
-            if query.is_empty() {
-                window.push_notification((NotificationType::Error, "No query to execute"), cx);
+        match self.statement_to_run(tab_index, cx) {
+            Ok(Some(statement)) => self.run_statement(statement, false, window, cx),
+            Ok(None) => {}
+            Err(message) => {
+                window.push_notification((NotificationType::Error, message.clone()), cx);
                 cx.emit(super::EditorPanelEvent::QueryRunEnded {
                     tab_index,
-                    outcome: Err("No query to execute".to_string()),
+                    outcome: Err(message),
                 });
-                return;
             }
+        }
+    }
 
-            // Check if query has parameters
-            let params = statement_info
-                .map(|info| info.parameters)
-                .unwrap_or_default();
+    /// What Run executes in query tab `tab_index`: the selection, else the
+    /// statement at the cursor (for Redis the command on the cursor's line).
+    /// `None` when the tab is not a query tab.
+    pub(super) fn statement_to_run(
+        &self,
+        tab_index: usize,
+        cx: &App,
+    ) -> Result<Option<StatementToRun>, String> {
+        let Some(TabType::Query(query_tab)) = self.tabs.get(tab_index) else {
+            return Ok(None);
+        };
+        let editor = query_tab.editor.read(cx);
+        let full_text = editor.text().to_string();
+        let cursor_pos = editor.cursor();
+        let selected_text = editor.selected_text().to_string();
+        let db_type = query_tab.context.db_type;
 
-            if !params.is_empty() {
-                self.show_parameter_modal(query, params, connection_id, database_name, window, cx);
+        // Non-SQL backends (Redis) have no grammar to parse and no bind
+        // parameters: treat the buffer as one command per line and run the
+        // line at the cursor (or the selection verbatim).
+        if !db_type.supports_sql() {
+            let command = if !selected_text.trim().is_empty() {
+                selected_text.trim().to_string()
             } else {
-                self.execute_query(query, connection_id, &database_name, window, cx);
+                crate::sql::extract_command_at_cursor(&full_text, cursor_pos).unwrap_or_default()
+            };
+            if command.is_empty() {
+                return Err("No command to run".to_string());
             }
+            return Ok(Some(StatementToRun {
+                query: command,
+                parameters: Vec::new(),
+            }));
+        }
+
+        // Only treat the dialect's actual placeholder syntaxes as parameters,
+        // so e.g. Postgres jsonb operators (`?`, `?|`, `?&`) don't trigger the
+        // parameter form.
+        let param_styles = db_type.parameter_styles();
+        let statement_info = if !selected_text.trim().is_empty() {
+            let selected_text = Rope::from_str(&selected_text);
+            extract_statement_info_with_styles(&selected_text, 0, param_styles)
+        } else {
+            let full_text = Rope::from_str(&full_text);
+            extract_statement_info_with_styles(&full_text, cursor_pos, param_styles)
+        };
+        let query = if !selected_text.trim().is_empty() {
+            selected_text
+        } else {
+            statement_info
+                .as_ref()
+                .map(|info| info.text.clone())
+                .unwrap_or_default()
+        };
+        if query.is_empty() {
+            return Err("No query to execute".to_string());
+        }
+        Ok(Some(StatementToRun {
+            query,
+            parameters: statement_info
+                .map(|info| info.parameters)
+                .unwrap_or_default(),
+        }))
+    }
+
+    /// Run `statement` on the active query tab, through the parameter form
+    /// when it has bind parameters. `authorized` skips the confirmation for
+    /// environments that confirm writes, for a statement the MCP write policy
+    /// has already put to the user.
+    pub(super) fn run_statement(
+        &mut self,
+        statement: StatementToRun,
+        authorized: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(TabType::Query(query_tab)) = self.tabs.get(self.active_tab_ix) else {
+            return;
+        };
+        let connection_id = query_tab.context.connection_id;
+        let database_name = query_tab.context.database_name.clone();
+        if !statement.parameters.is_empty() {
+            self.show_parameter_modal(
+                statement,
+                connection_id,
+                database_name,
+                authorized,
+                window,
+                cx,
+            );
+        } else if authorized {
+            self.execute_query_unchecked(
+                statement.query,
+                connection_id,
+                &database_name,
+                window,
+                cx,
+            );
+        } else {
+            self.execute_query(statement.query, connection_id, &database_name, window, cx);
         }
     }
 
@@ -236,7 +289,7 @@ impl EditorPanel {
         );
     }
 
-    fn execute_query_unchecked(
+    pub(super) fn execute_query_unchecked(
         &mut self,
         query: String,
         _connection_id: i64,
@@ -749,10 +802,10 @@ impl EditorPanel {
     /// Show parameter input modal and execute query with substituted values
     fn show_parameter_modal(
         &mut self,
-        query: String,
-        params: Vec<QueryParameter>,
+        statement: StatementToRun,
         connection_id: i64,
         database_name: String,
+        authorized: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -760,8 +813,15 @@ impl EditorPanel {
             Some(TabType::Query(query_tab)) => query_tab.last_parameter_values.clone(),
             _ => Default::default(),
         };
-        let param_form =
-            cx.new(|cx| ParameterForm::new(query.clone(), params, &initial_values, window, cx));
+        let param_form = cx.new(|cx| {
+            ParameterForm::new(
+                statement.query,
+                statement.parameters,
+                &initial_values,
+                window,
+                cx,
+            )
+        });
 
         let weak_editor_panel = cx.entity().downgrade();
         let tab_index = self.active_tab_ix;
@@ -802,13 +862,23 @@ impl EditorPanel {
                                 {
                                     query_tab.last_parameter_values = entered_values;
                                 }
-                                editor_panel.execute_query(
-                                    substituted_query,
-                                    connection_id,
-                                    &database_name,
-                                    window,
-                                    cx,
-                                );
+                                if authorized {
+                                    editor_panel.execute_query_unchecked(
+                                        substituted_query,
+                                        connection_id,
+                                        &database_name,
+                                        window,
+                                        cx,
+                                    );
+                                } else {
+                                    editor_panel.execute_query(
+                                        substituted_query,
+                                        connection_id,
+                                        &database_name,
+                                        window,
+                                        cx,
+                                    );
+                                }
                             })
                             .ok();
                         false

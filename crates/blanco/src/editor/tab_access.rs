@@ -6,9 +6,13 @@ use blanco_core::ConnectionContext;
 use gpui::{App, Context, Window};
 use gpui_component::input::RopeExt as _;
 
-use super::{EditorPanel, TabCreationParams, TabType, tabs::ConnectionBackedTab};
+use super::query_execution::{StatementToRun, statement_parameters};
+use super::{
+    EditorPanel, TabCreationParams, TabType,
+    tabs::{ConnectionBackedTab, QueryTab},
+};
 use crate::mcp::bridge::{
-    TabConnection, TabContent, TabEdit, TabSelector, TabSummary, WriteOutcome,
+    TabConnection, TabContent, TabEdit, TabRun, TabSelector, TabSummary, WriteOutcome,
 };
 
 /// Maximum lines to return when no range is specified
@@ -344,27 +348,62 @@ impl EditorPanel {
         self.tab_summary_at(index, cx)
     }
 
-    /// Activate a query tab and press Run on it. The outcome arrives later as
+    /// The statement the Run button would execute in query tab `index`.
+    pub(crate) fn prepare_query_tab_run_for_mcp(
+        &self,
+        index: usize,
+        cx: &App,
+    ) -> Result<TabRun, String> {
+        let query_tab = self.query_tab_for_mcp(index)?;
+        let statement = self
+            .statement_to_run(index, cx)?
+            .ok_or_else(|| format!("Tab {index} has nothing to run."))?;
+        Ok(TabRun {
+            tab_id: query_tab.editor.entity_id().as_u64(),
+            connection_id: query_tab.context.connection_id,
+            database: query_tab.context.database_name.clone(),
+            sql: statement.query,
+        })
+    }
+
+    /// Activate query tab `index` and run the statement the write policy
+    /// allowed, which is the one `prepare_query_tab_run_for_mcp` reported, not
+    /// whatever sits at the cursor by now. The outcome arrives later as
     /// `EditorPanelEvent::QueryRunEnded`, since the run is asynchronous and may
-    /// first open the PROD confirmation.
+    /// first open the parameter form.
     pub(crate) fn run_query_tab_for_mcp(
         &mut self,
         index: usize,
+        run: &TabRun,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
-        match self.tabs.get(index) {
-            Some(TabType::Query(_)) => {}
-            Some(other) => {
-                return Err(format!(
-                    "Tab {index} is a {} tab; run_tab only runs query tabs.",
-                    tab_kind(other)
-                ));
-            }
-            None => return Err(self.out_of_range(index)),
+        let query_tab = self.query_tab_for_mcp(index)?;
+        if query_tab.context.connection_id != run.connection_id
+            || query_tab.context.database_name != run.database
+        {
+            return Err(
+                "The tab switched connection or database before the statement ran; run_tab again."
+                    .to_string(),
+            );
         }
+        let statement = StatementToRun {
+            parameters: statement_parameters(query_tab.context.db_type, &run.sql),
+            query: run.sql.clone(),
+        };
         self.set_active_tab(index, window, cx);
-        self.on_run_query(window, cx);
+        self.run_statement(statement, true, window, cx);
         Ok(())
+    }
+
+    fn query_tab_for_mcp(&self, index: usize) -> Result<&QueryTab, String> {
+        match self.tabs.get(index) {
+            Some(TabType::Query(query_tab)) => Ok(query_tab),
+            Some(other) => Err(format!(
+                "Tab {index} is a {} tab; run_tab only runs query tabs.",
+                tab_kind(other)
+            )),
+            None => Err(self.out_of_range(index)),
+        }
     }
 }

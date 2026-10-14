@@ -8,6 +8,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context as _;
 
+use super::server::AGENT_TAB_HEADER;
+
 pub(crate) const WORKSPACE_DIR_NAME: &str = "agent-workspace";
 
 /// Files this module owns inside the workspace. Anything else in the folder is
@@ -65,7 +67,10 @@ pub(crate) fn write_workspace_config(dir: &Path, port: u16, token: &str) -> anyh
             "blanco": {
                 "type": "http",
                 "url": url,
-                "headers": { "Authorization": bearer },
+                "headers": {
+                    "Authorization": bearer,
+                    AGENT_TAB_HEADER: "${BLANCO_TAB_ID:-}",
+                },
             }
         }
     });
@@ -77,7 +82,10 @@ pub(crate) fn write_workspace_config(dir: &Path, port: u16, token: &str) -> anyh
             "blanco": {
                 "type": "remote",
                 "url": url,
-                "headers": { "Authorization": bearer },
+                "headers": {
+                    "Authorization": bearer,
+                    AGENT_TAB_HEADER: "{env:BLANCO_TAB_ID}",
+                },
             }
         }
     });
@@ -93,30 +101,33 @@ pub(crate) fn write_workspace_config(dir: &Path, port: u16, token: &str) -> anyh
 
 /// What an agent started in the workspace needs to know about where it is.
 /// Read by Codex and OpenCode as `AGENTS.md` and by Claude Code through
-/// `CLAUDE.md`. Everything tab-specific comes from the environment the pane's
-/// shell was started with, since one folder serves every tab.
+/// `CLAUDE.md`. One folder serves every tab, so the tab comes from the
+/// `BLANCO_TAB_ID` the pane's shell exports, which the MCP configs send along
+/// as a header.
 const AGENT_INSTRUCTIONS: &str = "# Working inside Blanco\n\n\
 You are running in a terminal pane of Blanco, a desktop SQL editor. This folder is Blanco's\n\
 agent workspace, not a code project: there is nothing to build or edit here. Your job is to help\n\
 the user with their databases through the `blanco` MCP server, which is already configured for\n\
 this directory.\n\n\
 ## The tab you belong to\n\n\
-The pane you were started from belongs to one editor tab. Its identity is in the environment:\n\n\
-- `BLANCO_TAB_ID`: pass it as `tab: {\"id\": <value>}` to `read_tab`, `write_tab` and `run_tab`, and\n\
-  to connection tools when the user has switched to another tab meanwhile.\n\
-- `BLANCO_CONNECTION_ID`, `BLANCO_CONNECTION_NAME`, `BLANCO_DATABASE`: the connection and database\n\
-  that tab works against. Connection tools default to the active tab's connection and database\n\
-  when `connection_id` is omitted. To be explicit, pass `connection_id: BLANCO_CONNECTION_ID`\n\
-  together with `database: BLANCO_DATABASE` (or `tab: {\"id\": BLANCO_TAB_ID}`). A bare\n\
-  `connection_id` takes the database of the active tab, which may not be yours.\n\n\
+The pane you were started from belongs to one editor tab, and the MCP configuration in this\n\
+folder tells Blanco which one. Tab tools (`read_tab`, `write_tab`, `run_tab`) and connection tools\n\
+default to that tab and its connection and database, even after the user brings another tab\n\
+forward, so leave `tab` and `connection_id` out unless you mean a different one. The environment\n\
+holds the same identity for reference: `BLANCO_TAB_ID`, `BLANCO_CONNECTION_ID`,\n\
+`BLANCO_CONNECTION_NAME` and `BLANCO_DATABASE`.\n\n\
 ## How to work\n\n\
-- Start by reading the tab (`read_tab`) and, when the task needs schema knowledge, `list_tables`\n\
+- Start by reading your tab (`read_tab`) and, when the task needs schema knowledge, `list_tables`\n\
   or `describe_table` on that connection.\n\
 - Write SQL the user should see into the tab with `write_tab` and run it with `run_tab`, so the\n\
   result lands in the app's results grid. Use `run_sql` for lookups the user does not need to see.\n\
-- Statements that modify data may open a confirmation dialog in Blanco that the user has to\n\
-  accept; PROD connections and DROP/TRUNCATE always do. Say so when you run one, and never retry a\n\
-  declined statement.\n\
+- Whether a statement that modifies data asks the user first depends on the connection and the\n\
+  user's settings, and is the same for `run_sql` and `run_tab`. `list_connections` reports it as\n\
+  `writes`: `refused`, `confirm` or `run` (nothing asks, except DROP/TRUNCATE). Only tell the user Blanco will ask them to confirm when that field says so, and\n\
+  never retry a declined statement.\n\
+- Stay in your tab. Your terminal pane only shows while that tab is active, so Blanco refuses\n\
+  `create_query_tab` and switching to another tab with `set_active_tab`. Put SQL the user should\n\
+  see into your own tab instead.\n\
 - Results are capped at 100 rows by default (`max_rows` up to 1000); narrow queries rather than\n\
   paging through large tables.\n";
 
@@ -165,6 +176,7 @@ Codex reads `~/.codex/config.toml`:\n\n\
 [mcp_servers.blanco]\n\
 url = \"{url}\"\n\
 http_headers = {{ Authorization = \"Bearer {token}\" }}\n\
+env_http_headers = {{ \"{AGENT_TAB_HEADER}\" = \"BLANCO_TAB_ID\" }}\n\
 ```\n"
     )
 }
@@ -229,12 +241,20 @@ mod tests {
             claude["mcpServers"]["blanco"]["headers"]["Authorization"],
             "Bearer secret-token"
         );
+        assert_eq!(
+            claude["mcpServers"]["blanco"]["headers"][AGENT_TAB_HEADER],
+            "${BLANCO_TAB_ID:-}"
+        );
 
         let opencode: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(dir.join("opencode.json")).expect("read opencode.json"),
         )
         .expect("parse opencode.json");
         assert_eq!(opencode["mcp"]["blanco"]["type"], "remote");
+        assert_eq!(
+            opencode["mcp"]["blanco"]["headers"][AGENT_TAB_HEADER],
+            "{env:BLANCO_TAB_ID}"
+        );
 
         let discovery: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(dir.join("mcp.json")).expect("read mcp.json"),

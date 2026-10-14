@@ -96,8 +96,11 @@ fn run_tab(
 ) -> Result<serde_json::Value, String> {
     let client = client.clone();
     drive(cx, async move {
+        let run = client
+            .request(|reply| McpRequest::PrepareRunTab { tab, reply })
+            .await?;
         client
-            .request(|reply| McpRequest::RunTab { tab, reply })
+            .request(|reply| McpRequest::RunTab { run, reply })
             .await
     })
 }
@@ -258,4 +261,50 @@ async fn bridge_reads_writes_creates_and_runs_tabs(cx: &mut TestAppContext) {
     .expect("clear tab");
     let empty = run_tab(&client, by_id(created_id), &mut cx).expect_err("empty tab fails");
     assert!(empty.contains("No query to execute"), "{empty}");
+
+    // The statement the write policy saw is the one that runs, even when the
+    // tab changed while the user was answering the dialog.
+    write_tab(
+        &client,
+        by_id(created_id),
+        WriteOperation::ReplaceAll,
+        "SELECT 'prepared' AS which",
+        None,
+        None,
+        &mut cx,
+    )
+    .expect("write the prepared statement");
+    let run = {
+        let client = client.clone();
+        drive(&mut cx, async move {
+            client
+                .request(|reply| McpRequest::PrepareRunTab {
+                    tab: by_id(created_id),
+                    reply,
+                })
+                .await
+        })
+    }
+    .expect("prepare run");
+    assert_eq!(run.sql, "SELECT 'prepared' AS which");
+    write_tab(
+        &client,
+        by_id(created_id),
+        WriteOperation::ReplaceAll,
+        "SELECT 'edited' AS which",
+        None,
+        None,
+        &mut cx,
+    )
+    .expect("edit the tab");
+    let result = {
+        let client = client.clone();
+        drive(&mut cx, async move {
+            client
+                .request(|reply| McpRequest::RunTab { run, reply })
+                .await
+        })
+    }
+    .expect("run the prepared statement");
+    assert_eq!(result["rows"], serde_json::json!([["prepared"]]));
 }

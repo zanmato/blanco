@@ -31,8 +31,8 @@ use super::bridge::{
     McpBridgeClient, McpRequest, TabEdit, TabSelector, WriteAnswer, WriteConfirmation,
 };
 use super::tools::{
-    DEFAULT_MAX_ROWS, MAX_ROWS_LIMIT, SessionGrants, WritePolicy, contains_destructive_ddl,
-    run_sql_json, write_policy,
+    ConnectionWrites, DEFAULT_MAX_ROWS, MAX_ROWS_LIMIT, SessionGrants, WritePolicy,
+    contains_destructive_ddl, run_sql_json, write_policy,
 };
 use crate::editor::tab_access::WriteOperation;
 
@@ -49,9 +49,12 @@ SQL (or Redis commands) and script tabs hold JavaScript. `list_tabs` shows them;
 `write_tab` edit their text; `run_tab` runs a query tab like its Run button so the user sees the \
 results in the app. `list_connections` lists the saved database connections; `run_sql`, \
 `list_schemas`, `list_tables`, `describe_table`, `explore_schema`, `get_table_ddl` and \
-`explain_query` work against a connection directly. Statements that modify data may need the user \
-to confirm in a Blanco dialog before they run; statements against PROD connections and DROP/TRUNCATE \
-always do. Prefer writing SQL into a tab and running it with `run_tab` when the user should see it.";
+`explain_query` work against a connection directly. Whether a write asks the user first depends on \
+the connection and the user's settings: the `writes` field of `list_connections` says what happens \
+(\"refused\", \"confirm\" or \"run\"). Check it before telling the user that Blanco \
+will ask them to confirm a statement, and never promise a confirmation that field does not \
+announce. A declined statement must not be retried. Prefer writing SQL into a tab and running it \
+with `run_tab` when the user should see it.";
 
 #[derive(Clone)]
 pub(crate) struct BlancoMcpServer {
@@ -93,7 +96,8 @@ impl ResolvedConnection {
 #[derive(Debug, Deserialize, JsonSchema)]
 pub(crate) struct ConnectionParams {
     /// Connection id from `list_connections`. Omit to use the connection of
-    /// `tab` (default: the active tab).
+    /// `tab` (default: your own tab when you run in a Blanco terminal pane,
+    /// else the active tab).
     pub connection_id: Option<i64>,
     /// Database to use; defaults to the tab's database, else the connection's
     /// configured one.
@@ -104,7 +108,8 @@ pub(crate) struct ConnectionParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub(crate) struct SchemaScopedParams {
-    /// Omit to use the connection of `tab` (default: the active tab).
+    /// Omit to use the connection of `tab` (default: your own tab when you
+    /// run in a Blanco terminal pane, else the active tab).
     pub connection_id: Option<i64>,
     pub database: Option<String>,
     pub tab: Option<TabSelector>,
@@ -115,7 +120,8 @@ pub(crate) struct SchemaScopedParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub(crate) struct TableParams {
-    /// Omit to use the connection of `tab` (default: the active tab).
+    /// Omit to use the connection of `tab` (default: your own tab when you
+    /// run in a Blanco terminal pane, else the active tab).
     pub connection_id: Option<i64>,
     pub database: Option<String>,
     pub tab: Option<TabSelector>,
@@ -125,7 +131,8 @@ pub(crate) struct TableParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub(crate) struct ExploreSchemaParams {
-    /// Omit to use the connection of `tab` (default: the active tab).
+    /// Omit to use the connection of `tab` (default: your own tab when you
+    /// run in a Blanco terminal pane, else the active tab).
     pub connection_id: Option<i64>,
     pub database: Option<String>,
     pub tab: Option<TabSelector>,
@@ -141,7 +148,8 @@ pub(crate) struct ExploreSchemaParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub(crate) struct RunSqlParams {
-    /// Omit to use the connection of `tab` (default: the active tab).
+    /// Omit to use the connection of `tab` (default: your own tab when you
+    /// run in a Blanco terminal pane, else the active tab).
     pub connection_id: Option<i64>,
     pub database: Option<String>,
     pub tab: Option<TabSelector>,
@@ -155,7 +163,8 @@ pub(crate) struct RunSqlParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub(crate) struct ExplainParams {
-    /// Omit to use the connection of `tab` (default: the active tab).
+    /// Omit to use the connection of `tab` (default: your own tab when you
+    /// run in a Blanco terminal pane, else the active tab).
     pub connection_id: Option<i64>,
     pub database: Option<String>,
     pub tab: Option<TabSelector>,
@@ -164,7 +173,8 @@ pub(crate) struct ExplainParams {
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 pub(crate) struct ReadTabParams {
-    /// Which tab; omit for the active tab.
+    /// Which tab; omit for your own tab when you run in a Blanco terminal
+    /// pane, else the active tab.
     #[serde(default)]
     pub tab: TabSelector,
     /// 1-based first line, default 1.
@@ -176,7 +186,8 @@ pub(crate) struct ReadTabParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub(crate) struct WriteTabParams {
-    /// Which tab; omit for the active tab.
+    /// Which tab; omit for your own tab when you run in a Blanco terminal
+    /// pane, else the active tab.
     #[serde(default)]
     pub tab: TabSelector,
     /// `replace_all` (default), `insert_before_line` or `replace_lines`.
@@ -191,7 +202,8 @@ pub(crate) struct WriteTabParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub(crate) struct CreateQueryTabParams {
-    /// Omit to use the connection of `tab` (default: the active tab).
+    /// Omit to use the connection of `tab` (default: your own tab when you
+    /// run in a Blanco terminal pane, else the active tab).
     pub connection_id: Option<i64>,
     pub database: Option<String>,
     pub tab: Option<TabSelector>,
@@ -260,7 +272,9 @@ impl BlancoMcpServer {
         connection_id: Option<i64>,
         mut database: Option<String>,
         tab: Option<TabSelector>,
+        request: &RequestContext<RoleServer>,
     ) -> Result<ResolvedConnection, String> {
+        let tab = default_to_agent_tab(tab.unwrap_or_default(), request);
         let connection_id = match connection_id {
             // Agents pass the id they were started with, and on a multi
             // database server the connection's configured database is rarely
@@ -268,10 +282,7 @@ impl BlancoMcpServer {
             Some(connection_id) if database.is_none() => {
                 match self
                     .bridge_request(
-                        |reply| McpRequest::TabConnection {
-                            tab: tab.unwrap_or_default(),
-                            reply,
-                        },
+                        |reply| McpRequest::TabConnection { tab, reply },
                         TAB_REQUEST_TIMEOUT,
                     )
                     .await
@@ -290,10 +301,7 @@ impl BlancoMcpServer {
             None => {
                 let tab_connection = self
                     .bridge_request(
-                        |reply| McpRequest::TabConnection {
-                            tab: tab.unwrap_or_default(),
-                            reply,
-                        },
+                        |reply| McpRequest::TabConnection { tab, reply },
                         TAB_REQUEST_TIMEOUT,
                     )
                     .await?;
@@ -406,6 +414,48 @@ impl BlancoMcpServer {
     }
 }
 
+/// The workspace configs fill this header from `BLANCO_TAB_ID`, so a request
+/// from an agent started in a tab's terminal pane names the tab it lives in.
+pub(crate) const AGENT_TAB_HEADER: &str = "x-blanco-tab";
+
+/// The tab whose terminal pane the calling agent runs in, if any. Outside a
+/// pane the variable is unset and the header arrives empty or not at all.
+fn agent_tab(request: &RequestContext<RoleServer>) -> Option<u64> {
+    request
+        .extensions
+        .get::<axum::http::request::Parts>()?
+        .headers
+        .get(AGENT_TAB_HEADER)?
+        .to_str()
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
+}
+
+/// An omitted tab means the calling agent's own tab when it runs in a terminal
+/// pane, so it keeps working on that tab after the user brings another one
+/// forward, and the active tab otherwise.
+fn default_to_agent_tab(tab: TabSelector, request: &RequestContext<RoleServer>) -> TabSelector {
+    if tab.index.is_some() || tab.id.is_some() {
+        return tab;
+    }
+    TabSelector {
+        index: None,
+        id: agent_tab(request),
+    }
+}
+
+/// The pane only shows while its tab is active, so an agent that opens or
+/// switches to another tab hides its own terminal from the user.
+fn leaves_agent_tab(agent_tab: u64) -> String {
+    format!(
+        "You run in the terminal pane of tab {agent_tab}, which only shows while that tab is active, \
+so Blanco does not open or switch to other tabs for you. Write into your own tab with write_tab \
+and run it with run_tab (both default to it), or use run_sql for lookups."
+    )
+}
+
 /// rmcp builds one handler per session, but a client on the stateless protocol
 /// gets a fresh handler for every request, where a remembered grant would be
 /// dropped before the next call. Only offer to remember inside a session.
@@ -420,13 +470,14 @@ fn is_session_request(request: &RequestContext<RoleServer>) -> bool {
 impl BlancoMcpServer {
     #[tool(
         name = "list_connections",
-        description = "List the database connections saved in Blanco: id, name, type, database, environment (DEV/TEST/PROD) and whether Blanco is currently connected."
+        description = "List the database connections saved in Blanco: id, name, type, database, environment tag, whether Blanco is currently connected, and `writes`, how statements that modify data are handled by run_sql and run_tab: \"refused\" (the connection is read-only), \"confirm\" (every write waits for the user to accept a dialog) or \"run\" (writes run without asking, except DROP and TRUNCATE)."
     )]
     async fn list_connections(&self) -> Result<CallToolResult, ErrorData> {
         let connections = match self.app_database.load_connections().await {
             Ok(connections) => connections,
             Err(error) => return tool_error(format!("Failed to read connections: {error}")),
         };
+        let allow_writes = self.allow_writes.load(Ordering::Relaxed);
         let statuses = self
             .db_service
             .get_active_connection_statuses()
@@ -446,6 +497,12 @@ impl BlancoMcpServer {
                     "host": connection.host,
                     "environment": connection.environment_type.display_name(),
                     "read_only": connection.read_only,
+                    "writes": ConnectionWrites::new(
+                        connection.read_only,
+                        connection.environment_type.confirms_writes(),
+                        allow_writes,
+                    )
+                    .as_str(),
                     "connected": connected,
                 })
             })
@@ -469,16 +526,17 @@ impl BlancoMcpServer {
 
     #[tool(
         name = "read_tab",
-        description = "Read the text of a query or script tab as line-numbered content, optionally limited to a line range. Defaults to the active tab."
+        description = "Read the text of a query or script tab as line-numbered content, optionally limited to a line range. Defaults to your own tab when you run in a Blanco terminal pane, else the active tab."
     )]
     async fn read_tab(
         &self,
         Parameters(params): Parameters<ReadTabParams>,
+        request: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         match self
             .bridge_request(
                 |reply| McpRequest::ReadTab {
-                    tab: params.tab,
+                    tab: default_to_agent_tab(params.tab, &request),
                     start_line: params.start_line,
                     end_line: params.end_line,
                     reply,
@@ -494,16 +552,17 @@ impl BlancoMcpServer {
 
     #[tool(
         name = "write_tab",
-        description = "Write text into a query or script tab: replace everything, insert before a line, or replace a line range. Defaults to the active tab. Does not run anything."
+        description = "Write text into a query or script tab: replace everything, insert before a line, or replace a line range. Defaults to your own tab when you run in a Blanco terminal pane, else the active tab. Does not run anything."
     )]
     async fn write_tab(
         &self,
         Parameters(params): Parameters<WriteTabParams>,
+        request: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         match self
             .bridge_request(
                 |reply| McpRequest::WriteTab {
-                    tab: params.tab,
+                    tab: default_to_agent_tab(params.tab, &request),
                     edit: TabEdit {
                         operation: params.operation,
                         content: params.content,
@@ -523,14 +582,18 @@ impl BlancoMcpServer {
 
     #[tool(
         name = "create_query_tab",
-        description = "Open a new query tab on a connection, optionally with initial text and a title, and make it active."
+        description = "Open a new query tab on a connection, optionally with initial text and a title, and make it active. Refused for an agent running in a tab's terminal pane, which would be hidden by the new tab."
     )]
     async fn create_query_tab(
         &self,
         Parameters(params): Parameters<CreateQueryTabParams>,
+        request: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
+        if let Some(agent_tab) = agent_tab(&request) {
+            return tool_error(leaves_agent_tab(agent_tab));
+        }
         let connection = match self
-            .resolve_connection(params.connection_id, params.database, params.tab)
+            .resolve_connection(params.connection_id, params.database, params.tab, &request)
             .await
         {
             Ok(connection) => connection,
@@ -556,18 +619,22 @@ impl BlancoMcpServer {
 
     #[tool(
         name = "set_active_tab",
-        description = "Bring a tab to the front by index or id."
+        description = "Bring a tab to the front by index or id. An agent running in a tab's terminal pane may only bring its own tab forward."
     )]
     async fn set_active_tab(
         &self,
         Parameters(params): Parameters<TabParams>,
+        request: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
+        let tab = default_to_agent_tab(params.tab, &request);
+        if let Some(agent_tab) = agent_tab(&request)
+            && tab.id != Some(agent_tab)
+        {
+            return tool_error(leaves_agent_tab(agent_tab));
+        }
         match self
             .bridge_request(
-                |reply| McpRequest::SetActiveTab {
-                    tab: params.tab,
-                    reply,
-                },
+                |reply| McpRequest::SetActiveTab { tab, reply },
                 TAB_REQUEST_TIMEOUT,
             )
             .await
@@ -579,20 +646,47 @@ impl BlancoMcpServer {
 
     #[tool(
         name = "run_tab",
-        description = "Run a query tab exactly like its Run button (statement at the cursor, or the selection), so the results show up in Blanco. Returns the final result set (up to 100 rows). Writes against PROD connections ask the user to confirm first. Defaults to the active tab."
+        description = "Run a query tab like its Run button (statement at the cursor, or the selection), so the results show up in Blanco. Returns the final result set (up to 100 rows). Statements that modify data follow the same rules as run_sql, see the `writes` field of `list_connections`. Defaults to your own tab when you run in a Blanco terminal pane, else the active tab."
     )]
     async fn run_tab(
         &self,
         Parameters(params): Parameters<TabParams>,
+        request: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
-        match self
+        let tab = default_to_agent_tab(params.tab, &request);
+        let run = match self
             .bridge_request(
-                |reply| McpRequest::RunTab {
-                    tab: params.tab,
-                    reply,
-                },
-                RUN_TAB_TIMEOUT,
+                |reply| McpRequest::PrepareRunTab { tab, reply },
+                TAB_REQUEST_TIMEOUT,
             )
+            .await
+        {
+            Ok(run) => run,
+            Err(error) => return tool_error(error),
+        };
+        // Running a tab brings it to the front.
+        if let Some(agent_tab) = agent_tab(&request)
+            && run.tab_id != agent_tab
+        {
+            return tool_error(leaves_agent_tab(agent_tab));
+        }
+        let connection = match self
+            .resolve_connection(
+                Some(run.connection_id),
+                Some(run.database.clone()),
+                None,
+                &request,
+            )
+            .await
+        {
+            Ok(connection) => connection,
+            Err(error) => return tool_error(error),
+        };
+        if let Err(error) = self.authorize(&connection, &run.sql, &request).await {
+            return tool_error(error);
+        }
+        match self
+            .bridge_request(|reply| McpRequest::RunTab { run, reply }, RUN_TAB_TIMEOUT)
             .await
         {
             Ok(result) => json_result(&result),
@@ -602,7 +696,7 @@ impl BlancoMcpServer {
 
     #[tool(
         name = "run_sql",
-        description = "Run a SQL statement (or Redis command) and return the result set as JSON. Uses the active tab's connection unless connection_id is given. Reads run at once and get a row limit appended when they have none. Statements that modify data may open a confirmation dialog in Blanco; PROD connections and DROP/TRUNCATE always do."
+        description = "Run a SQL statement (or Redis command) and return the result set as JSON. Uses the connection of your own tab (in a Blanco terminal pane) or the active tab unless connection_id is given. Reads run at once and get a row limit appended when they have none. Whether a statement that modifies data asks the user first is reported by the connection's `writes` field in `list_connections`; DROP and TRUNCATE always ask."
     )]
     async fn run_sql(
         &self,
@@ -610,7 +704,7 @@ impl BlancoMcpServer {
         request: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let connection = match self
-            .resolve_connection(params.connection_id, params.database, params.tab)
+            .resolve_connection(params.connection_id, params.database, params.tab, &request)
             .await
         {
             Ok(connection) => connection,
@@ -649,7 +743,7 @@ impl BlancoMcpServer {
         request: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let connection = match self
-            .resolve_connection(params.connection_id, params.database, params.tab)
+            .resolve_connection(params.connection_id, params.database, params.tab, &request)
             .await
         {
             Ok(connection) => connection,
@@ -684,9 +778,10 @@ impl BlancoMcpServer {
     async fn list_schemas(
         &self,
         Parameters(params): Parameters<ConnectionParams>,
+        request: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let connection = match self
-            .resolve_connection(params.connection_id, params.database, params.tab)
+            .resolve_connection(params.connection_id, params.database, params.tab, &request)
             .await
         {
             Ok(connection) => connection,
@@ -716,9 +811,10 @@ impl BlancoMcpServer {
     async fn list_tables(
         &self,
         Parameters(params): Parameters<SchemaScopedParams>,
+        request: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let connection = match self
-            .resolve_connection(params.connection_id, params.database, params.tab)
+            .resolve_connection(params.connection_id, params.database, params.tab, &request)
             .await
         {
             Ok(connection) => connection,
@@ -756,9 +852,10 @@ impl BlancoMcpServer {
     async fn describe_table(
         &self,
         Parameters(params): Parameters<TableParams>,
+        request: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let connection = match self
-            .resolve_connection(params.connection_id, params.database, params.tab)
+            .resolve_connection(params.connection_id, params.database, params.tab, &request)
             .await
         {
             Ok(connection) => connection,
@@ -796,9 +893,10 @@ impl BlancoMcpServer {
     async fn explore_schema(
         &self,
         Parameters(params): Parameters<ExploreSchemaParams>,
+        request: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let connection = match self
-            .resolve_connection(params.connection_id, params.database, params.tab)
+            .resolve_connection(params.connection_id, params.database, params.tab, &request)
             .await
         {
             Ok(connection) => connection,
@@ -833,9 +931,10 @@ impl BlancoMcpServer {
     async fn get_table_ddl(
         &self,
         Parameters(params): Parameters<TableParams>,
+        request: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let connection = match self
-            .resolve_connection(params.connection_id, params.database, params.tab)
+            .resolve_connection(params.connection_id, params.database, params.tab, &request)
             .await
         {
             Ok(connection) => connection,
