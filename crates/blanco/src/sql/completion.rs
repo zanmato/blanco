@@ -1,6 +1,7 @@
 mod cache;
 mod context;
 mod fetch;
+mod keywords;
 
 use blanco_core::{ColumnInfo, DatabaseType, FunctionSignatureInfo, QueryableEntity};
 pub use cache::{CacheEntry, MetadataCache};
@@ -54,13 +55,15 @@ fn default_schema_for(driver: DatabaseType, database_name: &str) -> String {
         .unwrap_or_else(|| database_name.to_string())
 }
 
-/// SQL keywords for completion and keyword detection
-const SQL_KEYWORDS: &[&str] = &[
-    "SELECT", "FROM", "WHERE", "INSERT", "UPDATE", "DELETE", "CREATE", "ALTER", "DROP", "TABLE",
-    "INDEX", "VIEW", "JOIN", "INNER", "LEFT", "RIGHT", "OUTER", "ON", "GROUP", "BY", "ORDER",
-    "HAVING", "LIMIT", "OFFSET", "AND", "OR", "NOT", "IN", "EXISTS", "BETWEEN", "LIKE", "IS",
-    "NULL", "TRUE", "FALSE", "ASC", "DESC", "DISTINCT", "COUNT", "SUM", "AVG", "MIN", "MAX",
-    "UNION", "ALL", "AS", "CASE", "WHEN", "THEN", "ELSE", "END",
+/// Reserved words, which `word.` never completes as a table name. Keywords
+/// only some backends reserve, such as `SETTINGS` or `OUTPUT`, are left out
+/// because they are ordinary table names elsewhere.
+const RESERVED_WORDS: &[&str] = &[
+    "SELECT", "FROM", "WHERE", "INSERT", "INTO", "VALUES", "UPDATE", "SET", "DELETE", "WITH",
+    "CREATE", "ALTER", "DROP", "TABLE", "INDEX", "VIEW", "JOIN", "INNER", "LEFT", "RIGHT", "CROSS",
+    "OUTER", "ON", "GROUP", "BY", "ORDER", "HAVING", "LIMIT", "OFFSET", "AND", "OR", "NOT", "IN",
+    "EXISTS", "BETWEEN", "LIKE", "IS", "NULL", "TRUE", "FALSE", "ASC", "DESC", "DISTINCT", "COUNT",
+    "SUM", "AVG", "MIN", "MAX", "UNION", "ALL", "AS", "CASE", "WHEN", "THEN", "ELSE", "END",
 ];
 
 /// A resolved table reference (schema-qualified) whose columns should be offered.
@@ -96,6 +99,9 @@ fn comment_documentation(comment: Option<&str>) -> Option<lsp_types::Documentati
 enum ItemGroup {
     /// Snippets whose trigger word is being typed.
     Snippet,
+    /// Keywords the cursor's place in the statement calls for, such as
+    /// `INTO` after `INSERT`.
+    ExpectedKeyword,
     JoinCondition,
     Column,
     /// CTEs and the tables of the current schema.
@@ -506,7 +512,7 @@ fn is_number_literal(word: &str) -> bool {
 }
 
 pub(crate) fn is_sql_keyword(word: &str) -> bool {
-    SQL_KEYWORDS.contains(&word.to_uppercase().as_str())
+    RESERVED_WORDS.contains(&word.to_uppercase().as_str())
 }
 
 /// Clauses where a table/relation name is expected.
@@ -996,19 +1002,8 @@ fn build_join_condition_items(
         .collect()
 }
 
-fn build_keyword_items(current_word: &str, range: Range) -> Vec<CompletionItem> {
-    let filtered: Vec<&str> = if current_word.is_empty() {
-        SQL_KEYWORDS.to_vec()
-    } else {
-        let needle = current_word.to_lowercase();
-        SQL_KEYWORDS
-            .iter()
-            .filter(|keyword| keyword.to_lowercase().starts_with(&needle))
-            .copied()
-            .collect()
-    };
-
-    filtered
+fn build_keyword_items(keywords: &[&str], range: Range) -> Vec<CompletionItem> {
+    keywords
         .iter()
         .map(|keyword| {
             let label = keyword.to_string();
@@ -1068,25 +1063,36 @@ fn rank_items(
         .collect()
 }
 
-/// Keyword items for a position where a name is expected. They follow the
-/// names, only once a word is being typed (an empty word would bury the names
-/// under every keyword), and not when a function item already offers the word.
-fn keyword_items_after_names(
+/// Keyword item groups for a position where names are offered too. The
+/// keywords the position expects come before the names. The rest follow them,
+/// only once a word is being typed (an empty word would bury the names under
+/// every keyword), and not when a function item already offers the word.
+fn keyword_groups_around_names(
+    expected: &[&str],
+    rest: &[&str],
     current_word: &str,
     range: Range,
     function_items: &[CompletionItem],
-) -> Vec<CompletionItem> {
-    if current_word.is_empty() {
-        return Vec::new();
-    }
-    build_keyword_items(current_word, range)
-        .into_iter()
-        .filter(|keyword| {
-            !function_items
-                .iter()
-                .any(|function| function.label.eq_ignore_ascii_case(&keyword.label))
-        })
-        .collect()
+) -> [(ItemGroup, Vec<CompletionItem>); 2] {
+    let rest = if current_word.is_empty() {
+        Vec::new()
+    } else {
+        build_keyword_items(rest, range)
+            .into_iter()
+            .filter(|keyword| {
+                !function_items
+                    .iter()
+                    .any(|function| function.label.eq_ignore_ascii_case(&keyword.label))
+            })
+            .collect()
+    };
+    [
+        (
+            ItemGroup::ExpectedKeyword,
+            build_keyword_items(expected, range),
+        ),
+        (ItemGroup::Keyword, rest),
+    ]
 }
 
 impl CompletionProvider for SqlCompletionProvider {
@@ -1142,6 +1148,11 @@ impl CompletionProvider for SqlCompletionProvider {
                         })
                     }
                 };
+
+                let text: String = rope_clone.chunks().collect();
+                let (expected_keywords, other_keywords) =
+                    keywords::KeywordPosition::at(&text, offset, &context.current_word)
+                        .ranked(provider.driver.dialect(), &context.current_word);
 
                 let plan = plan_completion(
                     &context,
@@ -1287,13 +1298,12 @@ impl CompletionProvider for SqlCompletionProvider {
                                 &context.current_word,
                                 range,
                             );
-                            groups.push((
-                                ItemGroup::Keyword,
-                                keyword_items_after_names(
-                                    &context.current_word,
-                                    range,
-                                    &function_items,
-                                ),
+                            groups.extend(keyword_groups_around_names(
+                                &expected_keywords,
+                                &other_keywords,
+                                &context.current_word,
+                                range,
+                                &function_items,
                             ));
                             groups.push((ItemGroup::Function, function_items));
                         }
@@ -1321,7 +1331,7 @@ impl CompletionProvider for SqlCompletionProvider {
                             .filter(|s| *s != &provider.current_schema)
                             .cloned()
                             .collect();
-                        vec![
+                        let mut groups = vec![
                             (
                                 ItemGroup::Relation,
                                 build_cte_items(&context.cte_names, &context.current_word, range),
@@ -1331,16 +1341,26 @@ impl CompletionProvider for SqlCompletionProvider {
                                 ItemGroup::Schema,
                                 build_schema_items(&other_schemas, &context.current_word, range),
                             ),
-                            (
-                                ItemGroup::Keyword,
-                                keyword_items_after_names(&context.current_word, range, &[]),
-                            ),
-                        ]
+                        ];
+                        groups.extend(keyword_groups_around_names(
+                            &expected_keywords,
+                            &other_keywords,
+                            &context.current_word,
+                            range,
+                            &[],
+                        ));
+                        groups
                     }
-                    CompletionPlan::Keywords => vec![(
-                        ItemGroup::Keyword,
-                        build_keyword_items(&context.current_word, range),
-                    )],
+                    CompletionPlan::Keywords => vec![
+                        (
+                            ItemGroup::ExpectedKeyword,
+                            build_keyword_items(&expected_keywords, range),
+                        ),
+                        (
+                            ItemGroup::Keyword,
+                            build_keyword_items(&other_keywords, range),
+                        ),
+                    ],
                     CompletionPlan::Nothing => Vec::new(),
                 };
 
@@ -2277,15 +2297,29 @@ mod tests {
     }
 
     #[test]
-    fn test_keywords_after_names_only_for_a_typed_word() {
-        assert!(keyword_items_after_names("", dummy_range(), &[]).is_empty());
-        let keywords = keyword_items_after_names("wh", dummy_range(), &[]);
-        assert_eq!(keywords.len(), 2);
-        assert!(keywords.iter().any(|item| item.label == "WHERE"));
-        // `count` is offered as a function, so the COUNT keyword is not.
-        let functions = build_function_items(DatabaseType::PostgreSQL, &[], "cou", dummy_range());
-        assert!(functions.iter().any(|item| item.label == "count"));
-        assert!(keyword_items_after_names("cou", dummy_range(), &functions).is_empty());
+    fn test_expected_keywords_lead_and_the_rest_wait_for_a_typed_word() {
+        let labels = |groups: &[(ItemGroup, Vec<CompletionItem>)], group: ItemGroup| {
+            groups
+                .iter()
+                .filter(|(item_group, _)| *item_group == group)
+                .flat_map(|(_, items)| items.iter().map(|item| item.label.clone()))
+                .collect::<Vec<String>>()
+        };
+
+        let groups = keyword_groups_around_names(&["SET"], &["WHERE"], "", dummy_range(), &[]);
+        assert_eq!(labels(&groups, ItemGroup::ExpectedKeyword), ["SET"]);
+        assert!(labels(&groups, ItemGroup::Keyword).is_empty());
+
+        let groups = keyword_groups_around_names(&[], &["WHERE", "WITH"], "w", dummy_range(), &[]);
+        assert_eq!(labels(&groups, ItemGroup::Keyword), ["WHERE", "WITH"]);
+
+        // A keyword a function item already offers is not offered again.
+        let exists = CompletionItem {
+            label: "exists".to_string(),
+            ..Default::default()
+        };
+        let groups = keyword_groups_around_names(&[], &["EXISTS"], "ex", dummy_range(), &[exists]);
+        assert!(labels(&groups, ItemGroup::Keyword).is_empty());
     }
 
     #[test]
@@ -2435,5 +2469,85 @@ mod tests {
         // A non-matching prefix filters it out.
         let none = build_join_condition_items(&aliases, &fetched, "public", "zzz", dummy_range());
         assert!(none.is_empty());
+    }
+
+    /// The labels the editor's provider offers at the end of `sql`, against
+    /// the harness's SQLite connection.
+    async fn offered_labels(sql: &str, cx: &mut gpui::TestAppContext) -> Vec<String> {
+        use futures::FutureExt as _;
+
+        let harness = crate::test_harness::TestHarness::new(cx);
+        let mut cx = gpui::VisualTestContext::from_window(harness.window_handle.into(), cx);
+        let provider = cx.update(|_, cx| {
+            SqlCompletionProvider::new(
+                harness.connection_id,
+                "main".to_string(),
+                None,
+                DatabaseType::SQLite,
+                Arc::new(database::DatabaseService::global(cx).clone()),
+                cx.background_executor().clone(),
+            )
+        });
+        let rope = Rope::from(sql);
+        let mut request = cx.update(|window, cx| {
+            provider.completions(
+                &rope,
+                sql.len(),
+                CompletionContext {
+                    trigger_kind: lsp_types::CompletionTriggerKind::INVOKED,
+                    trigger_character: None,
+                },
+                window,
+                cx,
+            )
+        });
+        for _ in 0..100 {
+            cx.run_until_parked();
+            if let Some(response) = (&mut request).now_or_never() {
+                let Ok(CompletionResponse::Array(items)) = response else {
+                    panic!("completion failed for {sql:?}");
+                };
+                return items.into_iter().map(|item| item.label).collect();
+            }
+            cx.executor().advance_clock(Duration::from_millis(100));
+            cx.executor().timer(Duration::from_millis(20)).await;
+        }
+        panic!("no completions for {sql:?}");
+    }
+
+    #[gpui::test]
+    async fn test_insert_offers_into_before_table_names(cx: &mut gpui::TestAppContext) {
+        let labels = offered_labels("INSERT ", cx).await;
+        assert_eq!(
+            labels.first().map(String::as_str),
+            Some("INTO"),
+            "{labels:?}"
+        );
+    }
+
+    #[gpui::test]
+    async fn test_delete_offers_from_first_and_keeps_the_rest(cx: &mut gpui::TestAppContext) {
+        let labels = offered_labels("DELETE ", cx).await;
+        assert_eq!(
+            labels.first().map(String::as_str),
+            Some("FROM"),
+            "{labels:?}"
+        );
+        assert!(labels.iter().any(|label| label == "WHERE"), "{labels:?}");
+        assert!(
+            labels.iter().any(|label| label == "RETURNING"),
+            "{labels:?}"
+        );
+        assert!(!labels.iter().any(|label| label == "TOP"), "{labels:?}");
+    }
+
+    #[gpui::test]
+    async fn test_update_table_offers_set_first(cx: &mut gpui::TestAppContext) {
+        let labels = offered_labels("UPDATE users ", cx).await;
+        assert_eq!(
+            labels.first().map(String::as_str),
+            Some("SET"),
+            "{labels:?}"
+        );
     }
 }

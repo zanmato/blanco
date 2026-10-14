@@ -200,6 +200,35 @@ impl Dialect {
         }
     }
 
+    /// Keywords completion offers only on the backends that understand them.
+    /// Every keyword not listed here is offered everywhere.
+    pub const BACKEND_KEYWORDS: &'static [&'static str] = &[
+        "LIMIT",
+        "RETURNING",
+        "TOP",
+        "OUTPUT",
+        "FINAL",
+        "SETTINGS",
+        "ILIKE",
+    ];
+
+    /// The entries of [`Self::BACKEND_KEYWORDS`] this backend understands.
+    pub fn backend_keywords(&self) -> &'static [&'static str] {
+        match self.0 {
+            DatabaseType::PostgreSQL => &["LIMIT", "RETURNING", "ILIKE"],
+            DatabaseType::SQLite => &["LIMIT", "RETURNING"],
+            DatabaseType::MySQL => &["LIMIT"],
+            DatabaseType::ClickHouse => &["LIMIT", "FINAL", "SETTINGS", "ILIKE"],
+            DatabaseType::MsSql => &["TOP", "OUTPUT"],
+            DatabaseType::Redis => &[],
+        }
+    }
+
+    /// Whether completion should offer `keyword` on this backend.
+    pub fn offers_keyword(&self, keyword: &str) -> bool {
+        !Self::BACKEND_KEYWORDS.contains(&keyword) || self.backend_keywords().contains(&keyword)
+    }
+
     /// Name of the registered editor language used for syntax highlighting.
     pub fn editor_language(&self) -> &'static str {
         match self.0 {

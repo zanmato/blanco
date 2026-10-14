@@ -48,6 +48,19 @@ slow connection. Requests join the running fetch, expired cache entries are serv
 a refresh runs behind them, a fetch is bounded by the query timeout setting, and a failed
 fetch caches nothing (`fetch.rs` returns errors, never an empty listing).
 
+## Keyword completion
+
+Keywords are ranked by `sql/completion/keywords.rs`, which reads the tokens
+before the cursor in the innermost parenthesized group rather than the
+tree-sitter tree (mostly ERROR nodes while typing): the last clause keyword,
+the statement verb, and whether an item was just finished. The keywords that
+position expects come first (`ItemGroup::ExpectedKeyword`, ahead of names),
+the rest follow, and clause keywords the statement already holds sink to the
+end. Keywords only some backends understand are listed in
+`Dialect::BACKEND_KEYWORDS` and offered where `Dialect::backend_keywords` has
+them. `is_sql_keyword` reads the separate `RESERVED_WORDS`, which leaves those
+backend keywords out so `settings.` still completes a table named `settings`.
+
 ## Binary and deferred values
 
 Result rows carry text, so the bytes of a binary column travel as `0x` plus
