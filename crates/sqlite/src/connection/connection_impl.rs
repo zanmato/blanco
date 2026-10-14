@@ -188,6 +188,22 @@ impl Connection for SqliteConnection {
         Ok(views)
     }
 
+    async fn get_database_sizes(&self) -> Result<std::collections::HashMap<String, u64>> {
+        // Page count times page size is the file's size, and also works for
+        // an in-memory or attached database.
+        let result = self
+            .execute_query(
+                "SELECT schema.name,
+                        (SELECT page_count FROM pragma_page_count(schema.name))
+                            * (SELECT page_size FROM pragma_page_size(schema.name))
+                 FROM pragma_database_list AS schema",
+                None,
+                None,
+            )
+            .await?;
+        Ok(blanco_core::sizes_from_rows(result.rows))
+    }
+
     async fn get_object_sizes(
         &self,
         schema: Option<&str>,

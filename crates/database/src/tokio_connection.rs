@@ -329,6 +329,12 @@ impl Connection for TokioConnection {
             .await
     }
 
+    async fn get_database_sizes(&self) -> Result<std::collections::HashMap<String, u64>> {
+        let inner = Arc::clone(&self.inner);
+        self.run(async move { inner.get_database_sizes().await })
+            .await
+    }
+
     async fn get_object_comments(
         &self,
         schema: Option<&str>,

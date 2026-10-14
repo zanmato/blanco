@@ -628,6 +628,33 @@ impl Connection for MysqlConnection {
         Ok(sizes)
     }
 
+    async fn get_database_sizes(
+        &self,
+    ) -> Result<std::collections::HashMap<String, u64>, anyhow::Error> {
+        let database = self
+            .initial_database
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No database specified"))?;
+        let pool = self.get_or_create_pool(database).await?;
+        // The sidebar lists only the connection's database, and reading
+        // information_schema.TABLES for every schema opens every table on
+        // older servers. CAST for the same reason as in get_object_sizes.
+        let size: i64 = sqlx::query_scalar(
+            "SELECT CAST(COALESCE(SUM(COALESCE(DATA_LENGTH, 0) + COALESCE(INDEX_LENGTH, 0)), 0)
+                        AS SIGNED)
+             FROM information_schema.TABLES
+             WHERE TABLE_SCHEMA = ?",
+        )
+        .bind(database)
+        .fetch_one(&pool)
+        .await?;
+        Ok(u64::try_from(size)
+            .ok()
+            .map(|size| (database.clone(), size))
+            .into_iter()
+            .collect())
+    }
+
     async fn object_ddl(
         &self,
         kind: RoutineKind,

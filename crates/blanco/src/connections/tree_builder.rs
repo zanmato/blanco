@@ -29,6 +29,8 @@ impl ConnectionsPanel {
         let connection_id = connection.id.unwrap_or(0);
 
         let db_type = connection.db_type;
+        let metadata = self.database_metadata.get(&connection_id);
+        let size_bytes = metadata.and_then(|metadata| metadata.size_bytes);
 
         let connection_metadata = TreeItemMetadata {
             connection_id,
@@ -41,8 +43,8 @@ impl ConnectionsPanel {
             icon: self.get_connection_icon(connection_id, db_type, cx),
             environment_type: Some(connection.environment_type),
             loading: false,
-            size_bytes: None,
-            relative_size: None,
+            size_bytes,
+            relative_size: size_bytes.and_then(|size| self.relative_connection_size(size)),
             comment: None,
             child_tables: None,
         };
@@ -59,7 +61,7 @@ impl ConnectionsPanel {
         )
         .expanded(should_expand);
 
-        let Some(metadata) = self.database_metadata.get(&connection_id) else {
+        let Some(metadata) = metadata else {
             return base_item;
         };
 
@@ -94,8 +96,8 @@ impl ConnectionsPanel {
                         },
                         environment_type: Some(connection.environment_type),
                         loading: false,
-                        size_bytes: None,
-                        relative_size: None,
+                        size_bytes: database.size_bytes,
+                        relative_size: database.relative_size,
                         comment: None,
                         child_tables: None,
                     };
@@ -227,6 +229,18 @@ impl ConnectionsPanel {
             );
             base_item.children(category_items)
         }
+    }
+
+    /// A connection node's size relative to the largest of the loaded
+    /// connections that show one, which are those without database nodes.
+    fn relative_connection_size(&self, size: u64) -> Option<f32> {
+        let largest = self
+            .database_metadata
+            .values()
+            .filter_map(|metadata| metadata.size_bytes)
+            .max()
+            .filter(|largest| *largest > 0)?;
+        Some((size as f64 / largest as f64) as f32)
     }
 
     /// Group leaf object items into per-type category folders (Tables, Views,

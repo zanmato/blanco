@@ -378,6 +378,30 @@ mod tests {
         Ok(())
     }
 
+    /// The main schema reports the size of the database file.
+    #[tokio::test]
+    async fn test_database_size_matches_the_file() -> Result<(), Box<dyn std::error::Error>> {
+        let temp_file = NamedTempFile::new()?;
+        let path = temp_file.path().to_string_lossy().to_string();
+        let connection_string = format!("sqlite:{}", path);
+
+        let mut connection = crate::SqliteConnection::new(connection_string.clone())?;
+        connection.connect(&connection_string).await?;
+        connection
+            .execute_script(
+                "CREATE TABLE t (value BLOB); INSERT INTO t VALUES (zeroblob(100000));",
+                None,
+            )
+            .await?;
+
+        let sizes = connection.get_database_sizes().await?;
+        let file_size = std::fs::metadata(temp_file.path())?.len();
+        assert!(file_size > 100_000);
+        assert_eq!(sizes.get("main").copied(), Some(file_size));
+
+        Ok(())
+    }
+
     #[tokio::test]
     async fn foreign_key_lookup_quotes_identifiers_and_escapes_values()
     -> Result<(), Box<dyn std::error::Error>> {

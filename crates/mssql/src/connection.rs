@@ -897,6 +897,22 @@ impl Connection for MssqlConnection {
         Ok(Vec::new())
     }
 
+    async fn get_database_sizes(&self) -> Result<std::collections::HashMap<String, u64>> {
+        // sys.master_files shows a database's files only to a login with
+        // VIEW ANY DEFINITION (or CREATE/ALTER ANY DATABASE), so the others
+        // get no size. size counts 8 KB pages, data and log files together.
+        let result = self
+            .execute_query(
+                "SELECT DB_NAME(database_id), SUM(CAST(size AS bigint)) * 8192
+                 FROM sys.master_files
+                 GROUP BY database_id",
+                self.initial_database.as_deref(),
+                None,
+            )
+            .await?;
+        Ok(blanco_core::sizes_from_rows(result.rows))
+    }
+
     async fn get_object_comments(
         &self,
         schema: Option<&str>,

@@ -438,6 +438,23 @@ impl Connection for PostgresConnection {
         Ok(sizes)
     }
 
+    async fn get_database_sizes(&self) -> Result<std::collections::HashMap<String, u64>> {
+        // pg_database_size raises an error for a database the user may not
+        // CONNECT to, which would fail the whole listing, so those get NULL.
+        let query = "
+            SELECT datname,
+                   CASE WHEN has_database_privilege(datname, 'CONNECT')
+                        THEN pg_database_size(datname)
+                   END
+            FROM pg_database
+            WHERE datistemplate = false
+        ";
+        let result = self
+            .execute_query(query, self.initial_database.as_deref(), None)
+            .await?;
+        Ok(blanco_core::sizes_from_rows(result.rows))
+    }
+
     async fn get_object_comments(
         &self,
         schema: Option<&str>,

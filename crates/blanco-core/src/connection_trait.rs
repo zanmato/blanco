@@ -562,6 +562,20 @@ impl QueryResult {
     }
 }
 
+/// Reads rows of a name and a byte count, as size queries return them. A row
+/// whose size is NULL or negative, such as a database the user may not read
+/// the size of, is left out.
+pub fn sizes_from_rows(rows: Vec<Vec<Option<String>>>) -> std::collections::HashMap<String, u64> {
+    rows.into_iter()
+        .filter_map(|row| {
+            let mut cells = row.into_iter();
+            let name = cells.next().flatten()?;
+            let size = cells.next().flatten()?.parse::<u64>().ok()?;
+            Some((name, size))
+        })
+        .collect()
+}
+
 /// Core trait that defines the interface for all database connections
 /// This trait provides a unified interface for SQLite, PostgreSQL, and future database types
 #[async_trait]
@@ -765,6 +779,17 @@ pub trait Connection: Send + Sync {
     async fn get_object_sizes(
         &self,
         _schema: Option<&str>,
+    ) -> Result<std::collections::HashMap<String, u64>, anyhow::Error> {
+        Ok(std::collections::HashMap::new())
+    }
+
+    /// Return the size in bytes of each database the sidebar lists at the top
+    /// of a connection, keyed by name: the names `get_databases` returns when
+    /// the backend `supports_schemas`, else the names `get_schemas` returns.
+    /// A database whose size the user may not read is left out. Defaults to
+    /// empty; drivers that can report storage size should override.
+    async fn get_database_sizes(
+        &self,
     ) -> Result<std::collections::HashMap<String, u64>, anyhow::Error> {
         Ok(std::collections::HashMap::new())
     }
@@ -1006,7 +1031,24 @@ pub trait ConnectionFactory: Send + Sync {
 
 #[cfg(test)]
 mod tests {
-    use super::{ColumnInfo, ForeignKeyConstraint, ForeignKeyInfo, QueryTiming, StatementTimer};
+    use super::{
+        ColumnInfo, ForeignKeyConstraint, ForeignKeyInfo, QueryTiming, StatementTimer,
+        sizes_from_rows,
+    };
+
+    #[test]
+    fn sizes_from_rows_skips_rows_without_a_size() {
+        let sizes = sizes_from_rows(vec![
+            vec![Some("app".to_string()), Some("8192".to_string())],
+            vec![Some("locked".to_string()), None],
+            vec![Some("odd".to_string()), Some("-1".to_string())],
+            vec![None, Some("10".to_string())],
+        ]);
+        assert_eq!(
+            sizes,
+            std::collections::HashMap::from([("app".to_string(), 8192)])
+        );
+    }
     use std::time::{Duration, Instant};
 
     #[test]

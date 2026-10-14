@@ -217,6 +217,25 @@ impl Connection for ClickhouseConnection {
             .collect())
     }
 
+    async fn get_database_sizes(&self) -> Result<std::collections::HashMap<String, u64>> {
+        // Joined onto system.databases so a database without parts (views,
+        // Memory tables) reports zero rather than nothing.
+        let tsv = self
+            .raw_query_tsv(
+                "SELECT d.name, p.bytes
+                 FROM system.databases AS d
+                 LEFT JOIN (
+                     SELECT database, sum(bytes_on_disk) AS bytes
+                     FROM system.parts
+                     WHERE active
+                     GROUP BY database
+                 ) AS p ON p.database = d.name",
+                None,
+            )
+            .await?;
+        Ok(blanco_core::sizes_from_rows(tsv.rows))
+    }
+
     async fn get_object_comments(
         &self,
         schema: Option<&str>,

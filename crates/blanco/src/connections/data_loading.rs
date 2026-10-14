@@ -89,6 +89,11 @@ pub struct Database {
     pub name: String,
     pub schemas: Vec<DatabaseSchema>,
     pub is_expanded: bool,
+    /// Size in bytes, fetched after the database list is shown. `None` until
+    /// then, and for a database the user may not read the size of.
+    pub size_bytes: Option<u64>,
+    /// Size relative to the largest database on the connection.
+    pub relative_size: Option<f32>,
 }
 
 /// Metadata about a database's schemas and tables
@@ -98,6 +103,39 @@ pub struct DatabaseMetadata {
     pub databases: Vec<Database>, // For PostgreSQL: database -> schema -> table
     pub schemas: Vec<DatabaseSchema>, // For SQLite: direct schema -> table
     pub supports_schemas: bool,
+    /// Size in bytes of the schemas of a backend without database nodes,
+    /// shown on the connection node.
+    pub size_bytes: Option<u64>,
+}
+
+impl DatabaseMetadata {
+    /// Puts sizes keyed by database name on the database nodes, or for a
+    /// backend without them, the total of its schemas on the connection.
+    pub(super) fn apply_database_sizes(&mut self, sizes: &std::collections::HashMap<String, u64>) {
+        if self.supports_schemas {
+            for database in &mut self.databases {
+                database.size_bytes = sizes.get(&database.name).copied();
+            }
+            let largest = self
+                .databases
+                .iter()
+                .filter_map(|database| database.size_bytes)
+                .max()
+                .unwrap_or(0);
+            for database in &mut self.databases {
+                database.relative_size = database
+                    .size_bytes
+                    .filter(|_| largest > 0)
+                    .map(|size| (size as f64 / largest as f64) as f32);
+            }
+        } else {
+            self.size_bytes = self
+                .schemas
+                .iter()
+                .filter_map(|schema| sizes.get(&schema.name).copied())
+                .reduce(|total, size| total + size);
+        }
+    }
 }
 
 impl ConnectionsPanel {
@@ -174,10 +212,13 @@ impl ConnectionsPanel {
                                 name: db_name,
                                 schemas: Vec::new(), // Will be loaded lazily
                                 is_expanded: false,
+                                size_bytes: None,
+                                relative_size: None,
                             })
                             .collect(),
                         schemas: Vec::new(), // Not used for PostgreSQL
                         supports_schemas,
+                        size_bytes: None,
                     })
                 } else {
                     // For SQLite: Load schemas and their tables (no databases level)
@@ -275,6 +316,7 @@ impl ConnectionsPanel {
                             })
                             .collect(),
                         supports_schemas,
+                        size_bytes: None,
                     })
                 }
             }
@@ -299,6 +341,7 @@ impl ConnectionsPanel {
                             this.update_tree_items(cx);
 
                             cx.notify();
+                            this.load_database_sizes(connection_id, cx);
                         })
                         .log_err();
                 }
@@ -329,6 +372,40 @@ impl ConnectionsPanel {
                         .log_err();
                 }
             }
+        })
+        .detach();
+    }
+
+    /// Fetch database sizes once the tree shows the databases, since summing
+    /// them can be slow on a large server. A failure leaves the sizes out.
+    fn load_database_sizes(&mut self, connection_id: i64, cx: &mut Context<Self>) {
+        let db_service = DatabaseService::global(cx).clone();
+        cx.spawn(async move |this_handle, cx| {
+            let sizes = async {
+                db_service
+                    .get_or_create_connection(connection_id, None)
+                    .await?
+                    .get_database_sizes()
+                    .await
+            }
+            .await;
+            let sizes = match sizes {
+                Ok(sizes) => sizes,
+                Err(error) => {
+                    tracing::debug!("No database sizes for connection {connection_id}: {error:#}");
+                    return;
+                }
+            };
+            this_handle
+                .update(cx, |this, cx| {
+                    let Some(metadata) = this.database_metadata.get_mut(&connection_id) else {
+                        return;
+                    };
+                    metadata.apply_database_sizes(&sizes);
+                    this.update_tree_items(cx);
+                    cx.notify();
+                })
+                .log_err();
         })
         .detach();
     }
@@ -581,5 +658,80 @@ impl ConnectionsPanel {
             }
         })
         .detach();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn database(name: &str) -> Database {
+        Database {
+            name: name.to_string(),
+            schemas: Vec::new(),
+            is_expanded: false,
+            size_bytes: None,
+            relative_size: None,
+        }
+    }
+
+    fn schema(name: &str) -> DatabaseSchema {
+        DatabaseSchema {
+            name: name.to_string(),
+            tables: Vec::new(),
+            is_expanded: false,
+        }
+    }
+
+    fn metadata(supports_schemas: bool) -> DatabaseMetadata {
+        DatabaseMetadata {
+            _connection_id: Some(1),
+            databases: Vec::new(),
+            schemas: Vec::new(),
+            supports_schemas,
+            size_bytes: None,
+        }
+    }
+
+    #[test]
+    fn database_sizes_are_relative_to_the_largest_database() {
+        let mut metadata = metadata(true);
+        metadata.databases = vec![database("big"), database("small"), database("locked")];
+        let sizes = HashMap::from([("big".to_string(), 400), ("small".to_string(), 100)]);
+
+        metadata.apply_database_sizes(&sizes);
+
+        let sizes: Vec<(Option<u64>, Option<f32>)> = metadata
+            .databases
+            .iter()
+            .map(|database| (database.size_bytes, database.relative_size))
+            .collect();
+        assert_eq!(
+            sizes,
+            vec![
+                (Some(400), Some(1.0)),
+                (Some(100), Some(0.25)),
+                (None, None)
+            ]
+        );
+        assert_eq!(metadata.size_bytes, None);
+    }
+
+    #[test]
+    fn a_backend_without_database_nodes_totals_its_schemas_on_the_connection() {
+        let mut metadata = metadata(false);
+        metadata.schemas = vec![schema("main"), schema("other")];
+        let sizes = HashMap::from([
+            ("main".to_string(), 300),
+            ("other".to_string(), 200),
+            ("unlisted".to_string(), 1000),
+        ]);
+
+        metadata.apply_database_sizes(&sizes);
+        assert_eq!(metadata.size_bytes, Some(500));
+
+        metadata.apply_database_sizes(&HashMap::new());
+        assert_eq!(metadata.size_bytes, None);
     }
 }

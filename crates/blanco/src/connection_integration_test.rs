@@ -919,6 +919,120 @@ fn test_statement_timing_against_every_backend() {
     }
 }
 
+/// Every driver reports the size of the database the connection is on, keyed
+/// by the name the sidebar lists it under.
+#[test]
+fn test_database_sizes_against_every_backend() {
+    use database::ConnectionConfig;
+
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let sqlite_path = temp_dir
+        .path()
+        .join("sizes.db")
+        .to_string_lossy()
+        .to_string();
+
+    let server = |case: &DriverCase, id: i64| {
+        ConnectionConfig::new(
+            id,
+            case.name.to_string(),
+            case.db_type,
+            case.host.clone(),
+            case.port.parse().expect("port"),
+            case.database.clone(),
+            case.username.clone(),
+            Some(case.password.clone()),
+        )
+    };
+    let postgres = postgres_case();
+    let mysql = mysql_case();
+    let clickhouse = clickhouse_case();
+    let mssql = mssql_case();
+    // Each connection, the name its database's size is under, and a table to
+    // create first where the database may be empty. ClickHouse's database may
+    // hold no parts, so only its presence is checked there.
+    let cases = vec![
+        (
+            "SQLite",
+            ConnectionConfig::new_sqlite(9121, "sizes-sqlite".to_string(), sqlite_path),
+            "main".to_string(),
+            Some(("CREATE TABLE blanco_size (id INTEGER)", None)),
+            true,
+        ),
+        (
+            postgres.label,
+            server(&postgres, 9122),
+            postgres.database.clone(),
+            None,
+            true,
+        ),
+        (
+            mysql.label,
+            server(&mysql, 9123),
+            mysql.database.clone(),
+            Some((
+                "CREATE TABLE IF NOT EXISTS blanco_size (id integer)",
+                Some("DROP TABLE blanco_size"),
+            )),
+            true,
+        ),
+        (
+            clickhouse.label,
+            server(&clickhouse, 9124),
+            clickhouse.database.clone(),
+            None,
+            false,
+        ),
+        (
+            mssql.label,
+            server(&mssql, 9125).with_trust_server_certificate(true),
+            mssql.database.clone(),
+            None,
+            true,
+        ),
+    ];
+
+    let service = DatabaseService::new(runtime.handle().clone());
+    for (label, config, database, scratch_table, has_data) in cases {
+        let sizes = runtime.block_on(async {
+            service.add_connection_config(config.clone()).await;
+            let connection = service.get_or_create_connection(config.id, None).await?;
+            connection.ping().await?;
+            let Some((create, drop)) = scratch_table else {
+                return connection.get_database_sizes().await;
+            };
+            connection
+                .execute_query(create, Some(&database), None)
+                .await?;
+            let sizes = connection.get_database_sizes().await;
+            if let Some(drop) = drop {
+                connection
+                    .execute_query(drop, Some(&database), None)
+                    .await?;
+            }
+            sizes
+        });
+        let sizes = match sizes {
+            Ok(sizes) => sizes,
+            Err(error) if strict() => panic!("{label}: {error:#}"),
+            Err(error) => {
+                eprintln!(
+                    "skip {label}: server unreachable ({error:#}). Set BLANCO_RUN_DB_TESTS=1 to require."
+                );
+                continue;
+            }
+        };
+        let size = sizes
+            .get(&database)
+            .copied()
+            .unwrap_or_else(|| panic!("{label}: no size for {database} in {sizes:?}"));
+        if has_data {
+            assert!(size > 0, "{label}: {database} should take space");
+        }
+    }
+}
+
 /// The sqlx pools hand out a connection without pinging it first, so a
 /// connection the server dropped while idle fails one query. That failure must
 /// count as a lost connection, so the service evicts it and the next run
