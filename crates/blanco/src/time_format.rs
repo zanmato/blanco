@@ -25,6 +25,23 @@ pub fn format_duration(duration_us: i64) -> String {
     }
 }
 
+pub fn format_elapsed(duration: std::time::Duration) -> String {
+    format_duration(duration.as_micros() as i64)
+}
+
+/// "execution 12ms · fetch 340ms", or the execution time alone for a
+/// statement that returned no rows.
+pub fn format_timing(timing: &blanco_core::QueryTiming) -> String {
+    match timing.fetch {
+        Some(fetch) => format!(
+            "execution {} · fetch {}",
+            format_elapsed(timing.execution),
+            format_elapsed(fetch)
+        ),
+        None => format!("execution {}", format_elapsed(timing.execution)),
+    }
+}
+
 pub fn format_timestamp(timestamp: DateTime<Utc>) -> String {
     timestamp.format("%Y-%m-%d %H:%M:%S").to_string()
 }

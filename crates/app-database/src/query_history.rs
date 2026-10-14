@@ -15,9 +15,9 @@ impl AppDatabase {
                 INSERT INTO query_history (
                     query_text, executed_at, duration_ms, rows_affected,
                     row_count, success, error_message, connection_id,
-                    connection_name, database_name
+                    connection_name, database_name, execution_us, fetch_us
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 "#,
             )
             .bind(&entry.query_text)
@@ -30,6 +30,8 @@ impl AppDatabase {
             .bind(entry.connection_id)
             .bind(&entry.connection_name)
             .bind(&entry.database_name)
+            .bind(entry.execution_us)
+            .bind(entry.fetch_us)
             .execute(&pool)
             .await?;
 
@@ -58,7 +60,7 @@ impl AppDatabase {
                     r#"
                     SELECT id, query_text, executed_at, duration_ms, rows_affected,
                            row_count, success, error_message, connection_id,
-                           connection_name, database_name
+                           connection_name, database_name, execution_us, fetch_us
                     FROM query_history
                     WHERE query_text LIKE ? ESCAPE '\'
                     ORDER BY executed_at DESC, id DESC
@@ -74,7 +76,7 @@ impl AppDatabase {
                     r#"
                     SELECT id, query_text, executed_at, duration_ms, rows_affected,
                            row_count, success, error_message, connection_id,
-                           connection_name, database_name
+                           connection_name, database_name, execution_us, fetch_us
                     FROM query_history
                     ORDER BY executed_at DESC, id DESC
                     LIMIT ?
@@ -99,6 +101,8 @@ impl AppDatabase {
                     connection_id: row.get(8),
                     connection_name: row.get(9),
                     database_name: row.get(10),
+                    execution_us: row.get(11),
+                    fetch_us: row.get(12),
                 })
                 .collect();
 

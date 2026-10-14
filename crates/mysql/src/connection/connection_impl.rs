@@ -1,8 +1,9 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use blanco_core::{
-    ColumnInfo, Connection, FunctionSignatureInfo, QueryResult, connection_trait::ColumnType,
-    connection_trait::ForeignKeyInfo, connection_trait::IndexInfo, connection_trait::RoutineKind,
+    ColumnInfo, Connection, FunctionSignatureInfo, QueryResult, QueryTiming, StatementTimer,
+    connection_trait::ColumnType, connection_trait::ForeignKeyInfo, connection_trait::IndexInfo,
+    connection_trait::RoutineKind,
 };
 use futures::{Stream, StreamExt};
 use sqlx::{Column, Executor, Row};
@@ -92,8 +93,10 @@ impl Connection for MysqlConnection {
             .ok_or_else(|| anyhow::anyhow!("No database specified"))?;
 
         let pool = self.get_or_create_pool(database).await?;
-
-        let start_time = std::time::Instant::now();
+        // Taken before the timer starts, so opening a connection does not
+        // count as execution.
+        let mut connection = pool.acquire().await.map_err(blanco_core::tag_sqlx)?;
+        let mut timer = StatementTimer::start();
 
         // Build query: use raw_sql for no parameters, otherwise bind parameters
         let sql_query = match parameters {
@@ -103,9 +106,9 @@ impl Connection for MysqlConnection {
                     q = q.bind(param);
                 }
                 #[allow(deprecated)]
-                q.fetch_many(&pool)
+                q.fetch_many(&mut *connection)
             }
-            _ => sqlx::raw_sql(query).fetch_many(&pool),
+            _ => sqlx::raw_sql(query).fetch_many(&mut *connection),
         };
 
         // Use fetch_many to handle both row-returning and row-affecting queries
@@ -124,6 +127,7 @@ impl Connection for MysqlConnection {
                     rows_affected += execution_result.rows_affected();
                 }
                 Either::Right(row) => {
+                    timer.row();
                     // Extract column info from the first row
                     if columns.is_empty() {
                         columns = row
@@ -163,7 +167,7 @@ impl Connection for MysqlConnection {
             }
         }
 
-        let execution_time = start_time.elapsed().as_millis() as i64;
+        let timing = timer.finish();
 
         Ok(QueryResult {
             columns,
@@ -171,7 +175,7 @@ impl Connection for MysqlConnection {
             rows,
             rows_affected,
             query_text: Some(query.to_string()),
-            execution_time_ms: Some(execution_time),
+            timing: Some(timing),
             is_error: false,
             table_name: None,
             connection_id: None,
@@ -190,7 +194,11 @@ impl Connection for MysqlConnection {
             .or(self.initial_database.as_deref())
             .ok_or_else(|| anyhow::anyhow!("No database specified"))?;
         let pool = self.get_or_create_pool(database).await?;
-        let mut results = sqlx::raw_sql(query).fetch_many(&pool);
+        // Taken before the timer starts, so opening a connection does not
+        // count as execution.
+        let mut connection = pool.acquire().await.map_err(blanco_core::tag_sqlx)?;
+        let mut timer = StatementTimer::start();
+        let mut results = sqlx::raw_sql(query).fetch_many(&mut *connection);
 
         let mut out: Vec<QueryResult> = Vec::new();
         let mut current: Option<MysqlStmtAcc> = None;
@@ -200,9 +208,10 @@ impl Connection for MysqlConnection {
                 Either::Left(exec) => {
                     let mut acc = current.take().unwrap_or_default();
                     acc.rows_affected += exec.rows_affected();
-                    out.push(acc.finalize());
+                    out.push(acc.finalize(timer.finish_and_restart()));
                 }
                 Either::Right(row) => {
+                    timer.row();
                     let acc = current.get_or_insert_with(MysqlStmtAcc::default);
                     acc.absorb_row(&row, self);
                 }
@@ -210,7 +219,7 @@ impl Connection for MysqlConnection {
         }
 
         if let Some(acc) = current.take() {
-            out.push(acc.finalize());
+            out.push(acc.finalize(timer.finish()));
         }
 
         Ok(out)
@@ -1056,14 +1065,14 @@ impl MysqlStmtAcc {
         self.rows.push(row_data);
     }
 
-    fn finalize(self) -> QueryResult {
+    fn finalize(self, timing: QueryTiming) -> QueryResult {
         QueryResult {
             columns: self.columns,
             column_types: self.column_types,
             rows: self.rows,
             rows_affected: self.rows_affected,
             query_text: None,
-            execution_time_ms: None,
+            timing: Some(timing),
             is_error: false,
             table_name: None,
             connection_id: None,

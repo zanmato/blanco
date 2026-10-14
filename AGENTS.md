@@ -74,6 +74,23 @@ do not disturb them. Any handler that needs a value starts with
 handler again. A new handler that reads `delegate.rows` to write or copy must
 do the same, or it will use previews.
 
+## Query timing
+
+`QueryResult::timing` is measured by each driver around its own row loop with
+`blanco_core::StatementTimer`: execution runs until the first row (or the end of
+a statement without rows), fetch from the first row to the last. sqlx drivers
+acquire their connection before starting the timer, so connecting is not
+counted, and a script restarts the timer at every statement boundary. The
+Postgres and MySQL pools set `test_before_acquire(false)`: sqlx's ping on
+checkout cost a round trip per query that showed up as a gap between the total
+and the split. A connection the server dropped fails one query instead, which
+`note_possible_disconnect` evicts (`test_dropped_pool_connection_reconnects_on_next_run`). SQL Server
+walks tiberius' item stream (`timed_results`) instead of `into_results`, and
+ClickHouse counts the first HTTP body chunk as the first row. The run's SQL log
+comment shows the split after the total, and query history stores it in
+`execution_us`/`fetch_us` next to the whole run's `duration_ms`. A new driver
+path that builds a `QueryResult` from a server query should fill `timing`.
+
 ## SQL log selection
 
 `blanco_ui::SqlView` entries are `SelectableLogEntry` elements that register with

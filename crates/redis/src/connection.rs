@@ -1,6 +1,6 @@
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
-use blanco_core::{Connection, KeyValueResult, QueryResult, RedisType, RedisValue};
+use blanco_core::{Connection, KeyValueResult, QueryResult, RedisType, RedisValue, StatementTimer};
 use fred::prelude::*;
 use fred::types::{ClusterHash, CustomCommand};
 
@@ -251,8 +251,14 @@ impl Connection for RedisConnection {
         _database_name: Option<&str>,
         _parameters: Option<&[String]>,
     ) -> Result<QueryResult> {
+        let timer = StatementTimer::start();
         let reply = self.run_line(query).await?;
-        Ok(reply_to_query_result(query.trim(), reply))
+        // A reply arrives whole, so there is no separate fetch to report.
+        let timing = timer.finish();
+        Ok(QueryResult {
+            timing: Some(timing),
+            ..reply_to_query_result(query.trim(), reply)
+        })
     }
 
     async fn execute_script(
@@ -266,8 +272,13 @@ impl Connection for RedisConnection {
             if line.is_empty() {
                 continue;
             }
+            let timer = StatementTimer::start();
             let reply = self.run_line(line).await?;
-            results.push(reply_to_query_result(line, reply));
+            let timing = timer.finish();
+            results.push(QueryResult {
+                timing: Some(timing),
+                ..reply_to_query_result(line, reply)
+            });
         }
         if results.is_empty() {
             return Err(anyhow!("no command to run"));

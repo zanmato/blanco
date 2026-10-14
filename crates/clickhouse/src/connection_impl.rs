@@ -1,7 +1,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use blanco_core::{
-    ColumnInfo, Connection, QueryResult,
+    ColumnInfo, Connection, QueryResult, QueryTiming,
     connection_trait::{
         ColumnType, DatabaseSchemaResult, EntityType, IndexInfo, PaginationInfo, QueryableEntity,
         TableSchemaInfo,
@@ -48,7 +48,6 @@ impl Connection for ClickhouseConnection {
         database_name: Option<&str>,
         _parameters: Option<&[String]>,
     ) -> Result<QueryResult> {
-        let start = Instant::now();
         let db = database_name.or(Some(self.database.as_str()));
 
         let trimmed = query.trim().to_uppercase();
@@ -66,15 +65,20 @@ impl Connection for ClickhouseConnection {
             || trimmed.starts_with("KILL");
 
         if is_write {
-            let body = self.raw_query(query, db).await?;
+            let (body, timer) = self.raw_query_timed(query, db).await?;
             let rows_affected = parse_rows_affected(&body);
+            let timing = timer.finish();
             return Ok(QueryResult {
                 columns: vec![],
                 column_types: vec![],
                 rows: vec![],
                 rows_affected,
                 query_text: Some(query.to_string()),
-                execution_time_ms: Some(start.elapsed().as_millis() as i64),
+                // A write returns no rows, only a summary.
+                timing: Some(QueryTiming {
+                    execution: timing.total(),
+                    fetch: None,
+                }),
                 is_error: false,
                 table_name: None,
                 connection_id: None,
@@ -82,7 +86,7 @@ impl Connection for ClickhouseConnection {
             });
         }
 
-        let tsv = self.raw_query_tsv(query, db).await?;
+        let (tsv, timing) = self.raw_query_tsv_timed(query, db).await?;
         let column_types: Vec<ColumnType> = tsv
             .column_types
             .iter()
@@ -95,7 +99,7 @@ impl Connection for ClickhouseConnection {
             rows: tsv.rows,
             rows_affected: 0,
             query_text: Some(query.to_string()),
-            execution_time_ms: Some(start.elapsed().as_millis() as i64),
+            timing: Some(timing),
             is_error: false,
             table_name: None,
             connection_id: None,

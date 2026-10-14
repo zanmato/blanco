@@ -225,6 +225,11 @@ impl MysqlConnection {
         let connection_string = self.generate_database_connection_string(database_name);
         let pool = MySqlPoolOptions::new()
             .max_connections(5)
+            // sqlx pings a pooled connection before handing it out, which
+            // costs a full round trip on every query to a remote server. A
+            // connection the server dropped fails its query instead, and
+            // `note_possible_disconnect` evicts it so the next run reconnects.
+            .test_before_acquire(false)
             // Bound how long acquiring (and therefore establishing) a connection
             // may take so an unreachable host fails fast instead of hanging.
             .acquire_timeout(blanco_core::connect_timeout())

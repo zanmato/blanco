@@ -450,6 +450,8 @@ async fn test_prune_query_history_keeps_newest(cx: &mut TestAppContext) {
         query_text: query.to_string(),
         executed_at: ts,
         duration_ms: Some(1),
+        execution_us: Some(400),
+        fetch_us: None,
         rows_affected: Some(0),
         row_count: Some(0),
         success: true,
@@ -510,6 +512,60 @@ async fn test_history_search_filters_entries(cx: &mut TestAppContext) {
 
     assert_eq!(matches.len(), 1, "only the banana query should match");
     assert!(matches[0].query_text.contains("banana"));
+}
+
+/// A run logs the driver's execution and fetch times and keeps them in the
+/// history, and a statement without rows has no fetch time.
+#[gpui::test]
+async fn test_run_keeps_execution_and_fetch_time(cx: &mut TestAppContext) {
+    use app_database::AppDatabase;
+
+    let harness = TestHarness::new(cx);
+    let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+
+    set_editor_text(&harness, "SELECT 1 AS apple", &mut cx);
+    run_query(&harness, &mut cx);
+    wait_for_query(&harness, &mut cx).await;
+
+    set_editor_text(&harness, "CREATE TABLE timed (id INTEGER)", &mut cx);
+    run_query(&harness, &mut cx);
+    wait_for_query(&harness, &mut cx).await;
+
+    let log = harness.editor_panel.read_with(&cx, |panel, cx| {
+        panel
+            .active_query_tab()
+            .map(|tab| tab.sql_view.read(cx).all_text())
+            .unwrap_or_default()
+    });
+    let summaries: Vec<&str> = log
+        .lines()
+        .filter(|line| line.contains(" rows in "))
+        .collect();
+    let [select, create] = summaries.as_slice() else {
+        panic!("expected two run summaries in the log:\n{log}");
+    };
+    assert!(
+        select.contains("(execution ") && select.contains(" · fetch "),
+        "a read should log both times: {select}"
+    );
+    assert!(
+        create.contains("(execution ") && !create.contains("fetch"),
+        "a write should log only its execution time: {create}"
+    );
+
+    wait_for_history(&mut cx, 2).await;
+    let history = cx.update(|_window, cx| {
+        let db = AppDatabase::global(cx).clone();
+        gpui_tokio::Tokio::handle(cx)
+            .block_on(async move { db.load_query_history(100, None).await.unwrap() })
+    });
+    let [create, select] = history.as_slice() else {
+        panic!("expected two history entries, got {}", history.len());
+    };
+    assert!(create.execution_us.is_some());
+    assert_eq!(create.fetch_us, None, "a write has no fetch time");
+    assert!(select.execution_us.is_some());
+    assert!(select.fetch_us.is_some());
 }
 
 /// Writes on a PROD-tagged tab must wait for confirmation: running one opens a

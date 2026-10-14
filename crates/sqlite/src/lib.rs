@@ -349,6 +349,35 @@ mod tests {
         Ok(())
     }
 
+    /// Every statement of a script is timed on its own, and only one that
+    /// returned rows reports a fetch time.
+    #[tokio::test]
+    async fn test_execute_script_times_each_statement() -> Result<(), Box<dyn std::error::Error>> {
+        let temp_file = NamedTempFile::new()?;
+        let path = temp_file.path().to_string_lossy().to_string();
+        let connection_string = format!("sqlite:{}", path);
+
+        let mut connection = crate::SqliteConnection::new(connection_string.clone())?;
+        connection.connect(&connection_string).await?;
+
+        let results = connection
+            .execute_script("CREATE TABLE t (id INTEGER); SELECT 1 AS a;", None)
+            .await?;
+
+        assert_eq!(results.len(), 2);
+        let create = results[0].timing.expect("the CREATE should be timed");
+        assert_eq!(create.fetch, None, "a statement without rows has no fetch");
+        let select = results[1].timing.expect("the SELECT should be timed");
+        assert!(select.fetch.is_some(), "a statement with rows has a fetch");
+
+        let result = connection
+            .execute_query("SELECT 2 AS b", None, None)
+            .await?;
+        assert!(result.timing.and_then(|timing| timing.fetch).is_some());
+
+        Ok(())
+    }
+
     #[tokio::test]
     async fn foreign_key_lookup_quotes_identifiers_and_escapes_values()
     -> Result<(), Box<dyn std::error::Error>> {

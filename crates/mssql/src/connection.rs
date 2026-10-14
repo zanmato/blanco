@@ -1,16 +1,17 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use blanco_core::{
-    ColumnInfo, Connection, FunctionSignatureInfo, QueryResult,
+    ColumnInfo, Connection, FunctionSignatureInfo, QueryResult, QueryTiming, StatementTimer,
     connection_trait::{
         ColumnType, DatabaseSchemaResult, EntityType, ForeignKeyInfo, InboundForeignKey, IndexInfo,
         PaginationInfo, QueryableEntity, RoutineKind, TableSchemaInfo,
     },
 };
-use futures::Stream;
+use futures::{Stream, TryStreamExt};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tiberius::{AuthMethod, Client, Config as TiberiusConfig, Query, Row};
+use std::time::Instant;
+use tiberius::{AuthMethod, Client, Config as TiberiusConfig, Query, QueryItem, Row};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio_util::compat::{Compat, TokioAsyncWriteCompatExt};
@@ -20,6 +21,42 @@ use crate::schema;
 /// A live tiberius client over a tokio TCP stream (tiberius speaks futures-io,
 /// so the stream is adapted with tokio-util's compat shim).
 type MssqlClient = Client<Compat<TcpStream>>;
+
+/// Run a batch and collect its result sets, timing each one. A set starts
+/// with its metadata and ends at the last message it got, since the stream
+/// only shows where a set ended when the next one begins. Unlike
+/// `into_results`, which buffers everything, this sees each row arrive.
+async fn timed_results(
+    client: &mut MssqlClient,
+    sql: &str,
+) -> Result<Vec<(Vec<Row>, QueryTiming)>, tiberius::error::Error> {
+    let mut timer = StatementTimer::start();
+    let mut stream = client.simple_query(sql).await?;
+    let mut last_message = Instant::now();
+    let mut results = Vec::new();
+    let mut current: Option<Vec<Row>> = None;
+    while let Some(item) = stream.try_next().await? {
+        let received = Instant::now();
+        match item {
+            QueryItem::Metadata(_) => {
+                if let Some(rows) = current.take() {
+                    results.push((rows, timer.finish_at(last_message)));
+                    timer = StatementTimer::started_at(last_message);
+                }
+                current = Some(Vec::new());
+            }
+            QueryItem::Row(row) => {
+                timer.row();
+                current.get_or_insert_with(Vec::new).push(row);
+            }
+        }
+        last_message = received;
+    }
+    if let Some(rows) = current {
+        results.push((rows, timer.finish_at(last_message)));
+    }
+    Ok(results)
+}
 
 /// Cap on SQL Server connection redirects (`Error::Routing`, used by named
 /// instances / Azure gateways) before giving up.
@@ -489,8 +526,6 @@ impl Connection for MssqlConnection {
         database_name: Option<&str>,
         _parameters: Option<&[String]>,
     ) -> Result<QueryResult> {
-        let start = std::time::Instant::now();
-
         let slot = self.client_slot(database_name).await;
         let mut guard = slot.lock().await;
         if guard.is_none() {
@@ -501,12 +536,7 @@ impl Connection for MssqlConnection {
         // `simple_query` + `into_results` both borrow the client; run them in one
         // block so only the owned result sets escape. On a transport error drop
         // the cached client so the next call reconnects.
-        let result_sets = match async {
-            let stream = client.simple_query(query).await?;
-            stream.into_results().await
-        }
-        .await
-        {
+        let result_sets = match timed_results(client, query).await {
             Ok(result_sets) => result_sets,
             Err(error) => {
                 if is_connection_lost(&error) {
@@ -516,12 +546,13 @@ impl Connection for MssqlConnection {
             }
         };
         drop(guard);
+        let timing = QueryTiming::sum(result_sets.iter().map(|(_, timing)| *timing));
 
         let mut columns: Vec<String> = Vec::new();
         let mut column_types: Vec<ColumnType> = Vec::new();
         let mut rows: Vec<Vec<Option<String>>> = Vec::new();
 
-        for result_set in &result_sets {
+        for (result_set, _) in &result_sets {
             if let Some(first_row) = result_set.first()
                 && columns.is_empty()
             {
@@ -550,7 +581,7 @@ impl Connection for MssqlConnection {
             rows,
             rows_affected,
             query_text: Some(query_text),
-            execution_time_ms: Some(start.elapsed().as_millis() as i64),
+            timing,
             is_error: false,
             table_name: None,
             connection_id: None,
@@ -621,12 +652,7 @@ impl Connection for MssqlConnection {
         }
         let client = guard.as_mut().expect("client established above");
 
-        let result_sets = match async {
-            let stream = client.simple_query(query).await?;
-            stream.into_results().await
-        }
-        .await
-        {
+        let result_sets = match timed_results(client, query).await {
             Ok(result_sets) => result_sets,
             Err(error) => {
                 if is_connection_lost(&error) {
@@ -638,7 +664,7 @@ impl Connection for MssqlConnection {
         drop(guard);
 
         let mut out: Vec<QueryResult> = Vec::with_capacity(result_sets.len());
-        for result_set in result_sets {
+        for (result_set, timing) in result_sets {
             let mut columns: Vec<String> = Vec::new();
             let mut column_types: Vec<ColumnType> = Vec::new();
             if let Some(first_row) = result_set.first() {
@@ -663,7 +689,7 @@ impl Connection for MssqlConnection {
                 rows,
                 rows_affected,
                 query_text: None,
-                execution_time_ms: None,
+                timing: Some(timing),
                 is_error: false,
                 table_name: None,
                 connection_id: None,

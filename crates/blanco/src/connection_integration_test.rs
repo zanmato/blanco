@@ -814,6 +814,211 @@ async fn test_redis_inspect_key(cx: &mut TestAppContext) {
     );
 }
 
+/// Every driver times each statement of a script on its own, and reports a
+/// fetch time only for a statement that returned rows.
+#[test]
+fn test_statement_timing_against_every_backend() {
+    use database::ConnectionConfig;
+
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let sqlite_path = temp_dir
+        .path()
+        .join("timing.db")
+        .to_string_lossy()
+        .to_string();
+
+    let server = |case: &DriverCase, id: i64| {
+        ConnectionConfig::new(
+            id,
+            case.name.to_string(),
+            case.db_type,
+            case.host.clone(),
+            case.port.parse().expect("port"),
+            case.database.clone(),
+            case.username.clone(),
+            Some(case.password.clone()),
+        )
+    };
+    let postgres = postgres_case();
+    let mysql = mysql_case();
+    let clickhouse = clickhouse_case();
+    let mssql = mssql_case();
+    // Each script and whether each of its results returned rows.
+    let cases = vec![
+        (
+            "SQLite",
+            ConnectionConfig::new_sqlite(9101, "timing-sqlite".to_string(), sqlite_path),
+            "main".to_string(),
+            "CREATE TABLE blanco_timing (id INTEGER); SELECT 1 AS n",
+            vec![false, true],
+        ),
+        (
+            postgres.label,
+            server(&postgres, 9102),
+            postgres.database.clone(),
+            "CREATE TEMP TABLE blanco_timing (id integer); SELECT 1 AS n",
+            vec![false, true],
+        ),
+        (
+            mysql.label,
+            server(&mysql, 9103),
+            mysql.database.clone(),
+            "CREATE TEMPORARY TABLE blanco_timing (id integer); SELECT 1 AS n",
+            vec![false, true],
+        ),
+        (
+            clickhouse.label,
+            server(&clickhouse, 9104),
+            clickhouse.database.clone(),
+            "SELECT 1 AS n; SELECT 1 AS n WHERE 0",
+            vec![true, false],
+        ),
+        (
+            mssql.label,
+            server(&mssql, 9105).with_trust_server_certificate(true),
+            mssql.database.clone(),
+            "SELECT 1 AS n; SELECT 1 AS n WHERE 1 = 0",
+            vec![true, false],
+        ),
+    ];
+
+    let service = DatabaseService::new(runtime.handle().clone());
+    for (label, config, database, script, returns_rows) in cases {
+        let database = Some(database.as_str());
+        let results = runtime.block_on(async {
+            service.add_connection_config(config.clone()).await;
+            let connection = service
+                .get_or_create_connection(config.id, database)
+                .await?;
+            connection.ping().await?;
+            connection.execute_script(script, database).await
+        });
+        let results = match results {
+            Ok(results) => results,
+            Err(error) if strict() => panic!("{label}: {error:#}"),
+            Err(error) => {
+                eprintln!(
+                    "skip {label}: server unreachable ({error:#}). Set BLANCO_RUN_DB_TESTS=1 to require."
+                );
+                continue;
+            }
+        };
+
+        let fetched: Vec<bool> = results
+            .iter()
+            .map(|result| {
+                result
+                    .timing
+                    .unwrap_or_else(|| panic!("{label}: every result should be timed"))
+                    .fetch
+                    .is_some()
+            })
+            .collect();
+        assert_eq!(fetched, returns_rows, "{label}: fetch time per statement");
+    }
+}
+
+/// The sqlx pools hand out a connection without pinging it first, so a
+/// connection the server dropped while idle fails one query. That failure must
+/// count as a lost connection, so the service evicts it and the next run
+/// reconnects.
+#[test]
+fn test_dropped_pool_connection_reconnects_on_next_run() {
+    use blanco_core::DatabaseService as _;
+    use database::ConnectionConfig;
+
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let server = |case: &DriverCase, id: i64| {
+        ConnectionConfig::new(
+            id,
+            case.name.to_string(),
+            case.db_type,
+            case.host.clone(),
+            case.port.parse().expect("port"),
+            case.database.clone(),
+            case.username.clone(),
+            Some(case.password.clone()),
+        )
+    };
+    let postgres = postgres_case();
+    let mysql = mysql_case();
+    let cases = [
+        (
+            &postgres,
+            9111,
+            "SELECT pg_backend_pid()",
+            "SELECT pg_terminate_backend({id})",
+        ),
+        (&mysql, 9113, "SELECT CONNECTION_ID()", "KILL {id}"),
+    ];
+
+    let service = DatabaseService::new(runtime.handle().clone());
+    for (case, config_id, backend_id_sql, kill_sql) in cases {
+        let label = case.label;
+        let database = Some(case.database.as_str());
+        // A second connection does the killing, since a session cannot end
+        // itself and still report back.
+        let killer_id = config_id + 1;
+        let backend_id = runtime.block_on(async {
+            service.add_connection_config(server(case, config_id)).await;
+            service.add_connection_config(server(case, killer_id)).await;
+            let results = service
+                .execute_script(config_id, database, backend_id_sql)
+                .await?;
+            anyhow::Ok(
+                results
+                    .first()
+                    .and_then(|result| result.rows.first())
+                    .and_then(|row| row.first().cloned().flatten())
+                    .unwrap_or_else(|| panic!("{label}: backend id")),
+            )
+        });
+        let backend_id = match backend_id {
+            Ok(backend_id) => backend_id,
+            Err(error) if strict() => panic!("{label}: {error:#}"),
+            Err(error) => {
+                eprintln!(
+                    "skip {label}: server unreachable ({error:#}). Set BLANCO_RUN_DB_TESTS=1 to require."
+                );
+                continue;
+            }
+        };
+
+        runtime.block_on(async {
+            service
+                .execute_script(killer_id, database, &kill_sql.replace("{id}", &backend_id))
+                .await
+                .unwrap_or_else(|error| panic!("{label}: kill: {error:#}"));
+            // The server closes the socket after answering the kill.
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+            let error = service
+                .execute_script(config_id, database, "SELECT 1")
+                .await
+                .expect_err("the dropped connection should fail its query");
+            assert!(
+                blanco_core::is_connection_lost(&error),
+                "{label}: should be a lost connection: {error:#}"
+            );
+
+            let results = service
+                .execute_script(config_id, database, "SELECT 1")
+                .await
+                .unwrap_or_else(|error| panic!("{label}: should reconnect: {error:#}"));
+            assert_eq!(
+                results
+                    .first()
+                    .and_then(|result| result.rows.first())
+                    .and_then(|row| row.first().cloned().flatten())
+                    .as_deref(),
+                Some("1"),
+                "{label}"
+            );
+        });
+    }
+}
+
 /// The column/index DDL builders against every live backend: create a
 /// scratch table, add a column and an index, alter the column, drop both,
 /// and check the driver's metadata between steps.

@@ -1,8 +1,8 @@
 mod connection_impl;
 
 use anyhow::Result;
-use blanco_core::ConnectionLost;
 use blanco_core::connection_trait::ColumnType;
+use blanco_core::{ConnectionLost, QueryTiming, StatementTimer};
 use reqwest::Client as HttpClient;
 
 /// Convert a reqwest error into an `anyhow::Error`, attaching the shared
@@ -168,8 +168,20 @@ impl ClickhouseConnection {
     }
 
     async fn raw_query(&self, sql: &str, database: Option<&str>) -> Result<String> {
+        let (body, _) = self.raw_query_timed(sql, database).await?;
+        Ok(body)
+    }
+
+    /// Run a query and time it, counting the first body chunk as the first
+    /// row: ClickHouse streams the response while the query runs.
+    async fn raw_query_timed(
+        &self,
+        sql: &str,
+        database: Option<&str>,
+    ) -> Result<(String, StatementTimer)> {
         let url = self.build_query_url(database, &[]);
-        let response = self
+        let mut timer = StatementTimer::start();
+        let mut response = self
             .http
             .post(&url)
             .body(sql.to_string())
@@ -177,7 +189,12 @@ impl ClickhouseConnection {
             .await
             .map_err(tag_reqwest)?;
         let status = response.status();
-        let body = response.text().await.map_err(tag_reqwest)?;
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response.chunk().await.map_err(tag_reqwest)? {
+            timer.row();
+            bytes.extend_from_slice(&chunk);
+        }
+        let body = String::from_utf8_lossy(&bytes).into_owned();
         if !status.is_success() {
             return Err(anyhow::anyhow!(
                 "ClickHouse query failed ({}): {}",
@@ -185,13 +202,33 @@ impl ClickhouseConnection {
                 body.trim()
             ));
         }
-        Ok(body)
+        Ok((body, timer))
     }
 
     async fn raw_query_tsv(&self, sql: &str, database: Option<&str>) -> Result<TsvResult> {
+        let (tsv, _) = self.raw_query_tsv_timed(sql, database).await?;
+        Ok(tsv)
+    }
+
+    async fn raw_query_tsv_timed(
+        &self,
+        sql: &str,
+        database: Option<&str>,
+    ) -> Result<(TsvResult, QueryTiming)> {
         let sql_with_format = format!("{} FORMAT TSVWithNamesAndTypes", sql.trim_end_matches(';'));
-        let body = self.raw_query(&sql_with_format, database).await?;
-        parse_tsv(&body)
+        let (body, timer) = self.raw_query_timed(&sql_with_format, database).await?;
+        let tsv = parse_tsv(&body)?;
+        let timing = timer.finish();
+        // The header lines arrive as a chunk even when no row follows.
+        let timing = if tsv.rows.is_empty() {
+            QueryTiming {
+                execution: timing.total(),
+                fetch: None,
+            }
+        } else {
+            timing
+        };
+        Ok((tsv, timing))
     }
 
     fn map_clickhouse_type(type_name: &str) -> ColumnType {

@@ -1,7 +1,7 @@
 mod connection_impl;
 
 use anyhow::Result;
-use blanco_core::{QueryResult, connection_trait::ColumnType};
+use blanco_core::{QueryResult, QueryTiming, StatementTimer, connection_trait::ColumnType};
 use futures::StreamExt;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
 use sqlx::{Column, ConnectOptions, Row, TypeInfo, ValueRef};
@@ -116,6 +116,10 @@ impl SqliteConnection {
             .pool
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Not connected to database"))?;
+        // Taken before the timer starts, so opening a connection does not
+        // count as execution.
+        let mut connection = pool.acquire().await?;
+        let mut timer = StatementTimer::start();
 
         // Build query: use raw_sql for no parameters, otherwise bind parameters
         let sql_query = match parameters {
@@ -125,9 +129,9 @@ impl SqliteConnection {
                     q = q.bind(param);
                 }
                 #[allow(deprecated)]
-                q.fetch_many(pool)
+                q.fetch_many(&mut *connection)
             }
-            _ => sqlx::raw_sql(query).fetch_many(pool),
+            _ => sqlx::raw_sql(query).fetch_many(&mut *connection),
         };
 
         // Use fetch_many to handle both row-returning and row-affecting queries
@@ -146,6 +150,7 @@ impl SqliteConnection {
                     rows_affected += execution_result.rows_affected();
                 }
                 Either::Right(row) => {
+                    timer.row();
                     // Extract column info from the first row
                     if columns.is_empty() {
                         columns = row
@@ -176,6 +181,7 @@ impl SqliteConnection {
                 }
             }
         }
+        let timing = timer.finish();
 
         Ok(QueryResult {
             columns,
@@ -183,7 +189,7 @@ impl SqliteConnection {
             rows,
             rows_affected,
             query_text: None,
-            execution_time_ms: None,
+            timing: Some(timing),
             is_error: false,
             table_name: None,
             connection_id: None,
@@ -203,8 +209,12 @@ impl SqliteConnection {
             .pool
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Not connected to database"))?;
+        // Taken before the timer starts, so opening a connection does not
+        // count as execution.
+        let mut connection = pool.acquire().await?;
+        let mut timer = StatementTimer::start();
 
-        let mut results = sqlx::raw_sql(query).fetch_many(pool);
+        let mut results = sqlx::raw_sql(query).fetch_many(&mut *connection);
 
         let mut out: Vec<QueryResult> = Vec::new();
         let mut current: Option<SqliteStatementAcc> = None;
@@ -214,9 +224,10 @@ impl SqliteConnection {
                 Either::Left(execution_result) => {
                     let mut acc = current.take().unwrap_or_default();
                     acc.rows_affected += execution_result.rows_affected();
-                    out.push(acc.finalize());
+                    out.push(acc.finalize(timer.finish_and_restart()));
                 }
                 Either::Right(row) => {
+                    timer.row();
                     let acc = current.get_or_insert_with(SqliteStatementAcc::default);
                     acc.absorb_row(&row);
                 }
@@ -224,11 +235,14 @@ impl SqliteConnection {
         }
         // A trailing row-returning statement has no Left marker of its own.
         if let Some(acc) = current.take() {
-            out.push(acc.finalize());
+            out.push(acc.finalize(timer.finish()));
         }
 
         if out.is_empty() {
-            out.push(QueryResult::default());
+            out.push(QueryResult {
+                timing: Some(timer.finish()),
+                ..QueryResult::default()
+            });
         }
         Ok(out)
     }
@@ -526,14 +540,14 @@ impl SqliteStatementAcc {
         self.rows.push(row_data);
     }
 
-    fn finalize(self) -> QueryResult {
+    fn finalize(self, timing: QueryTiming) -> QueryResult {
         QueryResult {
             columns: self.columns,
             column_types: self.column_types,
             rows: self.rows,
             rows_affected: self.rows_affected,
             query_text: None,
-            execution_time_ms: None,
+            timing: Some(timing),
             is_error: false,
             table_name: None,
             connection_id: None,

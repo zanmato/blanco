@@ -3,7 +3,7 @@ use futures::StreamExt;
 use sqlx::{Column, Row, TypeInfo, ValueRef};
 
 use super::{PostgresConnection, QueryParam};
-use blanco_core::{ColumnType, QueryResult};
+use blanco_core::{ColumnType, QueryResult, QueryTiming, StatementTimer};
 
 impl PostgresConnection {
     /// Helper method to execute a query with parameters
@@ -20,9 +20,14 @@ impl PostgresConnection {
             parameters.len()
         );
 
+        // Taken before the timer starts, so opening a connection does not
+        // count as execution.
+        let mut connection = pool.acquire().await?;
+        let mut timer = StatementTimer::start();
+
         // Use raw_sql for queries without parameters, otherwise use query with bindings
         let mut results = if parameters.is_empty() {
-            sqlx::raw_sql(sql_template).fetch_many(pool)
+            sqlx::raw_sql(sql_template).fetch_many(&mut *connection)
         } else {
             let mut query = sqlx::query(sql_template);
             for param in parameters {
@@ -36,7 +41,7 @@ impl PostgresConnection {
                 };
             }
             #[allow(deprecated)]
-            query.fetch_many(pool)
+            query.fetch_many(&mut *connection)
         };
 
         let mut columns: Vec<String> = Vec::new();
@@ -51,6 +56,7 @@ impl PostgresConnection {
                     rows_affected += execution_result.rows_affected();
                 }
                 Either::Right(row) => {
+                    timer.row();
                     // Extract column info from the first row
                     if columns.is_empty() {
                         columns = row
@@ -87,6 +93,7 @@ impl PostgresConnection {
                 }
             }
         }
+        let timing = timer.finish();
 
         Ok(QueryResult {
             columns,
@@ -94,7 +101,7 @@ impl PostgresConnection {
             rows,
             rows_affected,
             query_text: Some(sql_template.to_string()),
-            execution_time_ms: None,
+            timing: Some(timing),
             is_error: false,
             table_name: None,
             connection_id: None,
@@ -121,21 +128,28 @@ impl PostgresConnection {
         let mut current: Option<PgStatementAcc> = None;
 
         {
-            let mut results = sqlx::raw_sql(sql).fetch_many(pool);
+            // Taken before the timer starts, so opening a connection does not
+            // count as execution.
+            let mut connection = pool.acquire().await?;
+            let mut timer = StatementTimer::start();
+            let mut results = sqlx::raw_sql(sql).fetch_many(&mut *connection);
             while let Some(result) = results.next().await {
                 match result? {
                     Either::Left(execution_result) => {
                         let mut acc = current.take().unwrap_or_default();
                         acc.rows_affected += execution_result.rows_affected();
+                        acc.timing = Some(timer.finish_and_restart());
                         accs.push(acc);
                     }
                     Either::Right(row) => {
+                        timer.row();
                         let acc = current.get_or_insert_with(PgStatementAcc::default);
                         acc.absorb_row(&row, self);
                     }
                 }
             }
-            if let Some(acc) = current.take() {
+            if let Some(mut acc) = current.take() {
+                acc.timing = Some(timer.finish());
                 accs.push(acc);
             }
         }
@@ -159,6 +173,7 @@ struct PgStatementAcc {
     rows: Vec<Vec<Option<String>>>,
     rows_affected: u64,
     oids_to_resolve: Vec<(usize, usize, i32)>,
+    timing: Option<QueryTiming>,
 }
 
 impl PgStatementAcc {
@@ -230,7 +245,7 @@ impl PgStatementAcc {
             rows: self.rows,
             rows_affected: self.rows_affected,
             query_text: None,
-            execution_time_ms: None,
+            timing: self.timing,
             is_error: false,
             table_name: None,
             connection_id: None,

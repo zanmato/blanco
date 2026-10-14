@@ -517,7 +517,11 @@ fn result_to_js<'js>(
         "columns": result.columns,
         "rows": rows,
         "rowsAffected": result.rows_affected,
-        "executionTimeMs": result.execution_time_ms,
+        "executionTimeMs": result.timing.map(|timing| timing.execution.as_millis() as u64),
+        "fetchTimeMs": result
+            .timing
+            .and_then(|timing| timing.fetch)
+            .map(|fetch| fetch.as_millis() as u64),
     });
 
     let value = ctx.json_parse(payload.to_string())?;
@@ -614,7 +618,7 @@ fn json_to_result(json: Json) -> QueryResult {
         rows,
         rows_affected: row_count as u64,
         query_text: None,
-        execution_time_ms: None,
+        timing: None,
         is_error: false,
         table_name: None,
         connection_id: None,

@@ -1,6 +1,7 @@
 use crate::DatabaseType;
 use async_trait::async_trait;
 use futures::Stream;
+use std::time::{Duration, Instant};
 
 /// Type of queryable database entity
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -131,6 +132,91 @@ impl ColumnType {
     }
 }
 
+/// How long one statement took, measured by the driver around its own row
+/// loop, so connection setup and anything run before the statement is not
+/// counted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct QueryTiming {
+    /// Until the first row arrived, or until the statement finished when it
+    /// returned no rows.
+    pub execution: Duration,
+    /// From the first row to the last. `None` when no rows came back.
+    pub fetch: Option<Duration>,
+}
+
+impl QueryTiming {
+    pub fn total(&self) -> Duration {
+        self.execution + self.fetch.unwrap_or_default()
+    }
+
+    /// The timings of several statements added up. A fetch time is kept when
+    /// any of them returned rows.
+    pub fn sum(timings: impl IntoIterator<Item = QueryTiming>) -> Option<QueryTiming> {
+        timings.into_iter().reduce(|sum, timing| QueryTiming {
+            execution: sum.execution + timing.execution,
+            fetch: match (sum.fetch, timing.fetch) {
+                (None, None) => None,
+                (left, right) => Some(left.unwrap_or_default() + right.unwrap_or_default()),
+            },
+        })
+    }
+}
+
+/// Measures [`QueryTiming`] inside a driver's row loop: start it right before
+/// the statement is sent, call [`row`](Self::row) for every row and
+/// [`finish`](Self::finish) when the statement is done.
+#[derive(Debug, Clone, Copy)]
+pub struct StatementTimer {
+    started: Instant,
+    first_row: Option<Instant>,
+}
+
+impl StatementTimer {
+    pub fn start() -> Self {
+        Self::started_at(Instant::now())
+    }
+
+    pub fn started_at(started: Instant) -> Self {
+        Self {
+            started,
+            first_row: None,
+        }
+    }
+
+    pub fn row(&mut self) {
+        if self.first_row.is_none() {
+            self.first_row = Some(Instant::now());
+        }
+    }
+
+    pub fn finish(&self) -> QueryTiming {
+        self.finish_at(Instant::now())
+    }
+
+    /// Finish at an earlier moment, for drivers that only learn a statement
+    /// ended when the next one's first message arrives.
+    pub fn finish_at(&self, finished: Instant) -> QueryTiming {
+        match self.first_row {
+            Some(first_row) => QueryTiming {
+                execution: first_row - self.started,
+                fetch: Some(finished - first_row),
+            },
+            None => QueryTiming {
+                execution: finished - self.started,
+                fetch: None,
+            },
+        }
+    }
+
+    /// Finish this statement and start timing the next one of a script, which
+    /// the server begins as soon as this one is done.
+    pub fn finish_and_restart(&mut self) -> QueryTiming {
+        let timing = self.finish();
+        *self = Self::start();
+        timing
+    }
+}
+
 /// Result of a database query
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct QueryResult {
@@ -139,7 +225,7 @@ pub struct QueryResult {
     pub rows: Vec<Vec<Option<String>>>,
     pub rows_affected: u64,
     pub query_text: Option<String>,
-    pub execution_time_ms: Option<i64>,
+    pub timing: Option<QueryTiming>,
     pub is_error: bool,
     /// Table metadata extracted from the query (if applicable)
     pub table_name: Option<String>,
@@ -920,7 +1006,67 @@ pub trait ConnectionFactory: Send + Sync {
 
 #[cfg(test)]
 mod tests {
-    use super::{ColumnInfo, ForeignKeyConstraint, ForeignKeyInfo};
+    use super::{ColumnInfo, ForeignKeyConstraint, ForeignKeyInfo, QueryTiming, StatementTimer};
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn statement_without_rows_reports_only_execution() {
+        let started = Instant::now();
+        let timer = StatementTimer::started_at(started);
+        let timing = timer.finish_at(started + Duration::from_millis(5));
+        assert_eq!(
+            timing,
+            QueryTiming {
+                execution: Duration::from_millis(5),
+                fetch: None,
+            }
+        );
+    }
+
+    #[test]
+    fn first_row_splits_execution_from_fetch() {
+        let started = Instant::now();
+        let mut timer = StatementTimer::started_at(started);
+        timer.row();
+        let first_row = timer.first_row.expect("first row recorded");
+        timer.row();
+        assert_eq!(
+            timer.first_row,
+            Some(first_row),
+            "later rows keep the first"
+        );
+        let timing = timer.finish_at(first_row + Duration::from_millis(20));
+        assert_eq!(timing.execution, first_row - started);
+        assert_eq!(timing.fetch, Some(Duration::from_millis(20)));
+        assert_eq!(
+            timing.total(),
+            first_row - started + Duration::from_millis(20)
+        );
+    }
+
+    #[test]
+    fn sum_keeps_fetch_when_any_statement_returned_rows() {
+        let write = QueryTiming {
+            execution: Duration::from_millis(3),
+            fetch: None,
+        };
+        let read = QueryTiming {
+            execution: Duration::from_millis(4),
+            fetch: Some(Duration::from_millis(10)),
+        };
+        assert_eq!(
+            QueryTiming::sum([write, read]),
+            Some(QueryTiming {
+                execution: Duration::from_millis(7),
+                fetch: Some(Duration::from_millis(10)),
+            })
+        );
+        assert_eq!(
+            QueryTiming::sum([write, write]).and_then(|sum| sum.fetch),
+            None
+        );
+        assert_eq!(QueryTiming::sum([]), None);
+    }
 
     #[test]
     fn foreign_key_from_parts_requires_table_and_column() {

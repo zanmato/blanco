@@ -16,7 +16,7 @@ use crate::sql::{extract_statement_info, extract_statement_info_with_styles};
 use crate::status_bar::{ActivityReporter, ActivityResult};
 use crate::time_format;
 use app_database::{AppDatabase, QueryHistoryData};
-use blanco_core::StatementAccess;
+use blanco_core::{QueryTiming, StatementAccess};
 use database::{DatabaseService, DatabaseServiceTrait};
 use sql_parser::statement_parser::QueryParameter;
 
@@ -510,16 +510,15 @@ impl EditorPanel {
                     Ok(mut results) => {
                         let duration_ms = query_duration.as_millis() as i64;
                         let duration_us = query_duration.as_micros() as i64;
+                        // Each result carries what its driver measured around
+                        // its own statement. The run's duration also covers
+                        // connecting and the deferred read lookup.
+                        let timing =
+                            QueryTiming::sum(results.iter().filter_map(|result| result.timing));
 
-                        // Annotate every result with execution metadata. The
-                        // duration is recorded against the first result only;
-                        // we don't have per-statement timings here.
                         let mut total_rows_affected: u64 = 0;
-                        for (idx, result) in results.iter_mut().enumerate() {
+                        for result in results.iter_mut() {
                             result.query_text = Some(query_for_metadata.clone());
-                            if idx == 0 {
-                                result.execution_time_ms = Some(duration_ms);
-                            }
                             result.is_error = false;
                             result.connection_id = Some(connection_id);
                             total_rows_affected = total_rows_affected.saturating_add(
@@ -673,12 +672,18 @@ impl EditorPanel {
 
                                 // Log execution result to SQL log
                                 sql_view_clone.update(cx, |sql_view, cx| {
-                                    let log_message = format!(
+                                    let mut log_message = format!(
                                         "{}, {} rows in {}",
                                         time_format::format_current_timestamp(),
                                         rows_affected,
                                         time_format::format_duration(duration_us)
                                     );
+                                    if let Some(timing) = &timing {
+                                        log_message.push_str(&format!(
+                                            " ({})",
+                                            time_format::format_timing(timing)
+                                        ));
+                                    }
                                     sql_view.append_text(
                                         &blanco_ui::SqlViewMessage::Comment(log_message),
                                         cx,
@@ -705,6 +710,11 @@ impl EditorPanel {
                                 query_text: history_query.clone(),
                                 executed_at: chrono::Utc::now().timestamp(),
                                 duration_ms: Some(duration_ms),
+                                execution_us: timing
+                                    .map(|timing| timing.execution.as_micros() as i64),
+                                fetch_us: timing
+                                    .and_then(|timing| timing.fetch)
+                                    .map(|fetch| fetch.as_micros() as i64),
                                 rows_affected: Some(rows_affected as i64),
                                 row_count: Some(returned_row_count),
                                 success: true,
@@ -764,6 +774,8 @@ impl EditorPanel {
                                 query_text: history_query.clone(),
                                 executed_at: chrono::Utc::now().timestamp(),
                                 duration_ms: Some(duration_ms),
+                                execution_us: None,
+                                fetch_us: None,
                                 rows_affected: None,
                                 row_count: None,
                                 success: false,

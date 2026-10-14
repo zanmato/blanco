@@ -135,7 +135,11 @@ pub(crate) fn result_to_json(result: &QueryResult, max_rows: usize) -> serde_jso
         "columns": result.columns,
         "rows": display_rows,
         "rows_affected": result.rows_affected,
-        "execution_time_ms": result.execution_time_ms,
+        "execution_time_ms": result.timing.map(|timing| timing.execution.as_millis() as u64),
+        "fetch_time_ms": result
+            .timing
+            .and_then(|timing| timing.fetch)
+            .map(|fetch| fetch.as_millis() as u64),
         "truncated": truncated,
     });
 
@@ -277,7 +281,10 @@ mod tests {
                 .map(|index| vec![Some(index.to_string())])
                 .collect(),
             rows_affected: row_count as u64,
-            execution_time_ms: Some(3),
+            timing: Some(blanco_core::QueryTiming {
+                execution: std::time::Duration::from_millis(3),
+                fetch: Some(std::time::Duration::from_millis(7)),
+            }),
             ..QueryResult::default()
         }
     }
@@ -288,6 +295,8 @@ mod tests {
         assert_eq!(json["truncated"], true);
         assert_eq!(json["rows"].as_array().map(Vec::len), Some(2));
         assert_eq!(json["rows_affected"], 5);
+        assert_eq!(json["execution_time_ms"], 3);
+        assert_eq!(json["fetch_time_ms"], 7);
         assert!(json["hint"].as_str().is_some());
         assert!(json.get("error").is_none());
     }

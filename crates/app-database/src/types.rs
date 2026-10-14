@@ -98,7 +98,12 @@ pub struct QueryHistoryData {
     pub query_text: String,
     /// Unix timestamp (seconds) of when the query finished executing.
     pub executed_at: i64,
+    /// The whole run, from pressing run until the result was in.
     pub duration_ms: Option<i64>,
+    /// Until the first row arrived, summed over the statements of a script.
+    pub execution_us: Option<i64>,
+    /// From the first row to the last, summed. `None` when no rows came back.
+    pub fetch_us: Option<i64>,
     pub rows_affected: Option<i64>,
     pub row_count: Option<i64>,
     pub success: bool,

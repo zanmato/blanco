@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 /// Schema version stored in SQLite's `PRAGMA user_version`. Bump it and append
 /// a step to [`MIGRATIONS`] for every schema change.
-pub const SCHEMA_VERSION: i64 = 9;
+pub const SCHEMA_VERSION: i64 = 10;
 
 /// The complete schema for a fresh database, at [`SCHEMA_VERSION`]. Keep it in
 /// sync with the migrations: a database created from this must be identical
@@ -71,7 +71,9 @@ const BASELINE: &[&str] = &[
         error_message TEXT,
         connection_id INTEGER,
         connection_name TEXT,
-        database_name TEXT
+        database_name TEXT,
+        execution_us INTEGER,
+        fetch_us INTEGER
     )
     "#,
     "CREATE INDEX idx_query_history_executed_at ON query_history (executed_at DESC)",
@@ -141,6 +143,7 @@ const MIGRATIONS: &[Migration] = &[
     |pool| Box::pin(migrate_v6_to_v7(pool)),
     |pool| Box::pin(migrate_v7_to_v8(pool)),
     |pool| Box::pin(migrate_v8_to_v9(pool)),
+    |pool| Box::pin(migrate_v9_to_v10(pool)),
 ];
 
 /// Columns that may be missing from an unversioned database, per table, in the
@@ -293,6 +296,20 @@ async fn migrate_v8_to_v9(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     )
     .execute(&mut *transaction)
     .await?;
+    transaction.commit().await
+}
+
+/// History keeps the server's execution time and the time spent fetching rows
+/// apart, in microseconds since most statements finish in under a
+/// millisecond. `duration_ms` stays the whole run as the user waited for it.
+async fn migrate_v9_to_v10(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    let mut transaction = pool.begin().await?;
+    sqlx::query("ALTER TABLE query_history ADD COLUMN execution_us INTEGER")
+        .execute(&mut *transaction)
+        .await?;
+    sqlx::query("ALTER TABLE query_history ADD COLUMN fetch_us INTEGER")
+        .execute(&mut *transaction)
+        .await?;
     transaction.commit().await
 }
 

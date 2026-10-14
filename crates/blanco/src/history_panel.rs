@@ -1,11 +1,12 @@
 use std::future::Future;
 use std::rc::Rc;
+use std::time::Duration;
 
 use blanco_ui::IconName;
 use gpui::{
     App, AppContext, ClipboardItem, Context, Entity, EventEmitter, InteractiveElement, IntoElement,
-    ParentElement, Pixels, Render, Size, Styled, Subscription, Task, Window, div,
-    prelude::FluentBuilder, px, size,
+    ParentElement, Pixels, Render, Size, StatefulInteractiveElement, Styled, Subscription, Task,
+    Window, div, prelude::FluentBuilder, px, size,
 };
 use gpui_component::{
     ActiveTheme as _, Disableable as _, Icon, InteractiveElementExt as _, Sizable as _,
@@ -14,6 +15,7 @@ use gpui_component::{
     h_flex,
     input::{Input, InputEvent, InputState},
     scroll::{ScrollableElement as _, ScrollbarAxis},
+    tooltip::Tooltip,
     v_flex, v_virtual_list,
 };
 
@@ -170,6 +172,14 @@ impl HistoryPanel {
             meta.push(name.clone());
         }
         let meta_line = meta.join("  ·  ");
+        let timing = entry
+            .execution_us
+            .map(|execution_us| blanco_core::QueryTiming {
+                execution: Duration::from_micros(execution_us.max(0) as u64),
+                fetch: entry
+                    .fetch_us
+                    .map(|fetch_us| Duration::from_micros(fetch_us.max(0) as u64)),
+            });
 
         let query_for_insert = entry.query_text.clone();
 
@@ -211,10 +221,17 @@ impl HistoryPanel {
                     )
                     .child(
                         div()
+                            .id(("history-meta", index))
                             .text_size(px(11.))
                             .text_color(cx.theme().muted_foreground)
                             .truncate()
-                            .child(meta_line),
+                            .child(meta_line)
+                            .when_some(timing, |this, timing| {
+                                let text = time_format::format_timing(&timing);
+                                this.tooltip(move |window, cx| {
+                                    Tooltip::new(text.clone()).build(window, cx)
+                                })
+                            }),
                     ),
             )
             // The action buttons overlay the top-right corner on hover so they

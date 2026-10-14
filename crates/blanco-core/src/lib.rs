@@ -23,8 +23,8 @@ pub use connection_trait::{
     BatchFailure, BatchOutcome, ColumnInfo, ColumnType, Connection, ConnectionFactory,
     DatabaseSchemaResult, EntityType, ForeignKeyConstraint, ForeignKeyInfo, FunctionSignatureInfo,
     InboundForeignKey, IndexInfo, KeyValueResult, ObjectComments, PaginationInfo, QueryResult,
-    QueryableEntity, RedisType, RedisValue, ResultPayload, RoutineKind, TableMetadata, TableParent,
-    TableSchemaInfo, WriteOperation,
+    QueryTiming, QueryableEntity, RedisType, RedisValue, ResultPayload, RoutineKind,
+    StatementTimer, TableMetadata, TableParent, TableSchemaInfo, WriteOperation,
 };
 
 pub use connection_context::{
