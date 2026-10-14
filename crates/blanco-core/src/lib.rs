@@ -110,6 +110,12 @@ mod sqlx_support {
                     | std::io::ErrorKind::NotConnected
             ),
             sqlx::Error::PoolTimedOut | sqlx::Error::PoolClosed => true,
+            // A server ending the session says why before closing the socket:
+            // SQLSTATE class 08 is a connection exception, and 57P01..57P03 are
+            // an administrator, crash or startup shutdown.
+            sqlx::Error::Database(database_error) => database_error
+                .code()
+                .is_some_and(|code| code.starts_with("08") || code.starts_with("57P")),
             sqlx::Error::Protocol(message) => {
                 let message = message.to_lowercase();
                 message.contains("closed") || message.contains("terminating")
