@@ -1,11 +1,17 @@
 #!/usr/bin/env bash
-# Times the results grid's frames with large text values: runs Blanco's
-# large-values scene on a virtual X display against a throwaway data
-# directory with GPUI's ZED_MEASUREMENTS on, then prints the frame durations
-# of each phase: scrolling a row per frame, then redrawing in place, first as
-# the grid starts and then with invisible characters shown ("-marked").
+# Times Blanco's frames on large content: runs a measurement scene on a
+# virtual X display against a throwaway data directory with GPUI's
+# ZED_MEASUREMENTS on, then prints the frame durations of each phase the
+# scene logs ("measurement: <phase>").
 #
-# Usage: scripts/measure-grid-frames
+# Usage: scripts/measure-frames [scene]
+#
+# Scenes:
+#   large-values  the results grid with 1 MB text values: scrolling a row per
+#                 frame and redrawing in place, with and without invisible
+#                 characters marked (the default)
+#   large-query   the SQL editor with a 1 MB one line query: redrawing plain,
+#                 with whitespace shown and with invisible characters shown
 #
 # Needs Xvfb, xdpyinfo, sqlite3 and dbus-run-session, plus Mesa's lavapipe
 # Vulkan driver when there is no GPU. Set BLANCO_BIN to measure an existing
@@ -14,6 +20,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 root="$(pwd)"
+scene="${1:-large-values}"
 
 if [[ -z "${BLANCO_BIN:-}" ]]; then
   cargo build --release -p blanco --features screenshots
@@ -72,13 +79,13 @@ timeout 600 env -i \
   XDG_RUNTIME_DIR="$work/runtime" \
   ${lavapipe:+VK_ICD_FILENAMES="$lavapipe"} \
   ZED_MEASUREMENTS=1 \
-  BLANCO_SCENE=large-values \
+  BLANCO_SCENE="$scene" \
   BLANCO_DEMO_DB="$work/demo.db" \
   dbus-run-session --config-file="$work/dbus.conf" -- "$BLANCO_BIN" >"$work/app.log" 2>&1 || true
 
 awk '
-  /grid measurement: done/ { phase = ""; next }
-  /grid measurement: / { phase = $NF; order[++phases] = phase; next }
+  / measurement: done/ { phase = ""; next }
+  / measurement: / { phase = $NF; order[++phases] = phase; next }
   phase != "" && /^frame duration: / {
     value = $3
     if (value ~ /ms$/) { sub(/ms$/, "", value); ms = value + 0 }

@@ -164,6 +164,19 @@ to GPUI's plain text copy. Reading stays with GPUI. Remove the crate once GPUI
 can write other MIME types. `cargo run -p blanco-clipboard --example x11_write`
 exercises the X11 path against a real server.
 
+## Invisible characters
+
+One rule decides which characters look like nothing or a plain space:
+`invisible_character` in the gpui-component fork. The editor boxes them
+when `editor.highlight_invisible_characters` is on (the default, via
+`InputState::highlight_invisible_characters`), and result cells mark them
+with `results.show_invisible_characters` (`display_text` in
+`results_panel/cell_edit_state.rs`). Both only look at what is on screen: a
+cell formats its first `DISPLAY_CHARACTERS`, and the editor scans the visible
+rows and, within a long unwrapped row, only the visible columns. Measure
+changes to either with `scripts/measure-frames large-values` or
+`large-query`, which time frames under Xvfb with GPUI's `ZED_MEASUREMENTS`.
+
 ## Query timing
 
 `QueryResult::timing` is measured by each driver around its own row loop with

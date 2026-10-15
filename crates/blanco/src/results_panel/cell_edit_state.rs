@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use gpui::{App, Entity, Pixels, Point, Size, px, size};
-use gpui_component::input::{EditorState, InputState};
+use gpui_component::input::{EditorState, InputState, InvisibleCharacter, invisible_character};
 
 use super::binary_viewer::BinaryViewer;
 use super::date_time_picker::DateTimePicker;
@@ -104,47 +104,11 @@ impl From<String> for DisplayText {
     }
 }
 
-/// How a character that draws as nothing, or as plain space, is shown when
-/// the grid shows invisible characters.
-enum Invisible {
-    /// A space with a width: kept, and tinted.
-    Space,
-    /// A character without width, shown by its usual abbreviation.
-    Named(&'static str),
-    /// A control character, shown by its code point.
-    CodePoint,
-}
-
-fn invisible(character: char) -> Option<Invisible> {
-    Some(match character {
-        '\u{00A0}'
-        | '\u{1680}'
-        | '\u{2000}'..='\u{200A}'
-        | '\u{202F}'
-        | '\u{205F}'
-        | '\u{3000}' => Invisible::Space,
-        '\u{00AD}' => Invisible::Named("SHY"),
-        '\u{200B}' => Invisible::Named("ZWSP"),
-        '\u{200C}' => Invisible::Named("ZWNJ"),
-        '\u{200D}' => Invisible::Named("ZWJ"),
-        '\u{2060}' => Invisible::Named("WJ"),
-        '\u{FEFF}' => Invisible::Named("BOM"),
-        // Direction marks and embeddings, which reorder text without showing.
-        '\u{061C}'
-        | '\u{200E}'
-        | '\u{200F}'
-        | '\u{202A}'..='\u{202E}'
-        | '\u{2066}'..='\u{2069}' => Invisible::CodePoint,
-        // C0 and C1, apart from the line breaks and tabs marked always.
-        character if character.is_control() => Invisible::CodePoint,
-        _ => return None,
-    })
-}
-
 /// A value as a cell shows it on one line: line breaks and tabs become
 /// `⏎`, `␍` and `⇥`, and only the first [`DISPLAY_CHARACTERS`] are formatted,
 /// a longer value ending in `…`. With `show_invisible` it also marks
-/// characters that would otherwise look like nothing or like a plain space:
+/// characters that would otherwise look like nothing or like a plain space,
+/// by the rule the editor boxes them with (`invisible_character`):
 /// other control characters by code point (`U+0007`), zero width characters
 /// and the byte order mark by name (`ZWSP`, `BOM`), Unicode spaces and the
 /// spaces that end the value as themselves. Each mark is a range of
@@ -189,11 +153,13 @@ fn display_text_of(shown: &str, cut: bool, show_invisible: bool) -> DisplayText 
             '\t' => text.push('⇥'),
             _ if !show_invisible => text.push(character),
             ' ' if ix >= trailing_spaces => mark(&mut text, " "),
-            character => match invisible(character) {
+            character => match invisible_character(character) {
                 None => text.push(character),
-                Some(Invisible::Space) => mark(&mut text, character.encode_utf8(&mut [0; 4])),
-                Some(Invisible::Named(name)) => mark(&mut text, name),
-                Some(Invisible::CodePoint) => {
+                Some(InvisibleCharacter::Space) => {
+                    mark(&mut text, character.encode_utf8(&mut [0; 4]))
+                }
+                Some(InvisibleCharacter::Named(name)) => mark(&mut text, name),
+                Some(InvisibleCharacter::CodePoint) => {
                     mark(&mut text, &format!("U+{:04X}", u32::from(character)))
                 }
             },

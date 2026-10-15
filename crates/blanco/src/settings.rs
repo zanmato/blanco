@@ -176,6 +176,9 @@ impl Settings {
                 "editor.show_whitespace" => {
                     settings.editor.show_whitespace = value.parse().unwrap_or_default();
                 }
+                "editor.highlight_invisible_characters" => {
+                    settings.editor.highlight_invisible_characters = value.parse().unwrap_or(true);
+                }
                 "editor.folding" => {
                     settings.editor.folding = value.parse().unwrap_or(true);
                 }
@@ -474,6 +477,10 @@ impl Default for GeneralSettings {
 pub struct EditorSettings {
     pub word_wrap: bool,
     pub show_whitespace: bool,
+    /// Box control characters, zero width characters and Unicode spaces in
+    /// the code editors, which otherwise look like nothing or a plain space.
+    #[serde(default = "default_true")]
+    pub highlight_invisible_characters: bool,
     pub folding: bool,
     pub hard_tabs: bool,
     pub tab_size: u32,
@@ -701,6 +708,7 @@ impl Default for EditorSettings {
         Self {
             word_wrap: false,
             show_whitespace: false,
+            highlight_invisible_characters: true,
             folding: true,
             hard_tabs: false,
             tab_size: 2,

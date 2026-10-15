@@ -116,8 +116,12 @@ pub(crate) enum Scene {
     Snippets,
     /// Not a screenshot: a grid of 1 MB text values, scrolled and then
     /// redrawn in place, after which the app quits. Run with
-    /// `ZED_MEASUREMENTS=1` to time each frame (scripts/measure-grid-frames).
+    /// `ZED_MEASUREMENTS=1` to time each frame (scripts/measure-frames).
     LargeValues,
+    /// Not a screenshot either: the SQL editor holding a 1 MB query on one
+    /// line, redrawn plain, with whitespace shown and with invisible
+    /// characters highlighted, after which the app quits.
+    LargeQuery,
 }
 
 impl Scene {
@@ -130,6 +134,7 @@ impl Scene {
             "script" => Some(Self::Script),
             "snippets" => Some(Self::Snippets),
             "large-values" => Some(Self::LargeValues),
+            "large-query" => Some(Self::LargeQuery),
             _ => {
                 tracing::error!("Unknown BLANCO_SCENE {scene:?}");
                 None
@@ -140,7 +145,7 @@ impl Scene {
     /// The editor tab the scene brings to the front, in seeding order.
     fn tab_index(self) -> usize {
         match self {
-            Self::Editor | Self::Terminal | Self::Snippets => 0,
+            Self::Editor | Self::Terminal | Self::Snippets | Self::LargeQuery => 0,
             Self::InlineEdit | Self::LargeValues => 1,
             Self::Script => 2,
         }
@@ -392,9 +397,58 @@ async fn stage_scene(
             measure_large_values(&editor_panel, cx).await?;
             cx.update(|_, cx| cx.quit())?;
         }
+        Scene::LargeQuery => {
+            measure_large_query(&editor_panel, cx).await?;
+            cx.update(|_, cx| cx.quit())?;
+        }
     }
 
     settle(cx, 1500).await;
+    Ok(())
+}
+
+/// Put a 1 MB `INSERT` on one line in the editor, with a no-break space,
+/// a zero width space and a control character every hundred characters, and
+/// redraw it plain, with whitespace shown and with invisible characters
+/// highlighted.
+async fn measure_large_query(
+    editor_panel: &Entity<EditorPanel>,
+    cx: &mut AsyncWindowContext,
+) -> anyhow::Result<()> {
+    let chunk = format!(
+        "{}\u{00A0}{}\u{200B}{}\u{0007}",
+        "a".repeat(32),
+        "b".repeat(32),
+        "c".repeat(32)
+    );
+    let query = format!(
+        "INSERT INTO notes (body) VALUES ('{}');",
+        chunk.repeat(1_000_000 / chunk.len())
+    );
+    let editor = editor_panel
+        .read_with(cx, |panel, _| {
+            panel.active_query_tab().map(|tab| tab.editor.clone())
+        })
+        .ok_or_else(|| anyhow::anyhow!("no query tab"))?;
+    editor.update_in(cx, |editor, window, cx| {
+        editor.set_value(query, window, cx);
+        editor.focus(window, cx);
+    })?;
+    settle(cx, 2000).await;
+
+    for phase in ["plain", "whitespace", "invisible"] {
+        editor.update_in(cx, |editor, window, cx| {
+            editor.set_show_whitespaces(phase == "whitespace", window, cx);
+            editor.set_highlight_invisible_characters(phase == "invisible", window, cx);
+        })?;
+        settle(cx, 500).await;
+        tracing::info!("editor measurement: {phase}");
+        for _ in 0..100 {
+            cx.update(|window, _| window.refresh())?;
+            settle(cx, 16).await;
+        }
+        tracing::info!("editor measurement: done");
+    }
     Ok(())
 }
 

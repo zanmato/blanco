@@ -318,6 +318,19 @@ impl EditorPanel {
         }
     }
 
+    pub fn set_all_editors_highlight_invisible_characters(
+        &mut self,
+        highlight: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        for editor in self.connection_backed_editors() {
+            editor.update(cx, |state, cx| {
+                state.set_highlight_invisible_characters(highlight, window, cx)
+            });
+        }
+    }
+
     pub fn set_all_editors_completion_accept_keys(
         &mut self,
         accept_keys: gpui_component::input::CompletionAcceptKeys,
@@ -959,8 +972,17 @@ impl EditorPanel {
             cx.observe_global_in::<AppSettings>(window, |this, window, cx| {
                 let word_wrap = AppSettings::global(cx).settings.editor.word_wrap;
                 let show_whitespace = AppSettings::global(cx).settings.editor.show_whitespace;
+                let highlight_invisible = AppSettings::global(cx)
+                    .settings
+                    .editor
+                    .highlight_invisible_characters;
                 this.set_all_editors_soft_wrap(word_wrap, window, cx);
                 this.set_all_editors_show_whitespace(show_whitespace, window, cx);
+                this.set_all_editors_highlight_invisible_characters(
+                    highlight_invisible,
+                    window,
+                    cx,
+                );
                 let accept_keys = crate::settings::completion_accept_keys(cx);
                 this.set_all_editors_completion_accept_keys(accept_keys, cx);
             });
@@ -1079,6 +1101,7 @@ impl EditorPanel {
                 let editor_settings = &AppSettings::global(cx).settings.editor;
                 let word_wrap = editor_settings.word_wrap;
                 let show_whitespace = editor_settings.show_whitespace;
+                let highlight_invisible = editor_settings.highlight_invisible_characters;
                 let folding = editor_settings.folding;
                 let hard_tabs = editor_settings.hard_tabs;
                 let tab_size = editor_settings.tab_size;
@@ -1092,7 +1115,8 @@ impl EditorPanel {
                         hard_tabs,
                     })
                     .soft_wrap(word_wrap)
-                    .show_whitespaces(show_whitespace);
+                    .show_whitespaces(show_whitespace)
+                    .highlight_invisible_characters(highlight_invisible);
                 editor.lsp_mut().completion_menu.accept_keys =
                     crate::settings::completion_accept_keys(cx);
 
@@ -1272,7 +1296,8 @@ impl EditorPanel {
                     hard_tabs: editor_settings.hard_tabs,
                 })
                 .soft_wrap(editor_settings.word_wrap)
-                .show_whitespaces(editor_settings.show_whitespace);
+                .show_whitespaces(editor_settings.show_whitespace)
+                .highlight_invisible_characters(editor_settings.highlight_invisible_characters);
             editor.lsp_mut().completion_menu.accept_keys =
                 editor_settings.completion_accept_keys.accept_keys();
 

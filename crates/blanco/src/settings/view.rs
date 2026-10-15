@@ -388,6 +388,39 @@ impl SettingsView {
                     )
                     .description("Show whitespace characters in the SQL editor."),
                     SettingItem::new(
+                        "Highlight Invisible Characters",
+                        SettingField::switch(
+                            move |cx: &App| {
+                                AppSettings::global(cx)
+                                    .settings
+                                    .editor
+                                    .highlight_invisible_characters
+                            },
+                            {
+                                let view_handle = view_handle.clone();
+                                move |val: bool, cx: &mut App| {
+                                    AppSettings::global_mut(cx)
+                                        .settings
+                                        .editor
+                                        .highlight_invisible_characters = val;
+
+                                    let key = "editor.highlight_invisible_characters".to_string();
+                                    let value = val.to_string();
+                                    if let Some(view) = view_handle.upgrade() {
+                                        view.update(cx, |view, cx| {
+                                            view.save_setting_debounced(key, value, false, cx);
+                                        });
+                                    }
+                                }
+                            },
+                        )
+                        .default_value(default_settings.editor.highlight_invisible_characters),
+                    )
+                    .description(
+                        "Box no-break spaces, zero width characters and control characters in \
+                         the SQL editor, which otherwise look like a plain space or nothing.",
+                    ),
+                    SettingItem::new(
                         "Folding",
                         SettingField::switch(
                             move |cx: &App| AppSettings::global(cx).settings.editor.folding,
