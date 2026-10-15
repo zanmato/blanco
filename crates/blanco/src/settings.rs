@@ -862,10 +862,10 @@ impl Default for DatabaseSettings {
 impl Default for AppearanceSettings {
     fn default() -> Self {
         Self {
-            theme: "One Dark - Darkened".to_string(),
+            theme: "Catppuccin Mocha".to_string(),
             follow_system: false,
             light_theme: "Catppuccin Latte".to_string(),
-            dark_theme: "One Dark - Darkened".to_string(),
+            dark_theme: "Catppuccin Mocha".to_string(),
             font_family: String::new(),
             mono_font_family: String::new(),
             terminal_font_size: 12.0,
@@ -940,7 +940,7 @@ mod appearance_tests {
         );
         assert_eq!(
             theme_for_appearance(&appearance, WindowAppearance::Dark),
-            "One Dark - Darkened"
+            "Catppuccin Mocha"
         );
     }
 
