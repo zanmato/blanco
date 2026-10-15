@@ -60,7 +60,9 @@ pub fn init(window: &impl HasDisplayHandle) -> Result<()> {
 }
 
 /// Replace the clipboard with `representations`, offered in the order given,
-/// as copied from `window`. A window without a platform display, as in
+/// as copied from `window`. On Wayland the copy is made on a thread once an
+/// input event newer than the latest press arrives, so it can follow a copy
+/// GPUI made with that press. A window without a platform display, as in
 /// tests, is an error on every platform, so callers fall back to GPUI's own
 /// clipboard there.
 pub fn write(window: &impl HasDisplayHandle, representations: Vec<Representation>) -> Result<()> {

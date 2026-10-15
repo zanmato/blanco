@@ -147,9 +147,17 @@ several MIME types (`text/html` plus a `text/plain` alternative). Its platform
 modules are adapted from GPUI's own clipboards (Apache-2.0) and cut down to
 writing: NSPasteboard on macOS, Win32 with "HTML Format" on Windows, a
 selection server thread on X11 (from GPUI's arboard-derived code), and on
-Wayland a seat and data device bound on GPUI's own `wl_display`, from the
-window's raw display handle, because only input serials from that connection
-may take the selection. `blanco_clipboard::init` runs when a window opens so
+Wayland a seat bound on GPUI's own `wl_display`, from the window's raw
+display handle, because only input serials from that connection may take the
+selection. Its data device exists only for the `set_selection` request:
+Mutter sends selection and drag events to the newest data device of a
+client, so a lasting one would starve GPUI's and break pasting and drops. GPUI
+copies the plain text first, so its own clipboard state, which misses the
+rich copy, still pastes the same text. Mutter ignores a selection whose serial
+is not newer than the current one, so the rich copy then waits on a thread
+for a later input event (the release of the same click or key) and takes the
+selection with that serial; with none within a second the plain text stays.
+`blanco_clipboard::init` runs when a window opens so
 the Wayland seat has seen the click before the copy. A window without a
 display (tests) makes `write` fail on every platform, and the caller falls back
 to GPUI's plain text copy. Reading stays with GPUI. Remove the crate once GPUI

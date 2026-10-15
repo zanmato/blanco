@@ -5,6 +5,16 @@
 //! key and button events, and with them their serials. Writing follows
 //! GPUI's `write_to_clipboard`: a data source offering each MIME type, set
 //! as the selection, answered from a thread of our own.
+//!
+//! The data device that sets the selection lives only for that request.
+//! Mutter sends selection and drag events to one data device per client,
+//! the newest, so a device kept alive here would take them from GPUI's and
+//! leave GPUI unable to paste or take drops.
+//!
+//! Mutter ignores a selection whose serial is not newer than the current
+//! selection's. The caller has GPUI copy the plain text first, with the
+//! latest press, so this copy waits for a later input event, normally the
+//! release of that same click or key, and takes the selection with it.
 
 use std::collections::HashMap;
 use std::ffi::c_void;
@@ -13,11 +23,12 @@ use std::os::fd::OwnedFd;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result};
 use wayland_backend::client::Backend;
 use wayland_client::{
-    Connection, Dispatch, EventQueue, QueueHandle, WEnum, event_created_child,
+    Connection, Dispatch, EventQueue, Proxy as _, QueueHandle, WEnum, event_created_child,
     protocol::{
         wl_data_device::{self, WlDataDevice},
         wl_data_device_manager::WlDataDeviceManager,
@@ -39,11 +50,23 @@ const TEXT_MIME_TYPES: [&str; 3] = ["text/plain;charset=utf-8", "UTF8_STRING", "
 pub(crate) struct Clipboard {
     connection: Connection,
     queue_handle: QueueHandle<State>,
+    seat: WlSeat,
     data_device_manager: WlDataDeviceManager,
-    data_device: WlDataDevice,
-    /// The serial of the latest key press, click or keyboard focus.
-    serial: Arc<AtomicU32>,
+    serials: Arc<Serials>,
 }
+
+/// Input serials seen on the seat.
+#[derive(Default)]
+struct Serials {
+    /// The latest key press, click or keyboard focus, which GPUI takes the
+    /// selection with.
+    press: AtomicU32,
+    /// The latest key or button event of any kind, releases included.
+    latest: AtomicU32,
+}
+
+/// How long a copy waits for an input event newer than GPUI's.
+const NEWER_SERIAL_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// The clipboard for the one display GPUI connects to.
 static CLIPBOARD: OnceLock<Mutex<Option<Arc<Clipboard>>>> = OnceLock::new();
@@ -74,9 +97,9 @@ impl Clipboard {
         let connection = Connection::from_backend(backend);
         let mut queue: EventQueue<State> = connection.new_event_queue();
         let queue_handle = queue.handle();
-        let serial = Arc::new(AtomicU32::new(0));
+        let serials = Arc::new(Serials::default());
         let mut state = State {
-            serial: serial.clone(),
+            serials: serials.clone(),
             seat: None,
             data_device_manager: None,
             keyboard: None,
@@ -92,8 +115,11 @@ impl Clipboard {
             .data_device_manager
             .clone()
             .context("the compositor has no data device manager")?;
-        let data_device = data_device_manager.get_data_device(&seat, &queue_handle, ());
-        connection.flush()?;
+        // Version 2 is the first whose data devices can be released.
+        anyhow::ensure!(
+            data_device_manager.version() >= 2,
+            "the compositor's data device manager is too old"
+        );
 
         std::thread::Builder::new()
             .name("Wayland clipboard".to_owned())
@@ -110,16 +136,19 @@ impl Clipboard {
         Ok(Self {
             connection,
             queue_handle,
+            seat,
             data_device_manager,
-            data_device,
-            serial,
+            serials,
         })
     }
 
+    /// Offer `representations` as the selection once an input event newer
+    /// than the latest press has arrived, on a thread of its own so the
+    /// caller does not wait for it.
     fn write(&self, representations: Vec<Representation>) -> Result<()> {
-        let serial = self.serial.load(Ordering::Acquire);
+        let press = self.serials.press.load(Ordering::Acquire);
         anyhow::ensure!(
-            serial != 0,
+            press != 0,
             "no key press or click has been seen to take the clipboard with"
         );
         let mut contents = HashMap::new();
@@ -142,8 +171,45 @@ impl Clipboard {
         for mime_type in offers {
             source.offer(mime_type);
         }
-        self.data_device.set_selection(Some(&source), serial);
-        self.connection.flush()?;
+
+        let connection = self.connection.clone();
+        let queue_handle = self.queue_handle.clone();
+        let seat = self.seat.clone();
+        let data_device_manager = self.data_device_manager.clone();
+        let serials = self.serials.clone();
+        std::thread::Builder::new()
+            .name("Clipboard write".to_owned())
+            .spawn(move || {
+                let started = Instant::now();
+                let serial = loop {
+                    let latest = serials.latest.load(Ordering::Acquire);
+                    // Serials wrap, so newer is a positive distance.
+                    if (latest.wrapping_sub(press) as i32) > 0 {
+                        break Some(latest);
+                    }
+                    if started.elapsed() > NEWER_SERIAL_TIMEOUT {
+                        break None;
+                    }
+                    std::thread::sleep(Duration::from_millis(5));
+                };
+                let Some(serial) = serial else {
+                    tracing::warn!(
+                        "No input after the copy's key press or click, the clipboard keeps plain text"
+                    );
+                    source.destroy();
+                    if let Err(error) = connection.flush() {
+                        tracing::warn!("Failed to flush the Wayland connection: {error}");
+                    }
+                    return;
+                };
+                let data_device = data_device_manager.get_data_device(&seat, &queue_handle, ());
+                data_device.set_selection(Some(&source), serial);
+                data_device.release();
+                if let Err(error) = connection.flush() {
+                    tracing::warn!("Failed to flush the Wayland connection: {error}");
+                }
+            })
+            .context("starting the clipboard write thread")?;
         Ok(())
     }
 }
@@ -152,7 +218,7 @@ impl Clipboard {
 struct Contents(Arc<HashMap<String, Arc<Vec<u8>>>>);
 
 struct State {
-    serial: Arc<AtomicU32>,
+    serials: Arc<Serials>,
     seat: Option<WlSeat>,
     data_device_manager: Option<WlDataDeviceManager>,
     keyboard: Option<WlKeyboard>,
@@ -160,8 +226,13 @@ struct State {
 }
 
 impl State {
-    fn record_serial(&self, serial: u32) {
-        self.serial.store(serial, Ordering::Release);
+    fn record_press(&self, serial: u32) {
+        self.serials.press.store(serial, Ordering::Release);
+        self.serials.latest.store(serial, Ordering::Release);
+    }
+
+    fn record_release(&self, serial: u32) {
+        self.serials.latest.store(serial, Ordering::Release);
     }
 }
 
@@ -229,12 +300,15 @@ impl Dispatch<WlKeyboard, ()> for State {
         _: &QueueHandle<Self>,
     ) {
         match event {
-            wl_keyboard::Event::Enter { serial, .. } => state.record_serial(serial),
+            wl_keyboard::Event::Enter { serial, .. } => state.record_press(serial),
             wl_keyboard::Event::Key {
                 serial,
-                state: WEnum::Value(wl_keyboard::KeyState::Pressed),
+                state: WEnum::Value(key_state),
                 ..
-            } => state.record_serial(serial),
+            } => match key_state {
+                wl_keyboard::KeyState::Pressed => state.record_press(serial),
+                _ => state.record_release(serial),
+            },
             _ => {}
         }
     }
@@ -251,11 +325,14 @@ impl Dispatch<WlPointer, ()> for State {
     ) {
         if let wl_pointer::Event::Button {
             serial,
-            state: WEnum::Value(wl_pointer::ButtonState::Pressed),
+            state: WEnum::Value(button_state),
             ..
         } = event
         {
-            state.record_serial(serial);
+            match button_state {
+                wl_pointer::ButtonState::Pressed => state.record_press(serial),
+                _ => state.record_release(serial),
+            }
         }
     }
 }
@@ -282,7 +359,7 @@ impl Dispatch<WlDataDevice, ()> for State {
         _: &QueueHandle<Self>,
     ) {
         // GPUI's own data device reads the clipboard and takes drops; the
-        // offers this one is handed are let go at once.
+        // offers this one is handed while it exists are let go at once.
         match event {
             wl_data_device::Event::Selection { id: Some(offer) }
             | wl_data_device::Event::Enter {

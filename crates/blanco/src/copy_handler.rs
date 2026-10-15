@@ -67,21 +67,23 @@ impl CopyHandler {
                 entity
                     .update_in(cx, |_, window, cx| {
                         tracing::debug!("Writing transformed data to clipboard");
+                        // GPUI copies the text first even for HTML: on
+                        // Wayland its own clipboard state misses the copy
+                        // that follows, and then still pastes this text.
+                        cx.write_to_clipboard(ClipboardItem::new_string(transformed.clone()));
                         if is_html {
                             // Offered as HTML so a mail or a document pastes a
                             // table, and as text so an editor pastes the markup.
                             let representations = vec![
                                 blanco_clipboard::Representation::html(transformed.clone()),
-                                blanco_clipboard::Representation::text(transformed.clone()),
+                                blanco_clipboard::Representation::text(transformed),
                             ];
-                            match blanco_clipboard::write(window, representations) {
-                                Ok(()) => return,
-                                Err(error) => tracing::warn!(
+                            if let Err(error) = blanco_clipboard::write(window, representations) {
+                                tracing::warn!(
                                     "Copying as HTML fell back to plain text: {error:#}"
-                                ),
+                                );
                             }
                         }
-                        cx.write_to_clipboard(ClipboardItem::new_string(transformed));
                     })
                     .log_err();
             } else {
