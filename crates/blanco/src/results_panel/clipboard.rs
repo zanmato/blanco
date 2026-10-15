@@ -1,10 +1,11 @@
 //! Action handlers for the `CopyAs*` actions on `ResultsPanel`.
 
 use gpui::{Context, Window};
+use gpui_component::table::TableSelection;
 
 use crate::app::{
     CopyAsCSV, CopyAsHTML, CopyAsJSON, CopyAsMarkdown, CopyAsSQL, CopyAsTSV, CopyAsVALUES,
-    CopyCellValue,
+    CopyCellValue, CopyColumnValues, CopySelection,
 };
 
 use super::ResultsPanel;
@@ -68,6 +69,39 @@ impl ResultsPanel {
             .stored_cell_value(action.row, action.col);
         if let Some(value) = value {
             cx.write_to_clipboard(gpui::ClipboardItem::new_string(value));
+        }
+    }
+
+    /// The copy shortcut: a selected cell copies its value as the cell's
+    /// copy button does, selected rows copy as TSV, which pastes into a
+    /// spreadsheet, and a selected column copies its values one per line.
+    pub(super) fn on_copy_selection(
+        &mut self,
+        _action: &CopySelection,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let table_state = self.table_state.read(cx);
+        let has_rows = !table_state.selected_rows().is_empty();
+        match table_state.selection() {
+            TableSelection::Cell(row, col) => {
+                self.on_copy_cell_value(&CopyCellValue { row, col }, window, cx)
+            }
+            TableSelection::Column(column) => self.on_copy_column_values(
+                &CopyColumnValues {
+                    column,
+                    distinct: false,
+                    as_in_list: false,
+                    selected_only: false,
+                },
+                window,
+                cx,
+            ),
+            // Rows picked with ctrl or shift report only through
+            // `selected_rows`.
+            TableSelection::Row(_) => self.copy_selected_as("tsv", window, cx),
+            TableSelection::None if has_rows => self.copy_selected_as("tsv", window, cx),
+            TableSelection::None => {}
         }
     }
 

@@ -1790,6 +1790,7 @@ impl Render for ResultsPanel {
             .on_action(cx.listener(Self::on_copy_as_html))
             .on_action(cx.listener(Self::on_copy_column_values))
             .on_action(cx.listener(Self::on_copy_cell_value))
+            .on_action(cx.listener(Self::on_copy_selection))
             .on_action(cx.listener(Self::on_export_as_csv))
             .on_action(cx.listener(Self::on_export_as_tsv))
             .on_action(cx.listener(Self::on_export_as_json))

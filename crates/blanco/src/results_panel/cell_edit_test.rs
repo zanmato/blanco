@@ -1184,6 +1184,84 @@ async fn test_cells_mark_invisible_characters_when_asked(cx: &mut TestAppContext
     );
 }
 
+/// The copy shortcut on a focused grid copies a selected cell's value, the
+/// selected rows as TSV and a selected column's values.
+#[gpui::test]
+async fn test_copy_shortcut_copies_the_selection(cx: &mut TestAppContext) {
+    use gpui::Focusable as _;
+
+    let harness = TestHarness::new(cx);
+    let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+    cx.update(|_, cx| {
+        cx.bind_keys(crate::keybindings::customizable_key_bindings(
+            &crate::settings::Settings::default(),
+        ));
+    });
+
+    set_editor_text(
+        &harness,
+        "SELECT 1 AS id, 'first value' AS v UNION ALL SELECT 2, 'second'",
+        &mut cx,
+    );
+    run_query(&harness, &mut cx);
+    wait_for_query(&harness, &mut cx).await;
+    let table_state = harness.editor_panel.read_with(&cx, |panel, cx| {
+        panel
+            .active_query_tab()
+            .expect("query tab")
+            .results_panel
+            .read(cx)
+            .table_state()
+            .clone()
+    });
+    let copy = |selection: TableSelection, cx: &mut VisualTestContext| {
+        table_state.update_in(cx, |state, window, cx| {
+            state.set_selection(selection, cx);
+            state.focus_handle(cx).focus(window, cx);
+        });
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string(String::new()));
+        cx.simulate_keystrokes("secondary-c");
+        cx.run_until_parked();
+        cx.read_from_clipboard()
+            .and_then(|item| item.text())
+            .unwrap_or_default()
+    };
+
+    assert_eq!(copy(TableSelection::Cell(0, 1), &mut cx), "first value");
+    let rows = copy(TableSelection::Row(1), &mut cx);
+    assert!(rows.contains("2\tsecond"), "{rows:?}");
+    assert_eq!(copy(TableSelection::Column(0), &mut cx), "1\n2");
+
+    // While a cell is edited, the shortcut copies the editor's selection.
+    let results_panel = harness.editor_panel.read_with(&cx, |panel, _| {
+        panel
+            .active_query_tab()
+            .expect("query tab")
+            .results_panel
+            .clone()
+    });
+    results_panel.update_in(&mut cx, |panel, window, cx| {
+        panel.start_cell_edit(0, 1, window, cx);
+    });
+    cx.run_until_parked();
+    let input = table_state.read_with(&cx, |state, _| {
+        match state.delegate().edit_state.get_editing_input() {
+            Some(CellInput::Inline(input)) => input,
+            _ => panic!("a fresh cell edit is inline"),
+        }
+    });
+    input.update_in(&mut cx, |input, window, cx| {
+        input.set_selected_range(0..5, window, cx);
+    });
+    cx.write_to_clipboard(gpui::ClipboardItem::new_string(String::new()));
+    cx.simulate_keystrokes("secondary-c");
+    cx.run_until_parked();
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|item| item.text()),
+        Some("first".to_string())
+    );
+}
+
 /// Copy as HTML writes the selected row as an escaped table, and the cell
 /// menu builds with its Copy as and Export as submenus.
 #[gpui::test]

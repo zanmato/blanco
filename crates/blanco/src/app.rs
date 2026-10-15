@@ -77,6 +77,7 @@ actions!(
         CopyAsVALUES,
         CopyAsMarkdown,
         CopyAsHTML,
+        CopySelection,
         ExportData,
         ExportAsCSV,
         ExportAsTSV,

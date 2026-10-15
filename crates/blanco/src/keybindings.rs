@@ -1,9 +1,10 @@
 use crate::app::{
     ActivateNextTab, ActivatePreviousTab, CancelQuery, CloseActiveTab, CloseWindow, CommitChanges,
-    DecreaseEditorFontSize, ExplainQuery, ExportTableData, FormatQuery, ImportTableData,
-    IncreaseEditorFontSize, NewQueryTab, NewWindow, OpenReferencedRow, OpenSettings, OpenTerminal,
-    RefreshConnections, ReopenClosedTab, ResetEditorFontSize, RollbackChanges, RunQuery, SaveTab,
-    SaveTabAs, ToggleCommandPalette, ToggleFilterBar, ToggleResults, ToggleSidebar,
+    CopySelection, DecreaseEditorFontSize, ExplainQuery, ExportTableData, FormatQuery,
+    ImportTableData, IncreaseEditorFontSize, NewQueryTab, NewWindow, OpenReferencedRow,
+    OpenSettings, OpenTerminal, RefreshConnections, ReopenClosedTab, ResetEditorFontSize,
+    RollbackChanges, RunQuery, SaveTab, SaveTabAs, ToggleCommandPalette, ToggleFilterBar,
+    ToggleResults, ToggleSidebar,
 };
 use crate::settings::Settings;
 
@@ -207,6 +208,13 @@ pub const CUSTOMIZABLE_BINDINGS: &[BindingDef] = &[
         context: None,
     },
     BindingDef {
+        action: "CopySelection",
+        label: "Copy the selected cell, rows or column",
+        group: "Data",
+        default: "secondary-c",
+        context: Some("DataTable"),
+    },
+    BindingDef {
         action: "OpenReferencedRow",
         label: "Open referenced row",
         group: "Data",
@@ -331,6 +339,7 @@ fn key_binding(action: &str, keystrokes: &str, context: Option<&str>) -> Option<
         "OpenTerminal" => gpui::KeyBinding::new(keystrokes, OpenTerminal, context),
         "ReopenClosedTab" => gpui::KeyBinding::new(keystrokes, ReopenClosedTab, context),
         "OpenReferencedRow" => gpui::KeyBinding::new(keystrokes, OpenReferencedRow, context),
+        "CopySelection" => gpui::KeyBinding::new(keystrokes, CopySelection, context),
         "IncreaseEditorFontSize" => {
             gpui::KeyBinding::new(keystrokes, IncreaseEditorFontSize, context)
         }
