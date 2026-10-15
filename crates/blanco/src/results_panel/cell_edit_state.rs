@@ -82,16 +82,37 @@ impl CellInput {
     }
 }
 
+/// The most characters of a value a cell draws. More than the widest column
+/// shows at the grid font, so cells look the same, but a value of megabytes
+/// costs no more to format and lay out on every frame than a short one.
+pub const DISPLAY_CHARACTERS: usize = 1000;
+
 /// Format a value for display in table cells, replacing whitespace with visual indicators
 /// to maintain table layout while showing multi-line content.
 /// - \n (newline) becomes ⏎
 /// - \r (carriage return) becomes ␍
 /// - \t (tab) becomes ⇥
+///
+/// Only the first [`DISPLAY_CHARACTERS`] are formatted; a longer value ends
+/// in `…`.
 pub fn format_value_for_display(value: &str) -> String {
-    value
-        .replace('\r', "␍")
-        .replace('\n', "⏎")
-        .replace('\t', "⇥")
+    let (shown, cut) = match value.char_indices().nth(DISPLAY_CHARACTERS) {
+        Some((end, _)) => (&value[..end], true),
+        None => (value, false),
+    };
+    let mut output = String::with_capacity(shown.len() + '…'.len_utf8());
+    for character in shown.chars() {
+        match character {
+            '\r' => output.push('␍'),
+            '\n' => output.push('⏎'),
+            '\t' => output.push('⇥'),
+            character => output.push(character),
+        }
+    }
+    if cut {
+        output.push('…');
+    }
+    output
 }
 
 /// Compare two string values as numeric values.
@@ -432,4 +453,23 @@ fn reindex_row_set(set: &HashSet<usize>, removed_row: usize) -> HashSet<usize> {
     set.iter()
         .map(|&r| if r > removed_row { r - 1 } else { r })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DISPLAY_CHARACTERS, format_value_for_display};
+
+    #[test]
+    fn display_marks_line_breaks_and_tabs() {
+        assert_eq!(format_value_for_display("a\r\nb\tc"), "a␍⏎b⇥c");
+    }
+
+    #[test]
+    fn display_stops_after_the_characters_a_cell_can_show() {
+        let short = "å".repeat(DISPLAY_CHARACTERS);
+        assert_eq!(format_value_for_display(&short), short);
+
+        let long = format!("{short}\nmore");
+        assert_eq!(format_value_for_display(&long), format!("{short}…"));
+    }
 }

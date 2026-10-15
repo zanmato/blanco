@@ -113,6 +113,10 @@ pub(crate) enum Scene {
     Script,
     /// The snippets sidebar with a snippet open in the editor.
     Snippets,
+    /// Not a screenshot: a grid of 1 MB text values, scrolled and then
+    /// redrawn in place, after which the app quits. Run with
+    /// `ZED_MEASUREMENTS=1` to time each frame (scripts/measure-grid-frames).
+    LargeValues,
 }
 
 impl Scene {
@@ -124,6 +128,7 @@ impl Scene {
             "terminal" => Some(Self::Terminal),
             "script" => Some(Self::Script),
             "snippets" => Some(Self::Snippets),
+            "large-values" => Some(Self::LargeValues),
             _ => {
                 tracing::error!("Unknown BLANCO_SCENE {scene:?}");
                 None
@@ -135,7 +140,7 @@ impl Scene {
     fn tab_index(self) -> usize {
         match self {
             Self::Editor | Self::Terminal | Self::Snippets => 0,
-            Self::InlineEdit => 1,
+            Self::InlineEdit | Self::LargeValues => 1,
             Self::Script => 2,
         }
     }
@@ -382,9 +387,52 @@ async fn stage_scene(
                 panel.open_snippet_tab(2, window, cx);
             })?;
         }
+        Scene::LargeValues => {
+            measure_large_values(&editor_panel, cx).await?;
+            cx.update(|_, cx| cx.quit())?;
+        }
     }
 
     settle(cx, 1500).await;
+    Ok(())
+}
+
+/// Rows of 1 MB text values, each different so no two share a text layout.
+const LARGE_VALUES_QUERY: &str = "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 100)\nSELECT i, i || ' ' || replace(hex(zeroblob(250000)), '00', 'ab' || char(9) || char(10)) AS big, 'short' AS small FROM n;";
+
+/// Load the large values, then scroll the grid a row per frame and redraw it
+/// in place, logging where each phase starts so the frame durations GPUI
+/// prints can be told apart.
+async fn measure_large_values(
+    editor_panel: &Entity<EditorPanel>,
+    cx: &mut AsyncWindowContext,
+) -> anyhow::Result<()> {
+    hide_sql_log(editor_panel, cx)?;
+    editor_panel.update_in(cx, |panel, window, cx| {
+        if let Some(tab) = panel.active_query_tab() {
+            tab.editor.update(cx, |editor, cx| {
+                editor.set_value(LARGE_VALUES_QUERY, window, cx);
+            });
+        }
+    })?;
+    run_active_tab(editor_panel, cx).await?;
+    settle(cx, 1000).await;
+    let results_panel = editor_panel
+        .read_with(cx, |panel, _| panel.active_results_panel())
+        .ok_or_else(|| anyhow::anyhow!("no results panel"))?;
+    let table_state = results_panel.read_with(cx, |panel, _| panel.table_state().clone());
+
+    tracing::info!("grid measurement: scroll");
+    for row in 0..100 {
+        table_state.update(cx, |state, cx| state.scroll_to_row(row, cx));
+        settle(cx, 16).await;
+    }
+    tracing::info!("grid measurement: redraw");
+    for _ in 0..100 {
+        cx.update(|window, _| window.refresh())?;
+        settle(cx, 16).await;
+    }
+    tracing::info!("grid measurement: done");
     Ok(())
 }
 

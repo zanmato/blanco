@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+# Times the results grid's frames with large text values: runs Blanco's
+# large-values scene on a virtual X display against a throwaway data
+# directory with GPUI's ZED_MEASUREMENTS on, then prints the frame durations
+# of each phase (scrolling a row per frame, then redrawing in place).
+#
+# Usage: scripts/measure-grid-frames
+#
+# Needs Xvfb, xdpyinfo, sqlite3 and dbus-run-session, plus Mesa's lavapipe
+# Vulkan driver when there is no GPU. Set BLANCO_BIN to measure an existing
+# build of `cargo build --release -p blanco --features screenshots`.
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+root="$(pwd)"
+
+if [[ -z "${BLANCO_BIN:-}" ]]; then
+  cargo build --release -p blanco --features screenshots
+  BLANCO_BIN="$root/target/release/blanco"
+fi
+
+work="$(mktemp -d)"
+xvfb_pid=""
+cleanup() {
+  [[ -n "$xvfb_pid" ]] && kill "$xvfb_pid" 2>/dev/null || true
+  rm -rf "$work"
+}
+trap cleanup EXIT
+
+sqlite3 "$work/demo.db" < "$root/scripts/screenshots/demo.sql"
+
+display=":$((90 + RANDOM % 100))"
+Xvfb "$display" -screen 0 1640x1040x24 -nolisten tcp >/dev/null 2>&1 &
+xvfb_pid=$!
+for _ in $(seq 50); do
+  DISPLAY="$display" xdpyinfo >/dev/null 2>&1 && break
+  sleep 0.1
+done
+
+# A session bus that cannot activate services, so nothing touches the real
+# keyring or portals.
+cat > "$work/dbus.conf" <<'EOF'
+<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+<busconfig>
+  <type>session</type>
+  <listen>unix:tmpdir=/tmp</listen>
+  <auth>EXTERNAL</auth>
+  <policy context="default">
+    <allow send_destination="*" eavesdrop="true"/>
+    <allow eavesdrop="true"/>
+    <allow own="*"/>
+  </policy>
+</busconfig>
+EOF
+
+home="$work/home"
+mkdir -p "$home"/{.local/share,.local/state,.config} "$work/runtime"
+chmod 700 "$work/runtime"
+lavapipe=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json 2>/dev/null | head -n1 || true)
+
+# The scene quits the app when it is done.
+timeout 600 env -i \
+  PATH="$PATH" \
+  HOME="$home" \
+  LANG=en_US.UTF-8 \
+  DISPLAY="$display" \
+  XDG_DATA_HOME="$home/.local/share" \
+  XDG_STATE_HOME="$home/.local/state" \
+  XDG_CONFIG_HOME="$home/.config" \
+  XDG_RUNTIME_DIR="$work/runtime" \
+  ${lavapipe:+VK_ICD_FILENAMES="$lavapipe"} \
+  ZED_MEASUREMENTS=1 \
+  BLANCO_SCENE=large-values \
+  BLANCO_DEMO_DB="$work/demo.db" \
+  dbus-run-session --config-file="$work/dbus.conf" -- "$BLANCO_BIN" >"$work/app.log" 2>&1 || true
+
+awk '
+  /grid measurement: scroll/ { phase = "scroll"; next }
+  /grid measurement: redraw/ { phase = "redraw"; next }
+  /grid measurement: done/ { phase = ""; next }
+  phase != "" && /^frame duration: / {
+    value = $3
+    if (value ~ /ms$/) { sub(/ms$/, "", value); ms = value + 0 }
+    else if (value ~ /µs$/) { sub(/µs$/, "", value); ms = value / 1000 }
+    else if (value ~ /ns$/) { sub(/ns$/, "", value); ms = value / 1000000 }
+    else if (value ~ /s$/) { sub(/s$/, "", value); ms = value * 1000 }
+    frames[phase, ++count[phase]] = ms
+  }
+  END {
+    found = 0
+    for (p in count) {
+      found = 1
+      n = count[p]
+      for (i = 1; i <= n; i++) sorted[i] = frames[p, i]
+      # Insertion sort; a phase has about a hundred frames.
+      for (i = 2; i <= n; i++) {
+        v = sorted[i]; j = i - 1
+        while (j > 0 && sorted[j] > v) { sorted[j + 1] = sorted[j]; j-- }
+        sorted[j + 1] = v
+      }
+      total = 0
+      for (i = 1; i <= n; i++) total += sorted[i]
+      printf "%-7s %4d frames  median %8.2f ms  p95 %8.2f ms  max %8.2f ms  mean %8.2f ms\n", \
+        p, n, sorted[int((n + 1) / 2)], sorted[int(n * 0.95 + 0.5)], sorted[n], total / n
+    }
+    if (!found) exit 1
+  }
+' "$work/app.log" || {
+  echo "No frame measurements, the app log follows:" >&2
+  cat "$work/app.log" >&2
+  exit 1
+}
