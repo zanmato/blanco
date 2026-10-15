@@ -1,10 +1,13 @@
 use gpui::{AppContext as _, Entity, TestAppContext, VisualTestContext};
 
+use super::staging::{RowState, StructureChange};
 use super::{ForeignKeyForm, TableStructureTab};
 use crate::editor::TableStructureParams;
 use crate::test_harness::TestHarness;
 use blanco_core::ConnectionContext;
-use blanco_core::ddl::{ForeignKeyOperation, ReferentialAction};
+use blanco_core::ddl::{
+    ColumnOperation, ColumnSpec, ForeignKeyOperation, IndexOperation, ReferentialAction,
+};
 use database::DatabaseType;
 
 fn context(harness: &TestHarness) -> ConnectionContext {
@@ -153,4 +156,168 @@ async fn structure_tab_lists_foreign_keys_and_prefills_the_form(cx: &mut TestApp
             on_delete: ReferentialAction::SetNull,
         }
     );
+}
+
+#[gpui::test]
+async fn structure_changes_wait_for_apply_and_run_together(cx: &mut TestAppContext) {
+    let harness = TestHarness::new(cx);
+    let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+    cx.executor().allow_parking();
+
+    execute(
+        &harness,
+        "CREATE TABLE people (id integer PRIMARY KEY, name text, nickname text)",
+        &mut cx,
+    );
+    let tab = harness
+        .editor_panel
+        .update_in(&mut cx, |panel, window, cx| {
+            panel.create_table_structure_tab(
+                TableStructureParams {
+                    context: context(&harness),
+                    table_name: "people".to_string(),
+                },
+                window,
+                cx,
+            )
+        });
+    let tab = tab.upgrade().expect("structure tab");
+    tab.update_in(&mut cx, |tab, window, cx| tab.reload(window, cx));
+    wait_until(&mut cx, "structure", |cx| {
+        tab.read_with(cx, |tab, _| !tab.loading && !tab.columns.is_empty())
+    })
+    .await;
+
+    let age = ColumnSpec {
+        name: "age".to_string(),
+        data_type: "integer".to_string(),
+        nullable: true,
+        default: None,
+    };
+    tab.update_in(&mut cx, |tab, window, cx| {
+        tab.stage(
+            StructureChange::Column(ColumnOperation::Add(age.clone())),
+            window,
+            cx,
+        );
+        // The index can name the column only staged so far.
+        tab.stage(
+            StructureChange::Index(IndexOperation::Create {
+                name: "people_age_idx".to_string(),
+                columns: vec!["age".to_string()],
+                unique: false,
+            }),
+            window,
+            cx,
+        );
+        tab.stage(
+            StructureChange::Column(ColumnOperation::Drop {
+                name: "nickname".to_string(),
+            }),
+            window,
+            cx,
+        );
+        // SQLite cannot change a column's type in place, which is refused
+        // when the change is staged.
+        tab.stage(
+            StructureChange::Column(ColumnOperation::Alter {
+                name: "name".to_string(),
+                spec: ColumnSpec {
+                    name: "name".to_string(),
+                    data_type: "varchar(20)".to_string(),
+                    nullable: true,
+                    default: None,
+                },
+            }),
+            window,
+            cx,
+        );
+    });
+
+    tab.read_with(&cx, |tab: &TableStructureTab, cx| {
+        assert_eq!(tab.pending.len(), 3);
+        assert!(tab.has_pending_changes());
+        assert_eq!(tab.staged.live_column_names(), ["id", "name", "age"]);
+        let delegate = tab.columns_table_state.read(cx).delegate();
+        let states: Vec<RowState> = delegate.marks.iter().map(|mark| mark.state).collect();
+        assert_eq!(
+            states,
+            [
+                RowState::Unchanged,
+                RowState::Unchanged,
+                RowState::Dropped,
+                RowState::Added
+            ]
+        );
+        let statements: Vec<&str> = tab
+            .pending
+            .iter()
+            .flat_map(|pending| &pending.statements)
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            statements,
+            [
+                "ALTER TABLE \"people\" ADD COLUMN \"age\" integer",
+                "CREATE INDEX \"people_age_idx\" ON \"people\" (\"age\")",
+                "ALTER TABLE \"people\" DROP COLUMN \"nickname\"",
+            ]
+        );
+    });
+    // Nothing has run yet.
+    tab.update_in(&mut cx, |tab, window, cx| tab.reload(window, cx));
+    wait_until(&mut cx, "reload", |cx| {
+        tab.read_with(cx, |tab, _| !tab.loading)
+    })
+    .await;
+    tab.read_with(&cx, |tab, _| {
+        assert_eq!(tab.columns.len(), 3);
+        assert_eq!(tab.pending.len(), 3);
+    });
+
+    // Undoing the new column takes the index on it along.
+    tab.update_in(&mut cx, |tab, window, cx| tab.undo_change(0, window, cx));
+    tab.read_with(&cx, |tab, _| {
+        let changes: Vec<&StructureChange> =
+            tab.pending.iter().map(|pending| &pending.change).collect();
+        assert_eq!(
+            changes,
+            [&StructureChange::Column(ColumnOperation::Drop {
+                name: "nickname".to_string()
+            })]
+        );
+    });
+
+    // Closing the tab asks first instead of dropping the pending change.
+    let tab_count = harness
+        .editor_panel
+        .update_in(&mut cx, |panel, window, cx| {
+            let count = panel.tabs.len();
+            panel.request_close_tab(panel.active_tab_index(), window, cx);
+            count
+        });
+    harness.editor_panel.read_with(&cx, |panel, cx| {
+        assert_eq!(panel.tabs.len(), tab_count);
+        assert_eq!(panel.unsaved_tab_names(cx), ["people"]);
+    });
+
+    tab.update_in(&mut cx, |tab, window, cx| {
+        tab.stage(
+            StructureChange::Column(ColumnOperation::Add(age)),
+            window,
+            cx,
+        );
+        tab.apply_changes(window, cx);
+    });
+    wait_until(&mut cx, "apply", |cx| {
+        tab.read_with(cx, |tab, _| {
+            !tab.applying && !tab.loading && tab.pending.is_empty()
+        })
+    })
+    .await;
+    tab.read_with(&cx, |tab, _| {
+        let names: Vec<&str> = tab.columns.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["id", "name", "age"]);
+        assert!(!tab.has_pending_changes());
+    });
 }

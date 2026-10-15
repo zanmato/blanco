@@ -189,6 +189,22 @@ impl TabType {
         }
     }
 
+    /// What closing the tab loses, by name: a file with unsaved changes, or
+    /// a table with structure changes not yet applied.
+    pub fn unsaved_name(&self, cx: &App) -> Option<String> {
+        match self {
+            TabType::TableStructure(tab) => {
+                let tab = tab.read(cx);
+                tab.has_pending_changes().then(|| tab.table_name.clone())
+            }
+            _ => self
+                .connection_tab()
+                .and_then(|tab| tab.file.as_ref())
+                .filter(|file| file.dirty)
+                .map(TabFile::name),
+        }
+    }
+
     /// The connection this tab works against, `None` for connection-less tabs
     /// (settings, snippets).
     pub fn context(&self, cx: &App) -> Option<ConnectionContext> {

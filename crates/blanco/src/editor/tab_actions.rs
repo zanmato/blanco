@@ -2,7 +2,7 @@
 //! the bulk closes.
 
 use app_database::AppDatabase;
-use gpui::{Context, Window};
+use gpui::{App, Context, Window};
 
 use super::tabs::TabFile;
 use super::{EditorPanel, TabCreationParams, TabType};
@@ -114,14 +114,11 @@ impl EditorPanel {
         self.active_tab_ix
     }
 
-    /// The names of the files whose tabs have unsaved changes.
-    pub(crate) fn unsaved_file_names(&self) -> Vec<String> {
+    /// The names of the files and tables whose tabs have unsaved changes.
+    pub(crate) fn unsaved_tab_names(&self, cx: &App) -> Vec<String> {
         self.tabs
             .iter()
-            .filter_map(TabType::connection_tab)
-            .filter_map(|tab| tab.file.as_ref())
-            .filter(|file| file.dirty)
-            .map(TabFile::name)
+            .filter_map(|tab| tab.unsaved_name(cx))
             .collect()
     }
 
@@ -225,17 +222,15 @@ impl EditorPanel {
     }
 
     /// Close the tabs at `indices`, highest first so the others keep theirs.
-    /// A tab with unsaved changes to its file stays open: closing it asks
-    /// first, and a bulk close has no good moment for a question per tab.
+    /// A tab with unsaved changes stays open: closing it asks first, and a
+    /// bulk close has no good moment for a question per tab.
     fn close_tabs(&mut self, mut indices: Vec<usize>, cx: &mut Context<Self>) {
         indices.sort_unstable_by(|a, b| b.cmp(a));
         for ix in indices {
             let unsaved = self
                 .tabs
                 .get(ix)
-                .and_then(TabType::connection_tab)
-                .and_then(|tab| tab.file.as_ref())
-                .is_some_and(|file| file.dirty);
+                .is_some_and(|tab| tab.unsaved_name(cx).is_some());
             if !unsaved {
                 self.close_tab(ix, cx);
             }

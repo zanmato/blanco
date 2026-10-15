@@ -1,11 +1,13 @@
 use std::cmp::Ordering;
 
 use gpui::{
-    App, AppContext, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement, Render,
-    Styled, Subscription, WeakEntity, Window, div, prelude::FluentBuilder as _, px,
+    AnyElement, App, AppContext, Context, Div, Entity, FocusHandle, Focusable, FontWeight,
+    IntoElement, ParentElement, Render, Styled, Subscription, WeakEntity, Window, div,
+    prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
-    ActiveTheme, Icon, IconName, IndexPath, Sizable as _, StyledExt, WindowExt as _,
+    ActiveTheme, Disableable as _, Icon, IconName, IndexPath, Sizable as _, StyledExt,
+    WindowExt as _,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
     dialog::{DialogAction, DialogClose, DialogFooter},
@@ -13,6 +15,7 @@ use gpui_component::{
     input::{Input, InputEvent, InputState},
     menu::{PopupMenu, PopupMenuItem},
     notification::NotificationType,
+    popover::{Popover, PopoverState},
     scroll::ScrollableElement,
     select::{SearchableVec, Select, SelectEvent, SelectState},
     table::{Column, ColumnSort, DataTable, TableDelegate, TableState},
@@ -28,13 +31,25 @@ use blanco_core::ddl::{
 use blanco_core::{ColumnInfo, ForeignKeyConstraint, IndexInfo};
 use blanco_ui::{SqlView, SqlViewMessage};
 
+use self::staging::{PendingChange, RowMark, RowState, StagedStructure, StructureChange};
+
+mod staging;
+
 pub struct TableStructureTab {
     pub title: String,
     pub context: ConnectionContext,
     pub table_name: String,
+    /// The structure as the server last reported it.
     columns: Vec<ColumnInfo>,
     indexes: Vec<IndexInfo>,
     foreign_keys: Vec<ForeignKeyConstraint>,
+    /// Changes waiting for Apply, in the order they run.
+    pending: Vec<PendingChange>,
+    /// The structure with the pending changes replayed onto it, which the
+    /// lists show and the row actions address.
+    staged: StagedStructure,
+    applying: bool,
+    apply_preview: Entity<SqlView>,
     columns_table_state: Entity<TableState<ColumnsTableDelegate>>,
     indexes_table_state: Entity<TableState<IndexesTableDelegate>>,
     foreign_keys_table_state: Entity<TableState<ForeignKeysTableDelegate>>,
@@ -67,16 +82,14 @@ impl TableStructureTab {
 
         let highlight_theme = cx.theme().highlight_theme.clone();
         let language = crate::sql::highlight_language(context.db_type);
-        let ddl_log = cx.new(|cx| SqlView::new(1, highlight_theme, language, cx));
+        let ddl_log = cx.new(|cx| SqlView::new(1, highlight_theme.clone(), language, cx));
+        let apply_preview = cx.new(|cx| SqlView::new(usize::MAX, highlight_theme, language, cx));
 
         let indexes = order_indexes(indexes, &columns);
         let tab = cx.entity().downgrade();
-        let columns_table_state =
-            Self::columns_table(columns.clone(), false, tab.clone(), window, cx);
-        let indexes_table_state =
-            Self::indexes_table(indexes.clone(), false, tab.clone(), window, cx);
-        let foreign_keys_table_state =
-            Self::foreign_keys_table(Vec::new(), &context, false, tab, window, cx);
+        let columns_table_state = Self::columns_table(tab.clone(), window, cx);
+        let indexes_table_state = Self::indexes_table(tab.clone(), window, cx);
+        let foreign_keys_table_state = Self::foreign_keys_table(&context, tab, window, cx);
 
         let column_search = cx.new(|cx| InputState::new(window, cx).placeholder("Search columns"));
         let search_subscription =
@@ -91,13 +104,17 @@ impl TableStructureTab {
                 }
             });
 
-        Self {
+        let mut tab = Self {
             title,
             context,
             table_name,
             columns,
             indexes,
             foreign_keys: Vec::new(),
+            pending: Vec::new(),
+            staged: StagedStructure::default(),
+            applying: false,
+            apply_preview,
             columns_table_state,
             indexes_table_state,
             foreign_keys_table_state,
@@ -112,17 +129,17 @@ impl TableStructureTab {
             ddl_error: None,
             column_search,
             _subscriptions: vec![search_subscription],
-        }
+        };
+        tab.restage(window, cx);
+        tab
     }
 
     fn columns_table(
-        columns: Vec<ColumnInfo>,
-        editable: bool,
         tab: WeakEntity<Self>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<TableState<ColumnsTableDelegate>> {
-        let delegate = ColumnsTableDelegate::new(columns, editable, tab);
+        let delegate = ColumnsTableDelegate::new(tab);
         cx.new(|cx| {
             TableState::new(delegate, window, cx)
                 .row_selectable(false)
@@ -132,13 +149,11 @@ impl TableStructureTab {
     }
 
     fn indexes_table(
-        indexes: Vec<IndexInfo>,
-        editable: bool,
         tab: WeakEntity<Self>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<TableState<IndexesTableDelegate>> {
-        let delegate = IndexesTableDelegate::new(indexes, editable, tab);
+        let delegate = IndexesTableDelegate::new(tab);
         cx.new(|cx| {
             TableState::new(delegate, window, cx)
                 .row_selectable(false)
@@ -148,15 +163,12 @@ impl TableStructureTab {
     }
 
     fn foreign_keys_table(
-        foreign_keys: Vec<ForeignKeyConstraint>,
         context: &ConnectionContext,
-        editable: bool,
         tab: WeakEntity<Self>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<TableState<ForeignKeysTableDelegate>> {
-        let delegate =
-            ForeignKeysTableDelegate::new(foreign_keys, context.schema_name.clone(), editable, tab);
+        let delegate = ForeignKeysTableDelegate::new(context.schema_name.clone(), tab);
         cx.new(|cx| {
             TableState::new(delegate, window, cx)
                 .row_selectable(false)
@@ -234,9 +246,10 @@ impl TableStructureTab {
                 match result {
                     Ok((columns, indexes, foreign_keys, read_only)) => {
                         this.read_only = read_only;
-                        this.set_columns(columns, window, cx);
-                        this.set_indexes(indexes, window, cx);
-                        this.set_foreign_keys(foreign_keys, window, cx);
+                        this.indexes = order_indexes(indexes, &columns);
+                        this.columns = columns;
+                        this.foreign_keys = foreign_keys;
+                        this.restage(window, cx);
                         this.ddl_loaded = false;
                         if this.ddl_visible {
                             this.ddl_visible = false;
@@ -313,62 +326,134 @@ impl TableStructureTab {
         cx.notify();
     }
 
-    pub fn set_columns(
-        &mut self,
-        columns: Vec<ColumnInfo>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let tab = cx.entity().downgrade();
-        // Keep the search and sort the user had across a reload.
-        let (filter, sort) = {
-            let delegate = self.columns_table_state.read(cx).delegate();
-            (delegate.filter.clone(), delegate.sort)
-        };
-        self.columns = columns.clone();
-        self.columns_table_state =
-            Self::columns_table(columns, self.can_edit_structure(), tab, window, cx);
-        self.columns_table_state.update(cx, |table, cx| {
-            let delegate = table.delegate_mut();
-            delegate.set_filter(filter);
-            if let Some((col_ix, sort)) = sort {
-                delegate.set_sort(col_ix, sort);
+    pub(crate) fn has_pending_changes(&self) -> bool {
+        !self.pending.is_empty()
+    }
+
+    /// Stage `change` after the pending ones. A change the backend cannot
+    /// make, or that does not fit the staged structure, is refused here so
+    /// Apply never meets it.
+    fn stage(&mut self, change: StructureChange, window: &mut Window, cx: &mut Context<Self>) {
+        let statements = match change.statements(
+            self.context.db_type,
+            self.context.schema_name.as_deref(),
+            &self.table_name,
+        ) {
+            Ok(statements) => statements,
+            Err(error) => {
+                window.push_notification(
+                    (
+                        NotificationType::Error,
+                        format!("{}: {error}", change.label()),
+                    ),
+                    cx,
+                );
+                return;
             }
+        };
+        let replayed = staging::replay(
+            &self.columns,
+            &self.indexes,
+            &self.foreign_keys,
+            self.pending
+                .iter()
+                .map(|pending| &pending.change)
+                .chain([&change]),
+        );
+        let new_ix = self.pending.len();
+        if let Some((_, reason)) = replayed.rejected.iter().find(|(ix, _)| *ix == new_ix) {
+            window.push_notification(
+                (
+                    NotificationType::Error,
+                    format!("{}: {reason}", change.label()),
+                ),
+                cx,
+            );
+            return;
+        }
+        self.pending.push(PendingChange { change, statements });
+        self.restage(window, cx);
+    }
+
+    /// Drop one pending change. Later changes that depended on it (an index
+    /// on a column it added) go with it.
+    pub fn undo_change(&mut self, change_ix: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if change_ix < self.pending.len() {
+            self.pending.remove(change_ix);
+            self.restage(window, cx);
+        }
+    }
+
+    pub fn discard_changes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.pending.clear();
+        self.restage(window, cx);
+    }
+
+    /// Replay the pending changes onto the loaded structure and show the
+    /// result. Changes that no longer fit, after an undo or a reload, are
+    /// dropped and named in a notification.
+    fn restage(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let replay = |this: &Self| {
+            staging::replay(
+                &this.columns,
+                &this.indexes,
+                &this.foreign_keys,
+                this.pending.iter().map(|pending| &pending.change),
+            )
+        };
+        let mut replayed = replay(self);
+        if !replayed.rejected.is_empty() {
+            let mut dropped: Vec<String> = replayed
+                .rejected
+                .iter()
+                .rev()
+                .map(|(ix, reason)| {
+                    let pending = self.pending.remove(*ix);
+                    format!("{} ({reason})", pending.change.describe())
+                })
+                .collect();
+            dropped.reverse();
+            window.push_notification(
+                (
+                    NotificationType::Warning,
+                    format!("Undid changes that no longer apply: {}", dropped.join(", ")),
+                ),
+                cx,
+            );
+            // The rejected changes changed nothing, so this replay matches
+            // the first one with the change indices shifted.
+            replayed = replay(self);
+        }
+        self.staged = replayed.structure;
+        self.show_staged(cx);
+    }
+
+    /// Hand the staged structure to the three lists.
+    fn show_staged(&mut self, cx: &mut Context<Self>) {
+        let editable = self.can_edit_structure() && !self.applying;
+        let staged = &self.staged;
+        self.columns_table_state.update(cx, |table, cx| {
+            table.delegate_mut().set_rows(
+                staged.columns.clone(),
+                staged.column_marks.clone(),
+                editable,
+            );
             table.refresh(cx);
         });
-        cx.notify();
-    }
-
-    pub fn set_indexes(
-        &mut self,
-        indexes: Vec<IndexInfo>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let tab = cx.entity().downgrade();
-        let indexes = order_indexes(indexes, &self.columns);
-        self.indexes = indexes.clone();
-        self.indexes_table_state =
-            Self::indexes_table(indexes, self.can_edit_structure(), tab, window, cx);
-        cx.notify();
-    }
-
-    fn set_foreign_keys(
-        &mut self,
-        foreign_keys: Vec<ForeignKeyConstraint>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let tab = cx.entity().downgrade();
-        self.foreign_keys = foreign_keys.clone();
-        self.foreign_keys_table_state = Self::foreign_keys_table(
-            foreign_keys,
-            &self.context,
-            self.can_edit_structure(),
-            tab,
-            window,
-            cx,
-        );
+        self.indexes_table_state.update(cx, |table, cx| {
+            let delegate = table.delegate_mut();
+            delegate.indexes = staged.indexes.clone();
+            delegate.marks = staged.index_marks.clone();
+            delegate.editable = editable;
+            table.refresh(cx);
+        });
+        self.foreign_keys_table_state.update(cx, |table, cx| {
+            let delegate = table.delegate_mut();
+            delegate.foreign_keys = staged.foreign_keys.clone();
+            delegate.marks = staged.foreign_key_marks.clone();
+            delegate.editable = editable;
+            table.refresh(cx);
+        });
         cx.notify();
     }
 
@@ -390,29 +475,28 @@ impl TableStructureTab {
         }
     }
 
-    /// Open the add (`existing == None`) or edit column form.
+    /// Open the add (`existing == None`) or edit column form. `existing` is
+    /// a row of the staged columns.
     pub fn open_column_editor(
         &mut self,
         existing: Option<usize>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let existing_column = existing.and_then(|row| self.columns.get(row)).cloned();
+        let existing_column = existing
+            .and_then(|row| self.staged.columns.get(row))
+            .cloned();
         let form = cx.new(|cx| ColumnForm::new(existing_column.as_ref(), window, cx));
         let title = match &existing_column {
             Some(column) => format!("Edit column \"{}\"", column.name),
             None => format!("Add column to \"{}\"", self.table_name),
         };
-        let description = format!(
-            "The change is applied immediately{}. Type and default are used verbatim.",
-            self.prod_note()
-        );
-        let confirm_label = self.confirm_label(if existing_column.is_some() {
-            "Apply"
+        let description = "Type and default are used verbatim. The change runs when you apply it.";
+        let confirm_label = if existing_column.is_some() {
+            "Save"
         } else {
             "Add"
-        });
-        let is_prod = self.context.confirms_writes();
+        };
         let this_handle = cx.entity().downgrade();
 
         window.open_dialog(cx, move |dialog, _, _| {
@@ -422,7 +506,7 @@ impl TableStructureTab {
             dialog
                 .title(title.clone())
                 .w(px(460.))
-                .child(div().text_sm().child(description.clone()))
+                .child(div().text_sm().child(description))
                 .child(form.clone())
                 .footer(
                     DialogFooter::new()
@@ -433,9 +517,8 @@ impl TableStructureTab {
                         .child(
                             DialogAction::new().child(
                                 Button::new("column-confirm")
-                                    .when(is_prod, |this| this.danger())
-                                    .when(!is_prod, |this| this.primary())
-                                    .label(confirm_label.clone())
+                                    .primary()
+                                    .label(confirm_label)
                                     .on_click(move |_, window, cx| {
                                         let spec = form.read(cx).spec(cx);
                                         let operation = match &existing_column {
@@ -447,7 +530,11 @@ impl TableStructureTab {
                                         };
                                         this_handle
                                             .update(cx, |this, cx| {
-                                                this.run_column_operation(operation, window, cx);
+                                                this.stage(
+                                                    StructureChange::Column(operation),
+                                                    window,
+                                                    cx,
+                                                );
                                             })
                                             .log_err();
                                     }),
@@ -457,13 +544,8 @@ impl TableStructureTab {
         });
     }
 
-    pub fn confirm_rename_column(
-        &mut self,
-        row: usize,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(column) = self.columns.get(row).cloned() else {
+    pub fn open_rename_column(&mut self, row: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(column) = self.staged.columns.get(row).cloned() else {
             return;
         };
         let input = cx.new(|cx| {
@@ -471,9 +553,7 @@ impl TableStructureTab {
                 .placeholder("New name")
                 .default_value(&column.name)
         });
-        let title = format!("Rename column \"{}\"?", column.name);
-        let description = format!("Enter the new name{}.", self.prod_note());
-        let confirm_label = self.confirm_label("Rename");
+        let title = format!("Rename column \"{}\"", column.name);
         let this_handle = cx.entity().downgrade();
 
         window.open_dialog(cx, move |dialog, _, _| {
@@ -482,7 +562,7 @@ impl TableStructureTab {
             let this_handle = this_handle.clone();
             dialog
                 .title(title.clone())
-                .child(description.clone())
+                .child("Enter the new name. The change runs when you apply it.")
                 .child(Input::new(&input))
                 .footer(
                     DialogFooter::new()
@@ -496,8 +576,8 @@ impl TableStructureTab {
                         .child(
                             DialogAction::new().child(
                                 Button::new("rename-column-confirm")
-                                    .danger()
-                                    .label(confirm_label.clone())
+                                    .primary()
+                                    .label("Rename")
                                     .on_click(move |_, window, cx| {
                                         let operation = ColumnOperation::Rename {
                                             from: column.name.clone(),
@@ -505,217 +585,10 @@ impl TableStructureTab {
                                         };
                                         this_handle
                                             .update(cx, |this, cx| {
-                                                this.run_column_operation(operation, window, cx);
-                                            })
-                                            .log_err();
-                                    }),
-                            ),
-                        ),
-                )
-        });
-    }
-
-    pub fn confirm_drop_column(&mut self, row: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(column) = self.columns.get(row).cloned() else {
-            return;
-        };
-        let description = format!(
-            "\"{}\" and all of its data will be permanently deleted{}.",
-            column.name,
-            self.prod_note()
-        );
-        self.confirm_danger(
-            format!("Drop column \"{}\"?", column.name),
-            description,
-            self.confirm_label("Drop"),
-            DdlRequest::Column(ColumnOperation::Drop { name: column.name }),
-            window,
-            cx,
-        );
-    }
-
-    pub fn confirm_drop_index(&mut self, row: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(index) = self.indexes.get(row).cloned() else {
-            return;
-        };
-        let description = format!(
-            "Index \"{}\" will be permanently deleted{}.",
-            index.name,
-            self.prod_note()
-        );
-        self.confirm_danger(
-            format!("Drop index \"{}\"?", index.name),
-            description,
-            self.confirm_label("Drop"),
-            DdlRequest::Index(IndexOperation::Drop { name: index.name }),
-            window,
-            cx,
-        );
-    }
-
-    pub fn confirm_drop_foreign_key(
-        &mut self,
-        row: usize,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(foreign_key) = self.foreign_keys.get(row).cloned() else {
-            return;
-        };
-        let description = format!(
-            "Foreign key \"{}\" will be dropped{}. Rows in \"{}\" are kept, but no longer checked against \"{}\".",
-            foreign_key.name,
-            self.prod_note(),
-            self.table_name,
-            foreign_key.referenced_table
-        );
-        self.confirm_danger(
-            format!("Drop foreign key \"{}\"?", foreign_key.name),
-            description,
-            self.confirm_label("Drop"),
-            DdlRequest::ForeignKey(ForeignKeyOperation::Drop {
-                name: foreign_key.name,
-            }),
-            window,
-            cx,
-        );
-    }
-
-    fn confirm_danger(
-        &mut self,
-        title: String,
-        description: String,
-        confirm_label: String,
-        request: DdlRequest,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let this_handle = cx.entity().downgrade();
-        window.open_dialog(cx, move |dialog, _, _| {
-            let request = request.clone();
-            let this_handle = this_handle.clone();
-            dialog
-                .title(title.clone())
-                .child(description.clone())
-                .footer(
-                    DialogFooter::new()
-                        .child(
-                            DialogClose::new()
-                                .child(Button::new("ddl-cancel").label("Cancel").outline()),
-                        )
-                        .child(
-                            DialogAction::new().child(
-                                Button::new("ddl-confirm")
-                                    .danger()
-                                    .label(confirm_label.clone())
-                                    .on_click(move |_, window, cx| {
-                                        let request = request.clone();
-                                        this_handle
-                                            .update(cx, |this, cx| match request {
-                                                DdlRequest::Column(operation) => {
-                                                    this.run_column_operation(operation, window, cx)
-                                                }
-                                                DdlRequest::Index(operation) => {
-                                                    this.run_index_operation(operation, window, cx)
-                                                }
-                                                DdlRequest::ForeignKey(operation) => this
-                                                    .run_foreign_key_operation(
-                                                        operation, window, cx,
-                                                    ),
-                                            })
-                                            .log_err();
-                                    }),
-                            ),
-                        ),
-                )
-        });
-    }
-
-    pub fn open_index_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let column_names: Vec<String> = self.columns.iter().map(|c| c.name.clone()).collect();
-        let form = cx.new(|cx| IndexForm::new(&self.table_name, column_names, window, cx));
-        let title = format!("Add index to \"{}\"", self.table_name);
-        let description = format!(
-            "The index is created immediately{}. Columns are indexed in table order.",
-            self.prod_note()
-        );
-        let confirm_label = self.confirm_label("Create");
-        let is_prod = self.context.confirms_writes();
-        let this_handle = cx.entity().downgrade();
-
-        window.open_dialog(cx, move |dialog, _, _| {
-            let form = form.clone();
-            let this_handle = this_handle.clone();
-            dialog
-                .title(title.clone())
-                .w(px(460.))
-                .child(div().text_sm().child(description.clone()))
-                .child(form.clone())
-                .footer(
-                    DialogFooter::new()
-                        .child(
-                            DialogClose::new()
-                                .child(Button::new("index-cancel").label("Cancel").outline()),
-                        )
-                        .child(
-                            DialogAction::new().child(
-                                Button::new("index-confirm")
-                                    .when(is_prod, |this| this.danger())
-                                    .when(!is_prod, |this| this.primary())
-                                    .label(confirm_label.clone())
-                                    .on_click(move |_, window, cx| {
-                                        let operation = form.read(cx).operation(cx);
-                                        this_handle
-                                            .update(cx, |this, cx| {
-                                                this.run_index_operation(operation, window, cx);
-                                            })
-                                            .log_err();
-                                    }),
-                            ),
-                        ),
-                )
-        });
-    }
-
-    pub fn open_foreign_key_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let column_names: Vec<String> = self.columns.iter().map(|c| c.name.clone()).collect();
-        let context = self.context.clone();
-        let form = cx.new(|cx| ForeignKeyForm::new(context, column_names, window, cx));
-        let title = format!("Add foreign key to \"{}\"", self.table_name);
-        let description = format!(
-            "The foreign key is created immediately{}. Existing rows must already match the referenced table.",
-            self.prod_note()
-        );
-        let confirm_label = self.confirm_label("Create");
-        let is_prod = self.context.confirms_writes();
-        let this_handle = cx.entity().downgrade();
-
-        window.open_dialog(cx, move |dialog, _, _| {
-            let form = form.clone();
-            let this_handle = this_handle.clone();
-            dialog
-                .title(title.clone())
-                .w(px(520.))
-                .child(div().text_sm().child(description.clone()))
-                .child(form.clone())
-                .footer(
-                    DialogFooter::new()
-                        .child(
-                            DialogClose::new()
-                                .child(Button::new("foreign-key-cancel").label("Cancel").outline()),
-                        )
-                        .child(
-                            DialogAction::new().child(
-                                Button::new("foreign-key-confirm")
-                                    .when(is_prod, |this| this.danger())
-                                    .when(!is_prod, |this| this.primary())
-                                    .label(confirm_label.clone())
-                                    .on_click(move |_, window, cx| {
-                                        let operation = form.read(cx).operation(cx);
-                                        this_handle
-                                            .update(cx, |this, cx| {
-                                                this.run_foreign_key_operation(
-                                                    operation, window, cx,
+                                                this.stage(
+                                                    StructureChange::Column(operation),
+                                                    window,
+                                                    cx,
                                                 );
                                             })
                                             .log_err();
@@ -726,76 +599,170 @@ impl TableStructureTab {
         });
     }
 
-    fn run_column_operation(
-        &mut self,
-        operation: ColumnOperation,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let statements = blanco_core::ddl::column_operation_sql(
-            self.context.db_type,
-            self.context.schema_name.as_deref(),
-            &self.table_name,
-            &operation,
-        );
-        self.run_ddl(operation.label(), statements, window, cx);
+    pub fn drop_column(&mut self, row: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(column) = self.staged.columns.get(row) {
+            let name = column.name.clone();
+            self.stage(
+                StructureChange::Column(ColumnOperation::Drop { name }),
+                window,
+                cx,
+            );
+        }
     }
 
-    fn run_index_operation(
-        &mut self,
-        operation: IndexOperation,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let statements = blanco_core::ddl::index_operation_sql(
-            self.context.db_type,
-            self.context.schema_name.as_deref(),
-            &self.table_name,
-            &operation,
-        );
-        self.run_ddl(operation.label(), statements, window, cx);
+    pub fn drop_index(&mut self, row: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(index) = self.staged.indexes.get(row) {
+            let name = index.name.clone();
+            self.stage(
+                StructureChange::Index(IndexOperation::Drop { name }),
+                window,
+                cx,
+            );
+        }
     }
 
-    fn run_foreign_key_operation(
-        &mut self,
-        operation: ForeignKeyOperation,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let statements = blanco_core::ddl::foreign_key_operation_sql(
-            self.context.db_type,
-            self.context.schema_name.as_deref(),
-            &self.table_name,
-            &operation,
-        );
-        self.run_ddl(operation.label(), statements, window, cx);
+    pub fn drop_foreign_key(&mut self, row: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(foreign_key) = self.staged.foreign_keys.get(row) {
+            let name = foreign_key.name.clone();
+            self.stage(
+                StructureChange::ForeignKey(ForeignKeyOperation::Drop { name }),
+                window,
+                cx,
+            );
+        }
     }
 
-    /// Run the statements as one transaction, then reload the tab and the
-    /// sidebar's view of the connection.
-    fn run_ddl(
-        &mut self,
-        label: &'static str,
-        statements: Result<Vec<String>, blanco_core::ddl::DdlError>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let statements = match statements {
-            Ok(statements) => statements,
-            Err(error) => {
-                window
-                    .push_notification((NotificationType::Error, format!("{label}: {error}")), cx);
-                return;
+    pub fn open_index_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let column_names = self.staged.live_column_names();
+        let form = cx.new(|cx| IndexForm::new(&self.table_name, column_names, window, cx));
+        let title = format!("Add index to \"{}\"", self.table_name);
+        let description =
+            "Columns are indexed in table order. The index is created when you apply it.";
+        let this_handle = cx.entity().downgrade();
+
+        window.open_dialog(cx, move |dialog, _, _| {
+            let form = form.clone();
+            let this_handle = this_handle.clone();
+            dialog
+                .title(title.clone())
+                .w(px(460.))
+                .child(div().text_sm().child(description))
+                .child(form.clone())
+                .footer(
+                    DialogFooter::new()
+                        .child(
+                            DialogClose::new()
+                                .child(Button::new("index-cancel").label("Cancel").outline()),
+                        )
+                        .child(
+                            DialogAction::new().child(
+                                Button::new("index-confirm")
+                                    .primary()
+                                    .label("Add")
+                                    .on_click(move |_, window, cx| {
+                                        let operation = form.read(cx).operation(cx);
+                                        this_handle
+                                            .update(cx, |this, cx| {
+                                                this.stage(
+                                                    StructureChange::Index(operation),
+                                                    window,
+                                                    cx,
+                                                );
+                                            })
+                                            .log_err();
+                                    }),
+                            ),
+                        ),
+                )
+        });
+    }
+
+    pub fn open_foreign_key_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let column_names = self.staged.live_column_names();
+        let context = self.context.clone();
+        let form = cx.new(|cx| ForeignKeyForm::new(context, column_names, window, cx));
+        let title = format!("Add foreign key to \"{}\"", self.table_name);
+        let description = "Existing rows must already match the referenced table. The foreign key is created when you apply it.";
+        let this_handle = cx.entity().downgrade();
+
+        window.open_dialog(cx, move |dialog, _, _| {
+            let form = form.clone();
+            let this_handle = this_handle.clone();
+            dialog
+                .title(title.clone())
+                .w(px(520.))
+                .child(div().text_sm().child(description))
+                .child(form.clone())
+                .footer(
+                    DialogFooter::new()
+                        .child(
+                            DialogClose::new()
+                                .child(Button::new("foreign-key-cancel").label("Cancel").outline()),
+                        )
+                        .child(
+                            DialogAction::new().child(
+                                Button::new("foreign-key-confirm")
+                                    .primary()
+                                    .label("Add")
+                                    .on_click(move |_, window, cx| {
+                                        let operation = form.read(cx).operation(cx);
+                                        this_handle
+                                            .update(cx, |this, cx| {
+                                                this.stage(
+                                                    StructureChange::ForeignKey(operation),
+                                                    window,
+                                                    cx,
+                                                );
+                                            })
+                                            .log_err();
+                                    }),
+                            ),
+                        ),
+                )
+        });
+    }
+
+    /// Fill the preview with every pending statement, each change's under a
+    /// comment naming it.
+    fn fill_apply_preview(&self, cx: &mut Context<Self>) {
+        let pending = self.pending.clone();
+        self.apply_preview.update(cx, |log, cx| {
+            log.clear(cx);
+            for change in pending {
+                log.append_text(&SqlViewMessage::Comment(change.change.describe()), cx);
+                for statement in change.statements {
+                    log.append_text(&SqlViewMessage::SqlStatement(statement), cx);
+                }
             }
-        };
-        let operations: Vec<blanco_core::WriteOperation> =
-            statements.iter().map(|sql| sql.as_str().into()).collect();
+        });
+    }
+
+    /// Run every pending statement as one batch, in one transaction where
+    /// the backend can roll DDL back, then reload the tab and the sidebar's
+    /// view of the connection. A failure reloads too: where DDL commits on
+    /// its own the server may hold part of the batch, and the reload drops
+    /// the changes that no longer apply.
+    pub fn apply_changes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.pending.is_empty() || self.applying {
+            return;
+        }
+        let operations: Vec<blanco_core::WriteOperation> = self
+            .pending
+            .iter()
+            .flat_map(|pending| &pending.statements)
+            .map(|sql| sql.as_str().into())
+            .collect();
+        let change_count = self.pending.len();
         let db_service = database::DatabaseService::global(cx).clone();
         let connection_id = self.context.connection_id;
         let database_name = self.context.database_name.clone();
         let table_name = self.table_name.clone();
-        let activity = ActivityReporter::global(cx)
-            .begin(format!("{}: {label}", self.context.connection_name));
+        let activity = ActivityReporter::global(cx).begin(format!(
+            "{}: applying structure changes",
+            self.context.connection_name
+        ));
+        self.applying = true;
+        self.show_staged(cx);
 
         cx.spawn_in(window, async move |this, cx| {
             let _activity = activity;
@@ -810,43 +777,141 @@ impl TableStructureTab {
                 Ok(())
             })
             .await;
-            this.update_in(cx, |this, window, cx| match result {
-                Ok(()) => {
-                    window.push_notification(
-                        (
-                            NotificationType::Success,
-                            format!("{label} on {table_name} succeeded"),
-                        ),
-                        cx,
-                    );
-                    this.reload(window, cx);
-                    window.dispatch_action(
-                        Box::new(crate::app::RefreshConnectionTree { connection_id }),
-                        cx,
-                    );
+            this.update_in(cx, |this, window, cx| {
+                this.applying = false;
+                match result {
+                    Ok(()) => {
+                        this.pending.clear();
+                        let changes = if change_count == 1 {
+                            "1 change".to_string()
+                        } else {
+                            format!("{change_count} changes")
+                        };
+                        window.push_notification(
+                            (
+                                NotificationType::Success,
+                                format!("Applied {changes} to {table_name}"),
+                            ),
+                            cx,
+                        );
+                    }
+                    Err(error) => {
+                        tracing::error!("Applying changes to {table_name} failed: {error:#}");
+                        window.push_notification(
+                            (
+                                NotificationType::Error,
+                                format!("Applying changes to {table_name} failed: {error:#}"),
+                            ),
+                            cx,
+                        );
+                    }
                 }
-                Err(error) => {
-                    tracing::error!("{label} on {table_name} failed: {error:#}");
-                    window.push_notification(
-                        (
-                            NotificationType::Error,
-                            format!("{label} on {table_name} failed: {error:#}"),
-                        ),
-                        cx,
-                    );
-                }
+                this.reload(window, cx);
+                window.dispatch_action(
+                    Box::new(crate::app::RefreshConnectionTree { connection_id }),
+                    cx,
+                );
             })
             .log_err();
         })
         .detach();
     }
-}
 
-#[derive(Clone)]
-enum DdlRequest {
-    Column(ColumnOperation),
-    Index(IndexOperation),
-    ForeignKey(ForeignKeyOperation),
+    /// The Apply button and the preview it opens, with Confirm and Cancel.
+    fn render_apply_button(&self, cx: &mut Context<Self>) -> AnyElement {
+        let button = Button::new("apply-structure-changes")
+            .outline()
+            .small()
+            .icon(IconName::Check)
+            .label("Apply Changes")
+            .disabled(self.applying);
+        if self.applying {
+            return button.into_any_element();
+        }
+
+        let tab = cx.entity().downgrade();
+        let preview = self.apply_preview.clone();
+        let is_prod = self.context.confirms_writes();
+        let confirm_label = self.confirm_label("Confirm");
+        let prod_note = self.prod_note();
+        let dialect = self.context.dialect();
+        let partial_note = (!dialect.rolls_back_ddl()).then(|| {
+            format!(
+                "{} cannot roll back DDL, so if a statement fails the ones before it stay applied.",
+                self.context.db_type
+            )
+        });
+
+        Popover::new("apply-structure-changes-popover")
+            .trigger(button)
+            .on_open_change({
+                let tab = tab.clone();
+                move |open, _window, cx| {
+                    if *open {
+                        tab.update(cx, |tab, cx| tab.fill_apply_preview(cx))
+                            .log_err();
+                    }
+                }
+            })
+            .content(move |_state, _window, cx| {
+                let tab = tab.clone();
+                let summary = format!("The statements run in this order{prod_note}.");
+                v_flex()
+                    .p_2()
+                    .gap_2()
+                    .w(px(520.))
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(FontWeight::BOLD)
+                            .child("Preview SQL"),
+                    )
+                    .child(div().text_sm().child(summary))
+                    .when_some(partial_note.clone(), |this, note| {
+                        this.child(div().text_sm().text_color(cx.theme().warning).child(note))
+                    })
+                    .child(
+                        v_flex()
+                            .h(px(280.))
+                            .min_h_0()
+                            .overflow_hidden()
+                            .child(preview.clone()),
+                    )
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .justify_end()
+                            .child(
+                                Button::new("apply-structure-cancel")
+                                    .outline()
+                                    .small()
+                                    .label("Cancel")
+                                    .on_click(cx.listener(
+                                        |state: &mut PopoverState, _, window, cx| {
+                                            state.dismiss(window, cx);
+                                        },
+                                    )),
+                            )
+                            .child(
+                                Button::new("apply-structure-confirm")
+                                    .when(is_prod, |this| this.danger())
+                                    .when(!is_prod, |this| this.primary())
+                                    .small()
+                                    .icon(IconName::Check)
+                                    .label(confirm_label.clone())
+                                    .on_click(cx.listener(
+                                        move |state: &mut PopoverState, _, window, cx| {
+                                            tab.update(cx, |tab, cx| tab.apply_changes(window, cx))
+                                                .log_err();
+                                            state.dismiss(window, cx);
+                                        },
+                                    )),
+                            ),
+                    )
+                    .into_any_element()
+            })
+            .into_any_element()
+    }
 }
 
 /// The add/edit column dialog body.
@@ -1326,8 +1391,9 @@ impl Focusable for TableStructureTab {
 
 impl Render for TableStructureTab {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let apply_button = self.render_apply_button(cx);
         let theme = cx.theme();
-        let can_edit = self.can_edit_structure();
+        let can_edit = self.can_edit_structure() && !self.applying;
 
         v_flex()
             .flex_1()
@@ -1420,6 +1486,33 @@ impl Render for TableStructureTab {
                                                 .text_color(theme.muted_foreground)
                                                 .child("Read-only connection"),
                                         )
+                                    })
+                                    .when(!self.pending.is_empty(), |this| {
+                                        let count = match self.pending.len() {
+                                            1 => "1 pending change".to_string(),
+                                            count => format!("{count} pending changes"),
+                                        };
+                                        this.child(div().flex_1())
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(theme.muted_foreground)
+                                                    .child(count),
+                                            )
+                                            .child(apply_button)
+                                            .child(
+                                                Button::new("discard-structure-changes")
+                                                    .outline()
+                                                    .small()
+                                                    .icon(IconName::CircleX)
+                                                    .label("Discard Changes")
+                                                    .disabled(self.applying)
+                                                    .on_click(cx.listener(
+                                                        |this, _, window, cx| {
+                                                            this.discard_changes(window, cx);
+                                                        },
+                                                    )),
+                                            )
                                     }),
                             )
                             .child(
@@ -1566,6 +1659,7 @@ impl Render for TableStructureTab {
 #[derive(Clone)]
 pub struct ColumnsTableDelegate {
     columns: Vec<ColumnInfo>,
+    marks: Vec<RowMark>,
     /// Indices into `columns` in display order, after the search and sort.
     rows: Vec<usize>,
     filter: String,
@@ -1576,11 +1670,7 @@ pub struct ColumnsTableDelegate {
 }
 
 impl ColumnsTableDelegate {
-    pub fn new(
-        columns: Vec<ColumnInfo>,
-        editable: bool,
-        tab: WeakEntity<TableStructureTab>,
-    ) -> Self {
+    pub fn new(tab: WeakEntity<TableStructureTab>) -> Self {
         let column_defs = vec![
             Column {
                 name: "#".into(),
@@ -1620,16 +1710,23 @@ impl ColumnsTableDelegate {
         ];
 
         let column_defs = column_defs.into_iter().map(Column::sortable).collect();
-        let rows = (0..columns.len()).collect();
         Self {
-            columns,
-            rows,
+            columns: Vec::new(),
+            marks: Vec::new(),
+            rows: Vec::new(),
             filter: String::new(),
             sort: None,
             column_defs,
-            editable,
+            editable: false,
             tab,
         }
+    }
+
+    fn set_rows(&mut self, columns: Vec<ColumnInfo>, marks: Vec<RowMark>, editable: bool) {
+        self.columns = columns;
+        self.marks = marks;
+        self.editable = editable;
+        self.rows = column_rows(&self.columns, &self.filter, self.sort);
     }
 
     fn set_filter(&mut self, filter: String) {
@@ -1759,6 +1856,10 @@ impl TableDelegate for ColumnsTableDelegate {
         let Some(&column_ix) = self.rows.get(row_ix) else {
             return menu;
         };
+        let mark = self.marks.get(column_ix).cloned().unwrap_or_default();
+        if matches!(mark.state, RowState::Added | RowState::Dropped) {
+            return undo_items(menu, &mark, &self.tab);
+        }
         let tab = self.tab.clone();
         let item = |label: &'static str,
                     action: fn(
@@ -1773,15 +1874,18 @@ impl TableDelegate for ColumnsTableDelegate {
                     .log_err();
             })
         };
-        menu.item(item("Edit Column", |tab, row, window, cx| {
-            tab.open_column_editor(Some(row), window, cx)
-        }))
-        .item(item(
-            "Rename Column",
-            TableStructureTab::confirm_rename_column,
-        ))
-        .separator()
-        .item(item("Drop Column", TableStructureTab::confirm_drop_column))
+        let menu = menu
+            .item(item("Edit Column", |tab, row, window, cx| {
+                tab.open_column_editor(Some(row), window, cx)
+            }))
+            .item(item("Rename Column", TableStructureTab::open_rename_column))
+            .separator()
+            .item(item("Drop Column", TableStructureTab::drop_column));
+        if mark.changes.is_empty() {
+            menu
+        } else {
+            undo_items(menu.separator(), &mark, &self.tab)
+        }
     }
 
     fn columns_count(&self, _: &App) -> usize {
@@ -1835,33 +1939,28 @@ impl TableDelegate for ColumnsTableDelegate {
             .get(row_ix)
             .map(|&ix| column_cell(&self.columns[ix], ix, col_ix))
             .unwrap_or_default();
+        let state = self
+            .rows
+            .get(row_ix)
+            .and_then(|&ix| self.marks.get(ix))
+            .map(|mark| mark.state)
+            .unwrap_or_default();
 
-        div()
-            .h_full()
-            .flex()
-            .items_center()
-            .px_2()
-            .font_family(cx.theme().mono_font_family.clone())
-            .text_size(px(12.))
-            .text_color(cx.theme().foreground)
-            .child(value)
+        staged_cell(value, state, cx)
     }
 }
 
 #[derive(Clone)]
 pub struct IndexesTableDelegate {
     indexes: Vec<IndexInfo>,
+    marks: Vec<RowMark>,
     column_defs: Vec<Column>,
     editable: bool,
     tab: WeakEntity<TableStructureTab>,
 }
 
 impl IndexesTableDelegate {
-    pub fn new(
-        indexes: Vec<IndexInfo>,
-        editable: bool,
-        tab: WeakEntity<TableStructureTab>,
-    ) -> Self {
+    pub fn new(tab: WeakEntity<TableStructureTab>) -> Self {
         let column_defs = vec![
             Column {
                 name: "Name".into(),
@@ -1896,9 +1995,10 @@ impl IndexesTableDelegate {
         ];
 
         Self {
-            indexes,
+            indexes: Vec::new(),
+            marks: Vec::new(),
             column_defs,
-            editable,
+            editable: false,
             tab,
         }
     }
@@ -1915,10 +2015,14 @@ impl TableDelegate for IndexesTableDelegate {
         if !self.editable || row_ix >= self.indexes.len() {
             return menu;
         }
+        let mark = self.marks.get(row_ix).cloned().unwrap_or_default();
+        if mark.state != RowState::Unchanged {
+            return undo_items(menu, &mark, &self.tab);
+        }
         let tab = self.tab.clone();
         menu.item(
             PopupMenuItem::new("Drop Index").on_click(move |_, window, cx| {
-                tab.update(cx, |tab, cx| tab.confirm_drop_index(row_ix, window, cx))
+                tab.update(cx, |tab, cx| tab.drop_index(row_ix, window, cx))
                     .log_err();
             }),
         )
@@ -1960,7 +2064,9 @@ impl TableDelegate for IndexesTableDelegate {
         _window: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
-        let idx = &self.indexes[row_ix];
+        let Some(idx) = self.indexes.get(row_ix) else {
+            return staged_cell(String::new(), RowState::Unchanged, cx);
+        };
         let value = match col_ix {
             0 => idx.name.clone(),
             1 => idx.algorithm.clone(),
@@ -1970,22 +2076,20 @@ impl TableDelegate for IndexesTableDelegate {
             5 => idx.comment.clone().unwrap_or_default(),
             _ => String::new(),
         };
+        let state = self
+            .marks
+            .get(row_ix)
+            .map(|mark| mark.state)
+            .unwrap_or_default();
 
-        div()
-            .h_full()
-            .flex()
-            .items_center()
-            .px_2()
-            .font_family(cx.theme().mono_font_family.clone())
-            .text_size(px(12.))
-            .text_color(cx.theme().foreground)
-            .child(value)
+        staged_cell(value, state, cx)
     }
 }
 
 #[derive(Clone)]
 pub struct ForeignKeysTableDelegate {
     foreign_keys: Vec<ForeignKeyConstraint>,
+    marks: Vec<RowMark>,
     /// The tab's schema; references into it are shown without a prefix.
     schema: Option<String>,
     column_defs: Vec<Column>,
@@ -1994,19 +2098,15 @@ pub struct ForeignKeysTableDelegate {
 }
 
 impl ForeignKeysTableDelegate {
-    pub fn new(
-        foreign_keys: Vec<ForeignKeyConstraint>,
-        schema: Option<String>,
-        editable: bool,
-        tab: WeakEntity<TableStructureTab>,
-    ) -> Self {
+    pub fn new(schema: Option<String>, tab: WeakEntity<TableStructureTab>) -> Self {
         let column = |name: &'static str, width: f32| Column {
             name: name.into(),
             width: px(width),
             ..Default::default()
         };
         Self {
-            foreign_keys,
+            foreign_keys: Vec::new(),
+            marks: Vec::new(),
             schema,
             column_defs: vec![
                 column("Name", 200.),
@@ -2015,7 +2115,7 @@ impl ForeignKeysTableDelegate {
                 column("On Update", 100.),
                 column("On Delete", 100.),
             ],
-            editable,
+            editable: false,
             tab,
         }
     }
@@ -2048,13 +2148,15 @@ impl TableDelegate for ForeignKeysTableDelegate {
         if !self.editable || row_ix >= self.foreign_keys.len() {
             return menu;
         }
+        let mark = self.marks.get(row_ix).cloned().unwrap_or_default();
+        if mark.state != RowState::Unchanged {
+            return undo_items(menu, &mark, &self.tab);
+        }
         let tab = self.tab.clone();
         menu.item(
             PopupMenuItem::new("Drop Foreign Key").on_click(move |_, window, cx| {
-                tab.update(cx, |tab, cx| {
-                    tab.confirm_drop_foreign_key(row_ix, window, cx)
-                })
-                .log_err();
+                tab.update(cx, |tab, cx| tab.drop_foreign_key(row_ix, window, cx))
+                    .log_err();
             }),
         )
     }
@@ -2095,8 +2197,19 @@ impl TableDelegate for ForeignKeysTableDelegate {
         _window: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
-        let foreign_key = &self.foreign_keys[row_ix];
+        let Some(foreign_key) = self.foreign_keys.get(row_ix) else {
+            return staged_cell(String::new(), RowState::Unchanged, cx);
+        };
+        let state = self
+            .marks
+            .get(row_ix)
+            .map(|mark| mark.state)
+            .unwrap_or_default();
         let value = match col_ix {
+            // A new key without a name gets one from the server.
+            0 if foreign_key.name.is_empty() && state == RowState::Added => {
+                "(generated)".to_string()
+            }
             0 => foreign_key.name.clone(),
             1 => foreign_key.columns.join(", "),
             2 => self.references(foreign_key),
@@ -2105,16 +2218,53 @@ impl TableDelegate for ForeignKeysTableDelegate {
             _ => String::new(),
         };
 
-        div()
-            .h_full()
-            .flex()
-            .items_center()
-            .px_2()
-            .font_family(cx.theme().mono_font_family.clone())
-            .text_size(px(12.))
-            .text_color(cx.theme().foreground)
-            .child(value)
+        staged_cell(value, state, cx)
     }
+}
+
+/// One cell of a structure list, tinted like the results grid tints pending
+/// edits: green for an addition, yellow for a change, red and struck
+/// through for a drop.
+fn staged_cell(
+    value: String,
+    state: RowState,
+    cx: &Context<TableState<impl TableDelegate>>,
+) -> Div {
+    let theme = cx.theme();
+    div()
+        .h_full()
+        .flex()
+        .items_center()
+        .px_2()
+        .font_family(theme.mono_font_family.clone())
+        .text_size(px(12.))
+        .text_color(theme.foreground)
+        .map(|cell| match state {
+            RowState::Unchanged => cell,
+            RowState::Added => cell.text_color(theme.green).bg(theme.green.opacity(0.15)),
+            RowState::Modified => cell.bg(theme.yellow.opacity(0.3)),
+            RowState::Dropped => cell
+                .line_through()
+                .text_color(theme.red)
+                .bg(theme.red.opacity(0.15)),
+        })
+        .child(value)
+}
+
+/// An Undo item for each pending change on a row.
+fn undo_items(menu: PopupMenu, mark: &RowMark, tab: &WeakEntity<TableStructureTab>) -> PopupMenu {
+    mark.changes
+        .iter()
+        .fold(menu, |menu, (change_ix, description)| {
+            let tab = tab.clone();
+            let change_ix = *change_ix;
+            menu.item(PopupMenuItem::new(format!("Undo {description}")).on_click(
+                move |_, window, cx| {
+                    tab.update(cx, |tab, cx| tab.undo_change(change_ix, window, cx))
+                        .log_err();
+                },
+            ))
+        })
 }
 
 #[cfg(test)]

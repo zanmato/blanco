@@ -187,8 +187,16 @@ connection using `context(cx)`.
 
 Column, index and foreign key DDL is built by `blanco_core::ddl::{column_operation_sql,
 index_operation_sql, foreign_key_operation_sql}` and driven from the structure tab
-(`editor/table_structure.rs`: toolbar buttons, row context menus, transactional execution,
-`reload()`). SQLite cannot change a column's type, nullability or default in place, nor add or
+(`editor/table_structure.rs`: toolbar buttons, row context menus). Its dialogs and drops
+do not run anything: they stage a `StructureChange`, whose statements are built at once so
+an unsupported change is refused when it is added. `table_structure/staging.rs` replays the
+pending list onto the loaded structure, and the lists show that replay with each row marked
+(added, modified, dropped), so a staged column can be indexed and every row action addresses
+a staged row. Undoing a change replays the rest and drops the ones that no longer fit, as a
+reload does. Apply previews every statement and runs them as one
+`execute_operations_transactional` batch (`Dialect::rolls_back_ddl` says whether a failure
+rolls back), and the PROD confirmation lives on its Confirm button. A structure tab with
+pending changes counts as unsaved for closing tabs and windows (`TabType::unsaved_name`). SQLite cannot change a column's type, nullability or default in place, nor add or
 drop a foreign key, and reports `DdlError::Unsupported` instead of a lossy table rebuild. The
 foreign keys list reads `Connection::get_foreign_keys_for_table`; drivers return one catalog row
 per key column and fold them with `ForeignKeyConstraint::from_column_rows`.

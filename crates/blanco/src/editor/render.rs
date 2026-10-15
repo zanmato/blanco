@@ -284,11 +284,8 @@ impl EditorPanel {
     /// under its name with the environment badge; the rest sit under "Other".
     fn render_tab_bar_item_inner(&self, ix: usize, tab: &TabType, cx: &mut Context<Self>) -> Tab {
         let show_close_button = self.tabs.len() > 1;
-        // A file tab with unsaved changes is marked like a document window.
-        let unsaved = tab
-            .connection_tab()
-            .and_then(|tab| tab.file.as_ref())
-            .is_some_and(|file| file.dirty);
+        // A tab with unsaved changes is marked like a document window.
+        let unsaved = tab.unsaved_name(cx).is_some();
         let label = if unsaved {
             format!("● {}", tab.title(cx))
         } else {

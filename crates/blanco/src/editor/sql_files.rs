@@ -1,5 +1,6 @@
 //! `.sql` files in query tabs: open (dialog or drop), save, save as, and the
-//! unsaved-changes guard when a file tab closes.
+//! unsaved-changes guard when a file tab, or a structure tab with changes
+//! not yet applied, closes.
 
 use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
@@ -14,6 +15,7 @@ use gpui_component::{
     notification::NotificationType,
 };
 
+use super::table_structure::TableStructureTab;
 use super::tabs::{TabFile, TabType, file_name};
 use super::{EditorPanel, TabCreationParams};
 use crate::result_ext::ResultExt as _;
@@ -321,8 +323,16 @@ impl EditorPanel {
         }
     }
 
-    /// Close the tab, asking first when it has unsaved changes to its file.
+    /// Close the tab, asking first when it has unsaved changes to its file
+    /// or structure changes not yet applied.
     pub fn request_close_tab(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(TabType::TableStructure(structure)) = self.tabs.get(ix)
+            && structure.read(cx).has_pending_changes()
+        {
+            let structure = structure.clone();
+            self.confirm_discard_structure_changes(structure, window, cx);
+            return;
+        }
         let unsaved = self
             .tabs
             .get(ix)
@@ -378,6 +388,55 @@ impl EditorPanel {
                                 .primary()
                                 .label("Save")
                                 .on_click(move |_, window, cx| save(true, window, cx)),
+                        ),
+                )
+        });
+    }
+}
+
+impl EditorPanel {
+    fn confirm_discard_structure_changes(
+        &mut self,
+        structure: Entity<TableStructureTab>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let table_name = structure.read(cx).table_name.clone();
+        let weak = cx.entity().downgrade();
+        window.open_dialog(cx, move |dialog, _, _| {
+            let weak = weak.clone();
+            let structure = structure.clone();
+            dialog
+                .title(format!("Discard changes to {table_name}?"))
+                .child("The structure changes you have not applied are lost if you close the tab.")
+                .footer(
+                    DialogFooter::new()
+                        .child(
+                            DialogClose::new().child(
+                                Button::new("close-structure-cancel")
+                                    .label("Cancel")
+                                    .outline(),
+                            ),
+                        )
+                        .child(
+                            Button::new("close-structure-discard")
+                                .danger()
+                                .label("Discard and Close")
+                                .on_click(move |_, window, cx| {
+                                    // Found again by entity: other tabs may
+                                    // have moved while the dialog was open.
+                                    weak.update(cx, |this, cx| {
+                                        let ix = this.tabs.iter().position(|tab| {
+                                            matches!(tab, TabType::TableStructure(tab) if *tab == structure)
+                                        });
+                                        if let Some(ix) = ix {
+                                            this.close_tab(ix, cx);
+                                            this.focus_active_tab(window, cx);
+                                        }
+                                    })
+                                    .log_err();
+                                    window.close_dialog(cx);
+                                }),
                         ),
                 )
         });

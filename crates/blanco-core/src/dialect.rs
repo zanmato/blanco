@@ -261,6 +261,14 @@ impl Dialect {
             && !matches!(self.0, DatabaseType::SQLite | DatabaseType::DuckDb)
     }
 
+    /// Whether a failed batch of DDL rolls back as a whole. MySQL and MariaDB
+    /// commit each DDL statement implicitly, and ClickHouse has no
+    /// transactions, so there a failure leaves the statements before it
+    /// applied.
+    pub fn rolls_back_ddl(&self) -> bool {
+        self.supports_sql() && !matches!(self.0, DatabaseType::MySQL | DatabaseType::ClickHouse)
+    }
+
     // ----- sidebar / editor facts -----
 
     /// Display label for the sidebar folder that groups a connection's primary

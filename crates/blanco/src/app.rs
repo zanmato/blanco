@@ -1240,14 +1240,14 @@ impl BlancoApp {
         if self.close_confirmed || crate::windows::count(cx) <= 1 {
             return true;
         }
-        let unsaved = self.editor_panel.read(cx).unsaved_file_names();
+        let unsaved = self.editor_panel.read(cx).unsaved_tab_names(cx);
         if unsaved.is_empty() {
             return true;
         }
         let message = match unsaved.as_slice() {
             [name] => format!("Your changes to {name} are lost if you close the window."),
             names => format!(
-                "Your changes to {} files are lost if you close the window: {}.",
+                "Your changes in {} tabs are lost if you close the window: {}.",
                 names.len(),
                 names.join(", ")
             ),
