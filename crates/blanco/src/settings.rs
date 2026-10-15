@@ -368,6 +368,9 @@ impl Settings {
                 "results.defer_values_over_kb" => {
                     settings.results.defer_values_over_kb = value.parse().unwrap_or_default();
                 }
+                "results.show_invisible_characters" => {
+                    settings.results.show_invisible_characters = value.parse().unwrap_or_default();
+                }
                 key if key.starts_with("keybinding.") => {
                     let action = key.trim_start_matches("keybinding.").to_string();
                     if !action.is_empty() {
@@ -405,6 +408,10 @@ pub struct ResultsSettings {
     /// opened or copied. 0 reads every value in full.
     #[serde(default)]
     pub defer_values_over_kb: u32,
+    /// Whether cells mark control characters, zero width and Unicode spaces
+    /// and trailing spaces. Display only, like `date_format`.
+    #[serde(default)]
+    pub show_invisible_characters: bool,
 }
 
 impl Default for ResultsSettings {
@@ -416,6 +423,7 @@ impl Default for ResultsSettings {
             date_format: DateDisplayFormat::default(),
             time_zone: TimeZoneDisplay::default(),
             defer_values_over_kb: 0,
+            show_invisible_characters: false,
         }
     }
 }

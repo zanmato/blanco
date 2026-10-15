@@ -15,6 +15,7 @@ use gpui::{App, AsyncWindowContext, Entity, Window};
 use tokio::runtime::Handle;
 
 use crate::app::{BlancoApp, ConnectToConnection, SidebarTab};
+use crate::app_settings::AppSettings;
 use crate::editor::EditorPanel;
 use crate::results_panel::CellInput;
 
@@ -397,12 +398,14 @@ async fn stage_scene(
     Ok(())
 }
 
-/// Rows of 1 MB text values, each different so no two share a text layout.
-const LARGE_VALUES_QUERY: &str = "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 100)\nSELECT i, i || ' ' || replace(hex(zeroblob(250000)), '00', 'ab' || char(9) || char(10)) AS big, 'short' AS small FROM n;";
+/// Rows of 1 MB text values, each different so no two share a text layout,
+/// holding tabs, no-break spaces and control characters for the markers.
+const LARGE_VALUES_QUERY: &str = "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 100)\nSELECT i, i || ' ' || replace(hex(zeroblob(250000)), '00', 'a' || char(160) || char(9) || char(7)) AS big, 'short' AS small FROM n;";
 
 /// Load the large values, then scroll the grid a row per frame and redraw it
-/// in place, logging where each phase starts so the frame durations GPUI
-/// prints can be told apart.
+/// in place, first as it starts and then with invisible characters shown,
+/// logging where each phase starts so the frame durations GPUI prints can be
+/// told apart.
 async fn measure_large_values(
     editor_panel: &Entity<EditorPanel>,
     cx: &mut AsyncWindowContext,
@@ -422,17 +425,29 @@ async fn measure_large_values(
         .ok_or_else(|| anyhow::anyhow!("no results panel"))?;
     let table_state = results_panel.read_with(cx, |panel, _| panel.table_state().clone());
 
-    tracing::info!("grid measurement: scroll");
-    for row in 0..100 {
-        table_state.update(cx, |state, cx| state.scroll_to_row(row, cx));
-        settle(cx, 16).await;
+    for marked in [false, true] {
+        cx.update(|_, cx| {
+            AppSettings::global_mut(cx)
+                .settings
+                .results
+                .show_invisible_characters = marked;
+        })?;
+        table_state.update(cx, |state, cx| state.scroll_to_row(0, cx));
+        settle(cx, 500).await;
+        let suffix = if marked { "-marked" } else { "" };
+        tracing::info!("grid measurement: scroll{suffix}");
+        for row in 0..100 {
+            table_state.update(cx, |state, cx| state.scroll_to_row(row, cx));
+            settle(cx, 16).await;
+        }
+        tracing::info!("grid measurement: redraw{suffix}");
+        for _ in 0..100 {
+            cx.update(|window, _| window.refresh())?;
+            settle(cx, 16).await;
+        }
+        tracing::info!("grid measurement: done");
+        settle(cx, 500).await;
     }
-    tracing::info!("grid measurement: redraw");
-    for _ in 0..100 {
-        cx.update(|window, _| window.refresh())?;
-        settle(cx, 16).await;
-    }
-    tracing::info!("grid measurement: done");
     Ok(())
 }
 

@@ -818,6 +818,40 @@ impl SettingsView {
                     )
                     .description("Number the rows of a result. Applies to the next result shown."),
                     SettingItem::new(
+                        "Show Invisible Characters",
+                        SettingField::switch(
+                            move |cx: &App| {
+                                AppSettings::global(cx)
+                                    .settings
+                                    .results
+                                    .show_invisible_characters
+                            },
+                            {
+                                let view_handle = view_handle.clone();
+                                move |val: bool, cx: &mut App| {
+                                    AppSettings::global_mut(cx)
+                                        .settings
+                                        .results
+                                        .show_invisible_characters = val;
+
+                                    let key = "results.show_invisible_characters".to_string();
+                                    let value = val.to_string();
+                                    if let Some(view) = view_handle.upgrade() {
+                                        view.update(cx, |view, cx| {
+                                            view.save_setting_debounced(key, value, false, cx);
+                                        });
+                                    }
+                                }
+                            },
+                        )
+                        .default_value(default_settings.results.show_invisible_characters),
+                    )
+                    .description(
+                        "Mark control characters, zero width characters, Unicode spaces and \
+                         spaces at the end of a value in result cells. Copy, export and \
+                         editing use the value unchanged.",
+                    ),
+                    SettingItem::new(
                         "Defer Values Larger Than (KB)",
                         SettingField::number_input(
                             NumberFieldOptions {

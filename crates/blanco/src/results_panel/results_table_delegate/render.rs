@@ -3,9 +3,9 @@ use std::ops::Range;
 use gpui::AppContext as _;
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, Context, CursorStyle, DragMoveEvent, Entity, FontWeight, Hsla, InteractiveElement,
-    IntoElement, MouseButton, ParentElement, PathBuilder, Render, StatefulInteractiveElement,
-    Styled, Window, canvas, div, point, px,
+    AnyElement, App, Context, CursorStyle, DragMoveEvent, Entity, FontWeight, HighlightStyle, Hsla,
+    InteractiveElement, IntoElement, MouseButton, ParentElement, PathBuilder, Render,
+    StatefulInteractiveElement, Styled, StyledText, Window, canvas, div, point, px,
 };
 use gpui_component::popover::{Popover, PopoverState};
 use gpui_component::{
@@ -32,7 +32,9 @@ use crate::app::{
     SetCellNull, ToggleCellExpression,
 };
 use crate::results_panel::binary_viewer::BinaryViewer;
-use crate::results_panel::cell_edit_state::{CellInput, compare_numeric, format_value_for_display};
+use crate::results_panel::cell_edit_state::{
+    CellInput, DisplayText, compare_numeric, display_preview, display_text,
+};
 use crate::results_panel::compare::CompareKind;
 use crate::results_panel::foreign_key_popover::ForeignKeyPopover;
 use crate::results_panel::temporal::TemporalShape;
@@ -40,12 +42,36 @@ use blanco_ui::IconName;
 
 /// How a cell reads while its value is on the server: the start of the
 /// value and its full size.
-fn deferred_display_text(preview: &str, size: u64, loading: bool) -> String {
+fn deferred_display_text(
+    preview: &str,
+    size: u64,
+    loading: bool,
+    show_invisible: bool,
+) -> DisplayText {
     const SHOWN_CHARACTERS: usize = 48;
-    let shown: String = preview.chars().take(SHOWN_CHARACTERS).collect();
+    let mut shown = display_preview(preview, SHOWN_CHARACTERS, show_invisible);
     let size = blanco_core::binary::format_size(usize::try_from(size).unwrap_or(usize::MAX));
     let state = if loading { ", loading" } else { "" };
-    format!("{}… ({size}{state})", format_value_for_display(&shown))
+    shown.text.push_str(&format!(" ({size}{state})"));
+    shown
+}
+
+/// A cell's text, with its marks for invisible characters tinted the way
+/// VS Code boxes them.
+fn render_display_text(
+    shown: DisplayText,
+    cx: &Context<TableState<ResultsTableDelegate>>,
+) -> AnyElement {
+    if shown.markers.is_empty() {
+        return shown.text.into_any_element();
+    }
+    let style = HighlightStyle {
+        background_color: Some(cx.theme().yellow.opacity(0.35)),
+        ..HighlightStyle::default()
+    };
+    StyledText::new(shown.text)
+        .with_highlights(shown.markers.into_iter().map(|range| (range, style)))
+        .into_any_element()
 }
 
 /// Drag payload for the expanded cell editor's resize grip.
@@ -533,20 +559,26 @@ impl ResultsTableDelegate {
         let uses_default = is_null && self.cell_uses_default(row_ix, col_ix);
         // The cell holds the start of a value left on the server.
         let deferred_size = self.deferred_size(row_ix, col_ix);
-        let display_text = match current_value.as_deref() {
-            None if uses_default => "DEFAULT".to_string(),
-            None => "NULL".to_string(),
+        let settings = results_settings(cx);
+        let shown = match current_value.as_deref() {
+            None if uses_default => DisplayText::from("DEFAULT".to_string()),
+            None => DisplayText::from("NULL".to_string()),
             // Until it is applied, an expression is SQL text, not a value.
-            Some(value) if is_expression => format_value_for_display(value),
+            Some(value) if is_expression => display_text(value, settings.show_invisible_characters),
             Some(value) => match deferred_size {
-                Some(size) => deferred_display_text(value, size, self.is_loading_deferred(row_ix)),
-                None => self.display_value(col_ix, value, &results_settings(cx)),
+                Some(size) => deferred_display_text(
+                    value,
+                    size,
+                    self.is_loading_deferred(row_ix),
+                    settings.show_invisible_characters,
+                ),
+                None => self.display_value(col_ix, value, &settings),
             },
         };
         // The clipboard and the foreign key lookup get the stored value, not
         // the single-line rendering with its ⏎ / ⇥ markers or a reformatted
         // date.
-        let stored_text = current_value.unwrap_or_else(|| display_text.clone());
+        let stored_text = current_value.unwrap_or_else(|| shown.text.clone());
 
         // Check if this is a numeric column for right-alignment
         let is_numeric = self
@@ -573,7 +605,7 @@ impl ResultsTableDelegate {
                     .flex_1()
                     .min_w_0()
                     .overflow_hidden()
-                    .child(display_text),
+                    .child(render_display_text(shown, cx)),
             )
             .child(
                 div()

@@ -3,7 +3,7 @@ use gpui_component::{ActiveTheme, table::Column};
 
 use blanco_core::{QueryResult, connection_trait::ColumnType};
 
-use super::cell_edit_state::{CellEditState, format_value_for_display};
+use super::cell_edit_state::{CellEditState, DisplayText, display_text};
 use super::compare::CompareKind;
 use super::deferred_values::DeferredValues;
 use super::temporal;
@@ -173,18 +173,18 @@ impl ResultsTableDelegate {
         col_ix: usize,
         value: &str,
         settings: &ResultsSettings,
-    ) -> String {
+    ) -> DisplayText {
         if self.column_types.get(col_ix) == Some(&ColumnType::DateTime)
             && let Some(text) = temporal::display_text(value, settings)
         {
-            return text;
+            return text.into();
         }
         if self.column_types.get(col_ix) == Some(&ColumnType::Binary)
             && let Some(text) = binary_display_text(value)
         {
-            return text;
+            return text.into();
         }
-        format_value_for_display(value)
+        display_text(value, settings.show_invisible_characters)
     }
 
     /// Remove a row at the specified index

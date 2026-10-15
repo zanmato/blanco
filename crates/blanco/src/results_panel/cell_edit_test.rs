@@ -1131,6 +1131,59 @@ async fn test_column_header_selects_and_has_a_menu(cx: &mut TestAppContext) {
     assert!(!menu.read_with(&cx, |menu, _| menu.is_empty()));
 }
 
+/// With the setting on, a cell marks a no-break space, a control character
+/// and the spaces that end its value, while the stored value is untouched.
+#[gpui::test]
+async fn test_cells_mark_invisible_characters_when_asked(cx: &mut TestAppContext) {
+    use crate::app_settings::AppSettings;
+    use crate::results_panel::results_table_delegate::results_settings;
+
+    let harness = TestHarness::new(cx);
+    let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+
+    set_editor_text(
+        &harness,
+        "SELECT 'a' || char(160) || 'b' || char(7) || 'c  ' AS v",
+        &mut cx,
+    );
+    run_query(&harness, &mut cx);
+    wait_for_query(&harness, &mut cx).await;
+    let table_state = harness.editor_panel.read_with(&cx, |panel, cx| {
+        panel
+            .active_query_tab()
+            .expect("query tab")
+            .results_panel
+            .read(cx)
+            .table_state()
+            .clone()
+    });
+    let stored = "a\u{00A0}b\u{0007}c  ";
+    let shown = |cx: &mut VisualTestContext| {
+        table_state.read_with(cx, |state, cx| {
+            state
+                .delegate()
+                .display_value(0, stored, &results_settings(cx))
+        })
+    };
+    assert!(shown(&mut cx).markers.is_empty());
+
+    cx.update(|_, cx| {
+        AppSettings::global_mut(cx)
+            .settings
+            .results
+            .show_invisible_characters = true;
+        cx.refresh_windows();
+    });
+    cx.run_until_parked();
+    let marked = shown(&mut cx);
+    assert_eq!(marked.text, "a\u{00A0}bU+0007c  ");
+    assert_eq!(marked.markers.len(), 4);
+    assert_eq!(
+        table_state.read_with(&cx, |state, _| state.delegate().rows[0][0].clone()),
+        Some(stored.to_string())
+    );
+}
+
 /// Copy as HTML writes the selected row as an escaped table, and the cell
 /// menu builds with its Copy as and Export as submenus.
 #[gpui::test]
@@ -1227,7 +1280,7 @@ async fn test_date_display_format_and_picker_keep_values_raw(cx: &mut TestAppCon
     let (shown, shape) = table_state.read_with(&cx, |state, cx| {
         let delegate = state.delegate();
         (
-            delegate.display_value(1, raw, &results_settings(cx)),
+            delegate.display_value(1, raw, &results_settings(cx)).text,
             delegate.temporal_shape(0, 1),
         )
     });

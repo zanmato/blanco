@@ -87,32 +87,122 @@ impl CellInput {
 /// costs no more to format and lay out on every frame than a short one.
 pub const DISPLAY_CHARACTERS: usize = 1000;
 
-/// Format a value for display in table cells, replacing whitespace with visual indicators
-/// to maintain table layout while showing multi-line content.
-/// - \n (newline) becomes ⏎
-/// - \r (carriage return) becomes ␍
-/// - \t (tab) becomes ⇥
-///
-/// Only the first [`DISPLAY_CHARACTERS`] are formatted; a longer value ends
-/// in `…`.
-pub fn format_value_for_display(value: &str) -> String {
+/// A cell's text and the byte ranges in it that mark invisible characters,
+/// which the grid tints.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DisplayText {
+    pub text: String,
+    pub markers: Vec<std::ops::Range<usize>>,
+}
+
+impl From<String> for DisplayText {
+    fn from(text: String) -> Self {
+        Self {
+            text,
+            markers: Vec::new(),
+        }
+    }
+}
+
+/// How a character that draws as nothing, or as plain space, is shown when
+/// the grid shows invisible characters.
+enum Invisible {
+    /// A space with a width: kept, and tinted.
+    Space,
+    /// A character without width, shown by its usual abbreviation.
+    Named(&'static str),
+    /// A control character, shown by its code point.
+    CodePoint,
+}
+
+fn invisible(character: char) -> Option<Invisible> {
+    Some(match character {
+        '\u{00A0}'
+        | '\u{1680}'
+        | '\u{2000}'..='\u{200A}'
+        | '\u{202F}'
+        | '\u{205F}'
+        | '\u{3000}' => Invisible::Space,
+        '\u{00AD}' => Invisible::Named("SHY"),
+        '\u{200B}' => Invisible::Named("ZWSP"),
+        '\u{200C}' => Invisible::Named("ZWNJ"),
+        '\u{200D}' => Invisible::Named("ZWJ"),
+        '\u{2060}' => Invisible::Named("WJ"),
+        '\u{FEFF}' => Invisible::Named("BOM"),
+        // Direction marks and embeddings, which reorder text without showing.
+        '\u{061C}'
+        | '\u{200E}'
+        | '\u{200F}'
+        | '\u{202A}'..='\u{202E}'
+        | '\u{2066}'..='\u{2069}' => Invisible::CodePoint,
+        // C0 and C1, apart from the line breaks and tabs marked always.
+        character if character.is_control() => Invisible::CodePoint,
+        _ => return None,
+    })
+}
+
+/// A value as a cell shows it on one line: line breaks and tabs become
+/// `⏎`, `␍` and `⇥`, and only the first [`DISPLAY_CHARACTERS`] are formatted,
+/// a longer value ending in `…`. With `show_invisible` it also marks
+/// characters that would otherwise look like nothing or like a plain space:
+/// other control characters by code point (`U+0007`), zero width characters
+/// and the byte order mark by name (`ZWSP`, `BOM`), Unicode spaces and the
+/// spaces that end the value as themselves. Each mark is a range of
+/// [`DisplayText::markers`].
+pub fn display_text(value: &str, show_invisible: bool) -> DisplayText {
     let (shown, cut) = match value.char_indices().nth(DISPLAY_CHARACTERS) {
         Some((end, _)) => (&value[..end], true),
         None => (value, false),
     };
-    let mut output = String::with_capacity(shown.len() + '…'.len_utf8());
-    for character in shown.chars() {
+    display_text_of(shown, cut, show_invisible)
+}
+
+/// [`display_text`] for the first `characters` of a value known to go on
+/// past `preview`, as a deferred value's preview does: it always ends in `…`
+/// and its last spaces are not the value's.
+pub fn display_preview(preview: &str, characters: usize, show_invisible: bool) -> DisplayText {
+    let shown = match preview.char_indices().nth(characters) {
+        Some((end, _)) => &preview[..end],
+        None => preview,
+    };
+    display_text_of(shown, true, show_invisible)
+}
+
+fn display_text_of(shown: &str, cut: bool, show_invisible: bool) -> DisplayText {
+    // Spaces that end the value. A value cut short ends past what is shown.
+    let trailing_spaces = if show_invisible && !cut {
+        shown.trim_end_matches(' ').len()
+    } else {
+        shown.len()
+    };
+    let mut text = String::with_capacity(shown.len() + '…'.len_utf8());
+    let mut markers = Vec::new();
+    let mut mark = |text: &mut String, shown_as: &str| {
+        let start = text.len();
+        text.push_str(shown_as);
+        markers.push(start..text.len());
+    };
+    for (ix, character) in shown.char_indices() {
         match character {
-            '\r' => output.push('␍'),
-            '\n' => output.push('⏎'),
-            '\t' => output.push('⇥'),
-            character => output.push(character),
+            '\r' => text.push('␍'),
+            '\n' => text.push('⏎'),
+            '\t' => text.push('⇥'),
+            _ if !show_invisible => text.push(character),
+            ' ' if ix >= trailing_spaces => mark(&mut text, " "),
+            character => match invisible(character) {
+                None => text.push(character),
+                Some(Invisible::Space) => mark(&mut text, character.encode_utf8(&mut [0; 4])),
+                Some(Invisible::Named(name)) => mark(&mut text, name),
+                Some(Invisible::CodePoint) => {
+                    mark(&mut text, &format!("U+{:04X}", u32::from(character)))
+                }
+            },
         }
     }
     if cut {
-        output.push('…');
+        text.push('…');
     }
-    output
+    DisplayText { text, markers }
 }
 
 /// Compare two string values as numeric values.
@@ -457,7 +547,11 @@ fn reindex_row_set(set: &HashSet<usize>, removed_row: usize) -> HashSet<usize> {
 
 #[cfg(test)]
 mod tests {
-    use super::{DISPLAY_CHARACTERS, format_value_for_display};
+    use super::{DISPLAY_CHARACTERS, display_text};
+
+    fn format_value_for_display(value: &str) -> String {
+        display_text(value, false).text
+    }
 
     #[test]
     fn display_marks_line_breaks_and_tabs() {
@@ -471,5 +565,30 @@ mod tests {
 
         let long = format!("{short}\nmore");
         assert_eq!(format_value_for_display(&long), format!("{short}…"));
+    }
+
+    #[test]
+    fn invisible_characters_are_marked_only_when_asked() {
+        let value = "a\u{00A0}b\u{200B}c\u{0007}\u{FEFF}d\u{009B}e  ";
+        assert_eq!(format_value_for_display(value), value);
+
+        let shown = display_text(value, true);
+        assert_eq!(shown.text, "a\u{00A0}bZWSPcU+0007BOMdU+009Be  ");
+        let marked: Vec<&str> = shown
+            .markers
+            .iter()
+            .map(|range| &shown.text[range.clone()])
+            .collect();
+        assert_eq!(
+            marked,
+            ["\u{00A0}", "ZWSP", "U+0007", "BOM", "U+009B", " ", " "]
+        );
+    }
+
+    #[test]
+    fn inner_spaces_and_spaces_past_the_cut_are_not_marked() {
+        assert!(display_text("two words", true).markers.is_empty());
+        let long = format!("{} ", "x".repeat(DISPLAY_CHARACTERS));
+        assert!(display_text(&long, true).markers.is_empty());
     }
 }
