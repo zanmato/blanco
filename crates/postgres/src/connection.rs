@@ -8,7 +8,6 @@ pub use types::{PgConnectionKey, PgServerKey, PostgresSshConfig, QueryParam};
 use anyhow::Result;
 use blanco_core::Connection;
 use smol::lock::RwLock;
-use sqlx::Row;
 use sqlx::postgres::PgPoolOptions;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -220,42 +219,5 @@ impl PostgresConnection {
             .collect();
 
         Ok(tables)
-    }
-
-    /// Resolve OIDs to names using batch query for performance
-    async fn resolve_oids_to_names(
-        &self,
-        pool: &sqlx::PgPool,
-        oids: &[i32],
-    ) -> Result<std::collections::HashMap<i32, String>> {
-        if oids.is_empty() {
-            return Ok(std::collections::HashMap::new());
-        }
-
-        // Create a comma-separated list of OIDs for the IN clause
-        let oid_list: String = oids
-            .iter()
-            .map(|oid| oid.to_string())
-            .collect::<Vec<_>>()
-            .join(",");
-
-        let query = format!(
-            "SELECT oid::text, relname FROM pg_class WHERE oid IN ({})",
-            oid_list
-        );
-
-        let rows = sqlx::query(&query).fetch_all(pool).await?;
-
-        let mut oid_to_name = std::collections::HashMap::new();
-        for row in rows {
-            if let Ok(Some(oid_text)) = row.try_get::<Option<String>, _>(0)
-                && let Ok(oid_val) = oid_text.parse::<i32>()
-                && let Ok(Some(name)) = row.try_get::<Option<String>, _>(1)
-            {
-                oid_to_name.insert(oid_val, name);
-            }
-        }
-
-        Ok(oid_to_name)
     }
 }

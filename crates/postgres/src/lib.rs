@@ -359,6 +359,124 @@ mod tests {
         Ok(())
     }
 
+    /// Custom and catalog types read the same through the editor's script
+    /// path (the simple query protocol, values as text) as through
+    /// `execute_query`: enums with labels of any length, domains, composites,
+    /// regclass naming a table or a sequence, and a sequence's own row.
+    #[tokio::test]
+    async fn test_script_path_renders_custom_and_catalog_types()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let connection_string = default_connection_string();
+        let test_pool = match PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&connection_string)
+            .await
+        {
+            Ok(pool) => pool,
+            Err(e) => {
+                return handle_unreachable("test_script_path_renders_custom_and_catalog_types", &e);
+            }
+        };
+        for statement in [
+            "DROP TABLE IF EXISTS script_type_test",
+            "DROP SEQUENCE IF EXISTS script_type_seq",
+            "DROP TYPE IF EXISTS script_type_state CASCADE",
+            "DROP TYPE IF EXISTS script_type_pair CASCADE",
+            "DROP DOMAIN IF EXISTS script_type_positive CASCADE",
+            "CREATE TYPE script_type_state AS ENUM ('active_state', 'b')",
+            "CREATE TYPE script_type_pair AS (a integer, b text)",
+            "CREATE DOMAIN script_type_positive AS integer CHECK (VALUE > 0)",
+            "CREATE SEQUENCE script_type_seq",
+            "CREATE TABLE script_type_test (id integer)",
+        ] {
+            sqlx::query(statement).execute(&test_pool).await?;
+        }
+
+        let mut conn = crate::PostgresConnection::from_connection_string(&connection_string)?;
+        conn.connect(&connection_string).await?;
+        let database = Some("blanco");
+
+        let select = "SELECT
+              'active_state'::script_type_state             AS long_enum,
+              ARRAY['active_state', 'b']::script_type_state[] AS enum_array,
+              5::script_type_positive                       AS domain_col,
+              ROW(1, 'x')::script_type_pair                 AS composite_col,
+              'script_type_test'::regclass                  AS table_regclass,
+              'script_type_seq'::regclass                   AS sequence_regclass,
+              (SELECT relname FROM pg_class
+                WHERE oid = 'script_type_seq'::regclass)    AS relname,
+              'pg_catalog.lower(text)'::regprocedure        AS regprocedure_col,
+              'now'::regproc                                AS regproc_col";
+        let expected = [
+            ("long_enum", "active_state"),
+            ("enum_array", "{active_state,b}"),
+            ("domain_col", "5"),
+            ("composite_col", "(1,x)"),
+            ("table_regclass", "script_type_test"),
+            ("sequence_regclass", "script_type_seq"),
+            ("relname", "script_type_seq"),
+            ("regprocedure_col", "lower(text)"),
+            ("regproc_col", "now"),
+        ];
+        let cells = |result: &blanco_core::QueryResult| {
+            let row = result.rows.first().cloned().unwrap_or_default();
+            result
+                .columns
+                .iter()
+                .cloned()
+                .zip(row)
+                .collect::<std::collections::HashMap<String, Option<String>>>()
+        };
+
+        let script = format!(
+            "{select};\nSELECT nextval('script_type_seq') AS next_value;\nSELECT last_value, is_called FROM script_type_seq;"
+        );
+        let results = conn.execute_script(&script, database).await?;
+        assert_eq!(results.len(), 3, "one result per statement");
+        let scripted = cells(&results[0]);
+        let single = cells(&conn.execute_query(select, database, None).await?);
+        for (column, value) in expected {
+            assert_eq!(
+                scripted.get(column).cloned().flatten().as_deref(),
+                Some(value),
+                "script path, {column}"
+            );
+            assert_eq!(
+                single.get(column).cloned().flatten().as_deref(),
+                Some(value),
+                "execute_query, {column}"
+            );
+        }
+        assert_eq!(
+            cells(&results[1])
+                .get("next_value")
+                .cloned()
+                .flatten()
+                .as_deref(),
+            Some("1")
+        );
+        let sequence = cells(&results[2]);
+        assert_eq!(
+            sequence.get("last_value").cloned().flatten().as_deref(),
+            Some("1")
+        );
+        assert_eq!(
+            sequence.get("is_called").cloned().flatten().as_deref(),
+            Some("true")
+        );
+
+        for statement in [
+            "DROP TABLE script_type_test",
+            "DROP SEQUENCE script_type_seq",
+            "DROP TYPE script_type_state",
+            "DROP TYPE script_type_pair",
+            "DROP DOMAIN script_type_positive",
+        ] {
+            sqlx::query(statement).execute(&test_pool).await?;
+        }
+        Ok(())
+    }
+
     #[tokio::test]
     async fn test_computed_column_type_detection() -> Result<(), Box<dyn std::error::Error>> {
         async {

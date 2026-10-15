@@ -1,6 +1,6 @@
 use anyhow::Result;
 use futures::StreamExt;
-use sqlx::{Column, Row, TypeInfo, ValueRef};
+use sqlx::{Column, Row, TypeInfo};
 
 use super::{PostgresConnection, QueryParam};
 use blanco_core::{ColumnType, QueryResult, QueryTiming, StatementTimer};
@@ -119,52 +119,40 @@ impl PostgresConnection {
     ) -> Result<Vec<QueryResult>> {
         use sqlx::Either;
 
-        // Collect statement accumulators first, then finalize after the stream
-        // is fully consumed. Finalization may issue a follow-up pg_class lookup
-        // for regclass OIDs, and the pool is configured with a single
-        // connection; doing that lookup while `fetch_many` still holds the
-        // connection would deadlock.
-        let mut accs: Vec<PgStatementAcc> = Vec::new();
+        let mut out: Vec<QueryResult> = Vec::new();
         let mut current: Option<PgStatementAcc> = None;
 
-        {
-            // Taken before the timer starts, so opening a connection does not
-            // count as execution.
-            let mut connection = pool.acquire().await?;
-            let mut timer = StatementTimer::start();
-            let mut results = sqlx::raw_sql(sql).fetch_many(&mut *connection);
-            while let Some(result) = results.next().await {
-                match result? {
-                    Either::Left(execution_result) => {
-                        let mut acc = current.take().unwrap_or_default();
-                        acc.rows_affected += execution_result.rows_affected();
-                        acc.timing = Some(timer.finish_and_restart());
-                        accs.push(acc);
-                    }
-                    Either::Right(row) => {
-                        timer.row();
-                        let acc = current.get_or_insert_with(PgStatementAcc::default);
-                        acc.absorb_row(&row, self);
-                    }
+        // Taken before the timer starts, so opening a connection does not
+        // count as execution.
+        let mut connection = pool.acquire().await?;
+        let mut timer = StatementTimer::start();
+        let mut results = sqlx::raw_sql(sql).fetch_many(&mut *connection);
+        while let Some(result) = results.next().await {
+            match result? {
+                Either::Left(execution_result) => {
+                    let mut acc = current.take().unwrap_or_default();
+                    acc.rows_affected += execution_result.rows_affected();
+                    acc.timing = Some(timer.finish_and_restart());
+                    out.push(acc.finish());
+                }
+                Either::Right(row) => {
+                    timer.row();
+                    let acc = current.get_or_insert_with(PgStatementAcc::default);
+                    acc.absorb_row(&row, self);
                 }
             }
-            if let Some(mut acc) = current.take() {
-                acc.timing = Some(timer.finish());
-                accs.push(acc);
-            }
         }
-
-        let mut out: Vec<QueryResult> = Vec::with_capacity(accs.len());
-        for acc in accs {
-            out.push(acc.finalize(pool, self).await?);
+        if let Some(mut acc) = current.take() {
+            acc.timing = Some(timer.finish());
+            out.push(acc.finish());
         }
 
         Ok(out)
     }
 }
 
-/// Per-statement accumulator used by `execute_script_inner` to keep rows,
-/// columns, and pending OID lookups isolated to a single result-set.
+/// Per-statement accumulator used by `execute_script_inner` to keep rows and
+/// columns isolated to a single result-set.
 #[derive(Default)]
 struct PgStatementAcc {
     columns: Vec<String>,
@@ -172,7 +160,6 @@ struct PgStatementAcc {
     raw_column_types: Vec<String>,
     rows: Vec<Vec<Option<String>>>,
     rows_affected: u64,
-    oids_to_resolve: Vec<(usize, usize, i32)>,
     timing: Option<QueryTiming>,
 }
 
@@ -196,50 +183,16 @@ impl PgStatementAcc {
             self.raw_column_types = raw_types;
         }
 
-        let row_idx = self.rows.len();
         let row_data: Vec<Option<String>> = (0..self.columns.len())
             .map(|i| {
                 conn.convert_row_value_to_string(row, i, &self.column_types, &self.raw_column_types)
             })
             .collect();
-
-        for (col_idx, col_type) in self.column_types.iter().enumerate() {
-            if *col_type == ColumnType::Unknown
-                && let Ok(raw_value) = row.try_get_raw(col_idx)
-                && !raw_value.is_null()
-                && let Ok(bytes) = raw_value.as_bytes()
-                && bytes.len() >= 4
-            {
-                let oid = i32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
-                self.oids_to_resolve.push((row_idx, col_idx, oid));
-            }
-        }
-
         self.rows.push(row_data);
     }
 
-    async fn finalize(
-        mut self,
-        pool: &sqlx::PgPool,
-        conn: &PostgresConnection,
-    ) -> Result<QueryResult> {
-        if !self.oids_to_resolve.is_empty() {
-            let unique_oids: Vec<i32> = self
-                .oids_to_resolve
-                .iter()
-                .map(|(_, _, oid)| *oid)
-                .collect::<std::collections::HashSet<_>>()
-                .into_iter()
-                .collect();
-            let oid_to_name = conn.resolve_oids_to_names(pool, &unique_oids).await?;
-            for (row_idx, col_idx, oid) in self.oids_to_resolve {
-                if let Some(name) = oid_to_name.get(&oid) {
-                    self.rows[row_idx][col_idx] = Some(name.clone());
-                }
-            }
-        }
-
-        Ok(QueryResult {
+    fn finish(self) -> QueryResult {
+        QueryResult {
             columns: self.columns,
             column_types: self.column_types,
             rows: self.rows,
@@ -250,6 +203,6 @@ impl PgStatementAcc {
             table_name: None,
             connection_id: None,
             table_columns: None,
-        })
+        }
     }
 }
