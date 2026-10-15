@@ -76,7 +76,8 @@ pub struct ConnectionConfig {
     pub database: String,
     pub username: String,
     pub password: Option<String>,
-    // SQLite specific
+    /// The database file of a file-based backend (SQLite, DuckDB). DuckDB
+    /// also takes `:memory:`.
     pub path: Option<String>,
     // SSH tunnel configuration
     pub ssh_host: Option<String>,
@@ -188,10 +189,19 @@ impl ConnectionConfig {
 
     /// Create a new SQLite connection config
     pub fn new_sqlite(id: i64, name: String, path: String) -> Self {
+        Self::new_file(id, name, DatabaseType::SQLite, path)
+    }
+
+    /// Create a new DuckDB connection config for a file or `:memory:`.
+    pub fn new_duckdb(id: i64, name: String, path: String) -> Self {
+        Self::new_file(id, name, DatabaseType::DuckDb, path)
+    }
+
+    fn new_file(id: i64, name: String, db_type: DatabaseType, path: String) -> Self {
         Self {
             id,
             name,
-            db_type: DatabaseType::SQLite,
+            db_type,
             host: String::new(),
             port: 0,
             database: String::new(),
@@ -324,12 +334,12 @@ impl ConnectionConfig {
         self.ask_secrets.contains(&kind)
     }
 
-    /// Whether `kind` plays any part in opening this connection: SQLite has
-    /// no password, SSH secrets need a tunnel, and a key passphrase needs a
-    /// key.
+    /// Whether `kind` plays any part in opening this connection: a database
+    /// file has no password, SSH secrets need a tunnel, and a key passphrase
+    /// needs a key.
     pub fn uses_secret(&self, kind: SecretKind) -> bool {
         match kind {
-            SecretKind::Password => self.db_type != DatabaseType::SQLite,
+            SecretKind::Password => !self.db_type.dialect().is_file_based(),
             SecretKind::SshPassword => self.requires_ssh_tunnel(),
             SecretKind::SshPrivateKeyPassword => {
                 self.requires_ssh_tunnel()
@@ -361,6 +371,18 @@ impl ConnectionConfig {
                 } else {
                     format!("sqlite:{}.db", db_name)
                 }
+            }
+            // Each in-memory DuckDB database belongs to its own connection,
+            // and `database` picks one of its attached databases.
+            DatabaseType::DuckDb => {
+                let path = self.path.as_deref().unwrap_or(blanco_duckdb::MEMORY_PATH);
+                let memory_id = self.id.to_string();
+                blanco_duckdb::connection_string(
+                    path,
+                    self.read_only,
+                    (path == blanco_duckdb::MEMORY_PATH).then_some(memory_id.as_str()),
+                    database,
+                )
             }
             DatabaseType::PostgreSQL => {
                 let mut conn_str = if let Some(password) = &self.password {
@@ -624,12 +646,12 @@ impl ConnectionConfig {
         }
     }
 
-    /// Secrets this connection could use but does not carry yet. SQLite has
-    /// no password and SSH secrets only matter with a tunnel, so those never
-    /// cause a store lookup.
+    /// Secrets this connection could use but does not carry yet. A database
+    /// file has no password and SSH secrets only matter with a tunnel, so
+    /// those never cause a store lookup.
     pub fn missing_secret_kinds(&self) -> Vec<SecretKind> {
         let mut kinds = Vec::new();
-        if self.db_type != DatabaseType::SQLite && self.password.is_none() {
+        if !self.db_type.dialect().is_file_based() && self.password.is_none() {
             kinds.push(SecretKind::Password);
         }
         if self.requires_ssh_tunnel() {
@@ -655,14 +677,15 @@ mod tests {
 
     #[test]
     fn editor_language_maps_sql_backends_and_redis() {
-        for db_type in [
-            DatabaseType::SQLite,
-            DatabaseType::PostgreSQL,
-            DatabaseType::MySQL,
-            DatabaseType::ClickHouse,
-            DatabaseType::MsSql,
+        for (db_type, language) in [
+            (DatabaseType::SQLite, "sql_sqlite"),
+            (DatabaseType::PostgreSQL, "sql_postgres"),
+            (DatabaseType::MySQL, "sql_mariadb"),
+            (DatabaseType::ClickHouse, "sql_clickhouse"),
+            (DatabaseType::MsSql, "sql_tsql"),
+            (DatabaseType::DuckDb, "sql_duckdb"),
         ] {
-            assert_eq!(db_type.editor_language(), "sql", "{db_type:?}");
+            assert_eq!(db_type.editor_language(), language, "{db_type:?}");
         }
         assert_eq!(DatabaseType::Redis.editor_language(), "redis");
     }

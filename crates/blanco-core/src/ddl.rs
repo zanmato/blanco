@@ -309,6 +309,24 @@ pub fn column_operation_sql(
     match operation {
         ColumnOperation::Add(spec) => {
             validate_spec(spec)?;
+            if db_type == DatabaseType::DuckDb && !spec.nullable {
+                // DuckDB adds no column with a constraint, so the NOT NULL
+                // follows once the column exists (its default fills it).
+                let nullable = ColumnSpec {
+                    nullable: true,
+                    ..spec.clone()
+                };
+                return Ok(vec![
+                    format!(
+                        "ALTER TABLE {target} ADD COLUMN {}",
+                        column_definition(db_type, &nullable)
+                    ),
+                    format!(
+                        "ALTER TABLE {target} ALTER COLUMN {} SET NOT NULL",
+                        quoted(&spec.name)
+                    ),
+                ]);
+            }
             let definition = column_definition(db_type, spec);
             Ok(vec![match db_type {
                 // T-SQL has no COLUMN keyword in ADD.
@@ -353,6 +371,34 @@ pub fn column_operation_sql(
                         "ALTER TABLE {target} ALTER COLUMN {column} TYPE {}, ALTER COLUMN {column} {null_clause}, ALTER COLUMN {column} {default_clause}",
                         spec.data_type.trim()
                     ));
+                }
+                DatabaseType::DuckDb => {
+                    // DuckDB takes one action per ALTER TABLE.
+                    if renamed {
+                        statements
+                            .push(rename_column_sql(db_type, schema, table, name, &spec.name));
+                    }
+                    let column = quoted(&spec.name);
+                    statements.push(format!(
+                        "ALTER TABLE {target} ALTER COLUMN {column} TYPE {}",
+                        spec.data_type.trim()
+                    ));
+                    statements.push(format!(
+                        "ALTER TABLE {target} ALTER COLUMN {column} {}",
+                        if spec.nullable {
+                            "DROP NOT NULL"
+                        } else {
+                            "SET NOT NULL"
+                        }
+                    ));
+                    statements.push(match spec.default.as_deref().map(str::trim) {
+                        Some(default) if !default.is_empty() => {
+                            format!(
+                                "ALTER TABLE {target} ALTER COLUMN {column} SET DEFAULT {default}"
+                            )
+                        }
+                        _ => format!("ALTER TABLE {target} ALTER COLUMN {column} DROP DEFAULT"),
+                    });
                 }
                 DatabaseType::MySQL => {
                     // CHANGE COLUMN carries the (possibly new) name along with
@@ -502,7 +548,7 @@ pub fn index_operation_sql(
             let index_name = dialect.quote_identifier(name.trim());
             Ok(vec![match db_type {
                 // Indexes are schema-scoped objects here, not table-scoped.
-                DatabaseType::PostgreSQL | DatabaseType::SQLite => {
+                DatabaseType::PostgreSQL | DatabaseType::SQLite | DatabaseType::DuckDb => {
                     format!(
                         "DROP INDEX {}",
                         dialect.quote_qualified(schema, name.trim())
@@ -530,10 +576,10 @@ pub fn foreign_key_operation_sql(
     let dialect = db_type.dialect();
     if !dialect.supports_foreign_key_ddl() {
         return Err(DdlError::Unsupported(match db_type {
-            DatabaseType::SQLite => {
-                "SQLite cannot add or drop a foreign key in place; recreate the table in a query"
-                    .to_string()
-            }
+            DatabaseType::SQLite | DatabaseType::DuckDb => format!(
+                "{} cannot add or drop a foreign key in place; recreate the table in a query",
+                db_type.as_str()
+            ),
             _ => format!("{} has no foreign keys", db_type.as_str()),
         }));
     }

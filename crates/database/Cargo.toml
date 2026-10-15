@@ -14,6 +14,7 @@ async-trait = { workspace = true }
 postgres = { path = "../postgres" }
 mysql = { path = "../mysql" }
 sqlite = { path = "../sqlite" }
+blanco-duckdb = { path = "../duckdb" }
 clickhouse = { path = "../clickhouse" }
 mssql = { path = "../mssql" }
 redis = { path = "../redis" }

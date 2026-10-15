@@ -258,10 +258,14 @@ impl StatementSplitter {
         )
     }
 
-    /// A PostgreSQL dollar-quote opener (`$$` or `$tag$`) at the start of
-    /// `rest`. `$1` is a parameter, not a quote.
+    /// A PostgreSQL or DuckDB dollar-quote opener (`$$` or `$tag$`) at the
+    /// start of `rest`. `$1` is a parameter, not a quote.
     fn dollar_tag(&self, rest: &str) -> Option<String> {
-        if self.database_type != DatabaseType::PostgreSQL || !rest.starts_with('$') {
+        let dollar_quotes = matches!(
+            self.database_type,
+            DatabaseType::PostgreSQL | DatabaseType::DuckDb
+        );
+        if !dollar_quotes || !rest.starts_with('$') {
             return None;
         }
         let body = &rest[1..];

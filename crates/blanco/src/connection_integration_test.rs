@@ -544,38 +544,147 @@ async fn test_new_connection_dialog_closes_on_cancel(cx: &mut TestAppContext) {
     );
 }
 
+/// File, New creates a SQLite or DuckDB file that is recognised as a
+/// database when opened again, adds it to the sidebar and opens a query tab
+/// on it. Opening the file again reuses that connection.
+#[gpui::test]
+async fn test_new_database_files_open_as_connections(cx: &mut TestAppContext) {
+    let harness = FullAppHarness::new(cx);
+    let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+    cx.run_until_parked();
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+
+    for (db_type, file_name) in [
+        (DatabaseType::SQLite, "created.db"),
+        (DatabaseType::DuckDb, "created.duckdb"),
+    ] {
+        let path = temp_dir.path().join(file_name);
+        harness.app.update_in(&mut cx, |app, window, cx| {
+            app.open_file_connection(db_type, &path, true, window, cx);
+        });
+        let panel = harness.editor_panel(&cx);
+        let mut opened = false;
+        for _ in 0..200 {
+            cx.run_until_parked();
+            opened = panel.read_with(&cx, |panel, _| {
+                panel.active_query_tab().is_some_and(|tab| {
+                    tab.context.db_type == db_type && tab.context.connection_name == file_name
+                })
+            });
+            if opened {
+                break;
+            }
+            cx.executor()
+                .timer(std::time::Duration::from_millis(20))
+                .await;
+        }
+        assert!(
+            opened,
+            "{db_type:?}: a query tab should open on the new file"
+        );
+        assert_eq!(
+            crate::database_file::database_file_type(&path),
+            Some(db_type),
+            "{db_type:?}: the new file should be recognised as a database"
+        );
+
+        panel.update_in(&mut cx, |panel, window, cx| {
+            let tab = panel.active_query_tab().expect("query tab");
+            tab.editor.update(cx, |state, cx| {
+                state.set_value("SELECT 40 + 2 AS answer", window, cx);
+            });
+            panel.on_run_query(window, cx);
+        });
+        for _ in 0..200 {
+            cx.run_until_parked();
+            if !panel.read_with(&cx, |panel, _| panel.is_loading()) {
+                break;
+            }
+            cx.executor()
+                .timer(std::time::Duration::from_millis(20))
+                .await;
+        }
+        let answer = panel.read_with(&cx, |panel, cx| {
+            let tab = panel.active_query_tab().expect("query tab");
+            tab.results_panel.read_with(cx, |results, cx| {
+                results.table_state().read_with(cx, |state, _| {
+                    state
+                        .delegate()
+                        .rows
+                        .first()
+                        .and_then(|row| row.last().cloned().flatten())
+                })
+            })
+        });
+        assert_eq!(answer.as_deref(), Some("42"), "{db_type:?}");
+
+        let temporary = |cx: &mut VisualTestContext| {
+            harness.app.read_with(cx, |app, cx| {
+                app.sidebar()
+                    .read(cx)
+                    .temporary_connections()
+                    .iter()
+                    .filter(|connection| connection.db_type == db_type)
+                    .count()
+            })
+        };
+        assert_eq!(temporary(&mut cx), 1, "{db_type:?}");
+        harness.app.update_in(&mut cx, |app, window, cx| {
+            app.open_database_file(&path, window, cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            temporary(&mut cx),
+            1,
+            "{db_type:?}: reopening reuses the connection"
+        );
+    }
+}
+
 #[gpui::test]
 async fn test_sqlite_connect_and_query(cx: &mut TestAppContext) {
+    run_file_case(DatabaseType::SQLite, "integration.db", cx).await;
+}
+
+#[gpui::test]
+async fn test_duckdb_connect_and_query(cx: &mut TestAppContext) {
+    run_file_case(DatabaseType::DuckDb, "integration.duckdb", cx).await;
+}
+
+/// A database file has no password, so this exercises create -> test ->
+/// save -> query against a fresh temp file.
+async fn run_file_case(db_type: DatabaseType, file_name: &str, cx: &mut TestAppContext) {
     let harness = FullAppHarness::new(cx);
     let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
     cx.run_until_parked();
 
-    // SQLite has no password, just exercise create -> test -> save -> query
-    // against a fresh temp file.
+    let label = db_type.as_str();
+    let name = format!("it-{}", label.to_lowercase());
     let temp_dir = tempfile::tempdir().expect("temp dir");
-    let db_path = temp_dir.path().join("integration.db");
+    let db_path = temp_dir.path().join(file_name);
     let db_path = db_path.to_string_lossy().to_string();
 
     let modal = harness.app.update_in(&mut cx, |_app, window, cx| {
         cx.new(|cx| NewConnectionModal::with_connection_data(window, cx, None))
     });
     modal.update_in(&mut cx, |modal, window, cx| {
-        modal.set_name("it-sqlite", window, cx);
-        modal.select_db_type("SQLite", window, cx);
-        modal.set_sqlite_path(&db_path, window, cx);
+        modal.set_name(&name, window, cx);
+        modal.select_db_type(label, window, cx);
+        modal.set_file_path(&db_path, window, cx);
     });
 
     let result = run_test_connection(&modal, &mut cx).await;
     assert!(
         result.is_ok(),
-        "sqlite test connection failed: {:?}",
+        "{label} test connection failed: {:?}",
         result
     );
 
     let mut data = modal
         .read_with(&cx, |modal, cx| modal.get_connection_data(cx))
-        .expect("sqlite connection data");
-    data.name = "it-sqlite".to_string();
+        .expect("connection data");
+    assert_eq!(data.db_type, db_type);
+    data.name = name.clone();
 
     let connection_id = cx.update(|_window, cx| {
         let app_database = AppDatabase::global(cx).clone();
@@ -599,7 +708,7 @@ async fn test_sqlite_connect_and_query(cx: &mut TestAppContext) {
     let panel = editor_panel(&harness, &cx);
     panel.update_in(&mut cx, |panel, window, cx| {
         let params = TabCreationParams {
-            title: "it-sqlite".into(),
+            title: name.clone(),
 
             content: None,
 
@@ -609,9 +718,9 @@ async fn test_sqlite_connect_and_query(cx: &mut TestAppContext) {
 
             context: ConnectionContext {
                 connection_id,
-                db_type: DatabaseType::SQLite,
-                connection_name: "it-sqlite".into(),
-                database_name: "main".into(),
+                db_type,
+                connection_name: name.clone(),
+                database_name: db_type.dialect().file_database_name().to_string(),
                 schema_name: None,
                 environment_type: None,
             },
@@ -827,6 +936,11 @@ fn test_statement_timing_against_every_backend() {
         .join("timing.db")
         .to_string_lossy()
         .to_string();
+    let duckdb_path = temp_dir
+        .path()
+        .join("timing.duckdb")
+        .to_string_lossy()
+        .to_string();
 
     let server = |case: &DriverCase, id: i64| {
         ConnectionConfig::new(
@@ -850,6 +964,13 @@ fn test_statement_timing_against_every_backend() {
             "SQLite",
             ConnectionConfig::new_sqlite(9101, "timing-sqlite".to_string(), sqlite_path),
             "main".to_string(),
+            "CREATE TABLE blanco_timing (id INTEGER); SELECT 1 AS n",
+            vec![false, true],
+        ),
+        (
+            "DuckDB",
+            ConnectionConfig::new_duckdb(9106, "timing-duckdb".to_string(), duckdb_path),
+            String::new(),
             "CREATE TABLE blanco_timing (id INTEGER); SELECT 1 AS n",
             vec![false, true],
         ),
@@ -932,6 +1053,11 @@ fn test_database_sizes_against_every_backend() {
         .join("sizes.db")
         .to_string_lossy()
         .to_string();
+    let duckdb_path = temp_dir
+        .path()
+        .join("sizes.duckdb")
+        .to_string_lossy()
+        .to_string();
 
     let server = |case: &DriverCase, id: i64| {
         ConnectionConfig::new(
@@ -958,6 +1084,16 @@ fn test_database_sizes_against_every_backend() {
             ConnectionConfig::new_sqlite(9121, "sizes-sqlite".to_string(), sqlite_path),
             "main".to_string(),
             Some(("CREATE TABLE blanco_size (id INTEGER)", None)),
+            true,
+        ),
+        (
+            "DuckDB",
+            ConnectionConfig::new_duckdb(9126, "sizes-duckdb".to_string(), duckdb_path),
+            "sizes".to_string(),
+            Some((
+                "CREATE TABLE blanco_size AS SELECT range AS id FROM range(100000); CHECKPOINT",
+                None,
+            )),
             true,
         ),
         (
@@ -1148,6 +1284,11 @@ fn test_column_and_index_ddl_round_trip() {
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
     let temp_dir = tempfile::tempdir().expect("temp dir");
     let sqlite_path = temp_dir.path().join("ddl.db").to_string_lossy().to_string();
+    let duckdb_path = temp_dir
+        .path()
+        .join("ddl.duckdb")
+        .to_string_lossy()
+        .to_string();
 
     struct DdlCase {
         label: &'static str,
@@ -1185,6 +1326,15 @@ fn test_column_and_index_ddl_round_trip() {
             schema: None,
             create_table: "CREATE TABLE blanco_ddl_test (id INTEGER PRIMARY KEY)",
             alter_supported: false,
+            add_default: Some("0"),
+        },
+        DdlCase {
+            label: "DuckDB",
+            config: ConnectionConfig::new_duckdb(9006, "ddl-duckdb".to_string(), duckdb_path),
+            database: String::new(),
+            schema: Some("main"),
+            create_table: "CREATE TABLE blanco_ddl_test (id INTEGER PRIMARY KEY)",
+            alter_supported: true,
             add_default: Some("0"),
         },
         DdlCase {
@@ -1488,9 +1638,20 @@ fn test_column_and_index_ddl_round_trip() {
                         "{label}: foreign key DDL should be supported"
                     );
                     // The list still reads keys declared in CREATE TABLE.
+                    // DuckDB enforces no referential actions but NO ACTION.
+                    let on_delete = if db_type == DatabaseType::DuckDb {
+                        "NO ACTION"
+                    } else {
+                        "CASCADE"
+                    };
+                    let action = if db_type == DatabaseType::DuckDb {
+                        String::new()
+                    } else {
+                        format!(" ON DELETE {on_delete}")
+                    };
                     runtime
                         .block_on(connection.execute_write(
-                            "CREATE TABLE blanco_ddl_child (parent_id integer, parent_region integer, FOREIGN KEY (parent_id, parent_region) REFERENCES blanco_ddl_parent (id, region) ON DELETE CASCADE)",
+                            &format!("CREATE TABLE blanco_ddl_child (parent_id integer, parent_region integer, FOREIGN KEY (parent_id, parent_region) REFERENCES blanco_ddl_parent (id, region){action})"),
                             database,
                             &[],
                         ))
@@ -1499,7 +1660,7 @@ fn test_column_and_index_ddl_round_trip() {
                     assert_eq!(declared.len(), 1, "{label}: {declared:?}");
                     assert_eq!(declared[0].columns, vec!["parent_id", "parent_region"]);
                     assert_eq!(declared[0].referenced_columns, vec!["id", "region"]);
-                    assert_eq!(declared[0].on_delete, "CASCADE");
+                    assert_eq!(declared[0].on_delete, on_delete);
                 }
                 Err(error) => panic!("{label}: {error}"),
             }

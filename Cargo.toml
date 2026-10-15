@@ -6,6 +6,7 @@ members = [
     "crates/blanco-core",
     "crates/postgres",
     "crates/sqlite",
+    "crates/duckdb",
     "crates/mysql",
     "crates/clickhouse",
     "crates/database",
@@ -26,6 +27,18 @@ version = "0.1.3"
 publish = false
 
 [workspace.dependencies]
+# One tree-sitter grammar per backend, from our fork of tree-sitter-sql-polyglot.
+# The parsers are committed brotli-compressed and inflated by its build script,
+# so building never runs `tree-sitter generate`.
+tree-sitter-sql-polyglot = { git = "https://github.com/zanmato/Tree-sitter-sql-polyglot", branch = "blanco-dialect-coverage", features = [
+    "postgres",
+    "mariadb",
+    "sqlite",
+    "tsql",
+    "clickhouse",
+    "duckdb",
+] }
+
 # Core GPUI dependencies. gpui-component depends on the `gpui-pre` crates.io
 # snapshots of GPUI, so these must resolve to the same packages or cargo builds
 # two copies of gpui. Keep the version requirement in step with the one in
@@ -135,7 +148,6 @@ inherits = "release"
 debug = true
 
 [patch.crates-io]
-tree-sitter-sequel = { path = "crates/tree-sitter-sequel" }
 # Run on gpui-fast instead of the gpui-pre snapshots. Its compat crates carry the
 # gpui-pre names and the version gpui-component pins, so they must move with it.
 # See https://github.com/longbridge/gpui-fast/blob/main/compat/README.md

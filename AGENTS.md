@@ -6,15 +6,21 @@ Blanco is a cross-platform SQL editor built with GPUI and gpui-component. It pro
 
 ## Getting Started
 
-The SQL grammar lives in the `crates/tree-sitter-sequel` git submodule, tracking the `drop-trigger-and-friends` branch of our fork `zanmato/tree-sitter-sql` (upstream `derekstride/tree-sitter-sql` plus grammar it lacks: `DROP TRIGGER` and the rest of the DROP family, standalone transaction control and savepoints, GRANT/REVOKE, utility statements, locking clauses and more, the crates.io release is further behind still). Grammar fixes go to that fork (on the `drop-trigger-and-friends` branch) with a corpus test, and the fork is rebased on upstream `main` to pick up their changes. Upstream gitignores the generated `src/parser.c` and `src/tree_sitter/*.h`, so they are produced locally and never committed. After cloning, run:
+The SQL grammars come from `tree-sitter-sql-polyglot`, a git dependency on the `blanco-dialect-coverage` branch of our fork `zanmato/Tree-sitter-sql-polyglot` (upstream `relativelyunknown/Tree-sitter-sql-polyglot`). It holds an ANSI base grammar and one grammar per dialect built on it. Blanco enables the `postgres`, `mariadb`, `sqlite`, `tsql`, `clickhouse` and `duckdb` features. `Dialect::sql_grammar()` picks a backend's `SqlGrammar`: MySQL connections use MariaDB's grammar, a superset of MySQL's, and SQL that belongs to no backend (snippets, the import preview) uses the ANSI base. The fork commits its parsers compressed (`parser.c.br`) and its build script inflates them, so building Blanco never runs `tree-sitter generate`.
+
+Grammar fixes go to the fork with a corpus test in each dialect they touch, then Blanco's lockfile is bumped (`cargo update -p tree-sitter-sql-polyglot`). In the fork, generate one grammar at a time and compress the parsers before pushing. Never run `npm run generate:all`, which generates every dialect at once: ClickHouse alone peaks at about 31 GB of memory.
+
+`sql_parser::statement_parser` keeps one tree-sitter parser per grammar and thread, created the first time that grammar is parsed, and every function that parses takes the `SqlGrammar`. `sql_parser::language` and `sql_parser::highlights_query` give a grammar's language and highlight query (the base captures plus the dialect's own). For highlighting, `sql::register_languages` registers only the ANSI grammar at startup. A backend's grammar is registered by `sql::highlight_language(db_type)` when the first editor or log view for it opens, so code that names a highlighter language for a connection must go through it. Registered names all start with `sql` (`sql`, `sql_postgres`, `sql_duckdb`, ...), which `SqlView` relies on to terminate logged statements with `;`.
+
+After cloning, run:
 
 ```bash
-./scripts/setup.sh   # inits the submodule and runs `tree-sitter generate`
+./scripts/setup.sh   # runs `tree-sitter generate` for the Redis grammar
 ```
 
-This requires the tree-sitter CLI (`cargo install tree-sitter-cli`). The blanco workspace patches `tree-sitter-sequel` to this submodule via `[patch.crates-io]` in the root `Cargo.toml`. To pull newer grammar later: `git submodule update --remote crates/tree-sitter-sequel && ./scripts/setup.sh`.
+This requires the tree-sitter CLI (`cargo install tree-sitter-cli`).
 
-`scripts/setup.sh` also generates the in-tree `crates/tree-sitter-redis` grammar, which highlights the editor when the active connection is a Redis (non-SQL) backend. Unlike sequel it is not a submodule (we author it), but its generated `src/parser.c` + `src/tree_sitter/*.h` are likewise gitignored and produced by `tree-sitter generate`. The command/subcommand catalog is codegenned from a live server (`COMMAND LIST` / `COMMAND DOCS`) into two committed artifacts: `grammar/keywords.js` (consumed by the grammar) and `bindings/rust/commands.rs` (exposed as `tree_sitter_redis::commands` + `tree_sitter_redis::subcommands_for`, consumed by the editor's Redis completion provider so highlighting and completion share one command set). Regenerate both after a Redis upgrade with `python3 crates/tree-sitter-redis/scripts/extract-redis-commands.py` (defaults to the docker-compose dev server on `127.0.0.1:6400`). The editor language is chosen per connection by `DatabaseType::editor_language()` (`"sql"` vs `"redis"`); both grammars are registered at startup in `main.rs` (`sql::register_languages` + `redis_syntax::register_language`). Redis tabs get `redis_completion::RedisCompletionProvider` (command/subcommand completion) instead of the SQL completion/selection-range/linting machinery, which is gated behind `supports_sql()`.
+`scripts/setup.sh` generates the in-tree `crates/tree-sitter-redis` grammar, which highlights the editor when the active connection is a Redis (non-SQL) backend. We author it, and its generated `src/parser.c` + `src/tree_sitter/*.h` are gitignored and produced by `tree-sitter generate`. The command/subcommand catalog is codegenned from a live server (`COMMAND LIST` / `COMMAND DOCS`) into two committed artifacts: `grammar/keywords.js` (consumed by the grammar) and `bindings/rust/commands.rs` (exposed as `tree_sitter_redis::commands` + `tree_sitter_redis::subcommands_for`, consumed by the editor's Redis completion provider so highlighting and completion share one command set). Regenerate both after a Redis upgrade with `python3 crates/tree-sitter-redis/scripts/extract-redis-commands.py` (defaults to the docker-compose dev server on `127.0.0.1:6400`). The editor language is chosen per connection by `DatabaseType::editor_language()` (a SQL grammar's name, or `"redis"`). The Redis grammar is registered at startup in `main.rs` (`redis_syntax::register_language`). Redis tabs get `redis_completion::RedisCompletionProvider` (command/subcommand completion) instead of the SQL completion/selection-range/linting machinery, which is gated behind `supports_sql()`.
 
 ## SQL function catalogs and signature help
 
@@ -86,6 +92,49 @@ do not disturb them. Any handler that needs a value starts with
 `defer_action` or `load_deferred_values_then`, which fetch by key and run the
 handler again. A new handler that reads `delegate.rows` to write or copy must
 do the same, or it will use previews.
+
+## DuckDB
+
+`crates/duckdb` (package `blanco-duckdb`) wraps duckdb-rs, built with
+`bundled` and pinned with a tilde (`~1.10506.0` is DuckDB 1.5.6, the crate's
+second component encodes the DuckDB release). It is bundled because neither
+Windows nor Debian has a system libduckdb and the self updater replaces only
+the executable. The first clean build compiles DuckDB's C++ for several
+minutes. duckdb-rs is synchronous, so every call runs in `spawn_blocking`.
+
+A process may open a DuckDB file once, so connections to one file share an
+instance from `OPEN_DATABASES` and take their own DuckDB connection from it.
+Each `DuckdbConnection` keeps one session for the user's statements (`SET`,
+`USE`, temp tables and transactions carry over) and takes a fresh connection
+per catalog lookup. Dropping a run's future interrupts the session through
+DuckDB's interrupt handle. Results go through Arrow and its display
+formatter, so every type (lists, structs, maps, decimals, timestamps with zone)
+gets text without per-type code; blobs become `0x` hex. DuckDB answers
+`INSERT`/`UPDATE`/`DELETE` with a one-column `Count` result, which becomes
+`rows_affected`. Scripts are split with `statement_stream::split_script`,
+because duckdb-rs's own multi-statement prepare runs all but the last
+statement silently.
+
+The sidebar treats DuckDB like PostgreSQL: databases (the file's own and any
+`ATTACH`ed ones, from `duckdb_databases()`) above schemas. The connection
+string (`blanco_duckdb::connection_string`) carries `database=` so a
+connection works in one of them, `read_only=1` to open the file read only, and
+`memory_id=` to keep in-memory databases of different connections apart.
+DuckDB's text functions take no `BLOB`, so deferred values and the binary
+filters compare blobs through `HEX()`. `ADD COLUMN` takes no constraint and
+`ALTER TABLE` one action, so the DDL builders split those into steps. The
+built-in function catalog `sql/functions/duckdb.rs` is generated with
+`python3 scripts/extract-sql-functions.py duckdb`, which reads
+`duckdb_functions()` through `cargo run -p blanco-duckdb --example
+function_catalog`.
+
+Database files open from File, Open, a drop on the window, launch arguments
+and the platform's open requests. `database_file::database_file_type` tells
+SQLite from DuckDB by header (`SQLite format 3`, or `DUCK` at offset 8), so
+the extension does not matter. File, New creates either kind and opens it the
+same way; `Dialect::new_file_statement` makes SQLite write its header at once.
+The `.deb` ships `blanco-duckdb.xml`, since shared-mime-info has no DuckDB
+type for the desktop entry to claim.
 
 ## Query timing
 

@@ -14,8 +14,9 @@ use crate::connection_config::{
     ConnectionConfig, ConnectionSecretStore, DatabaseType, NoSecretStore, SecretKind,
 };
 use crate::factories::{
-    ClickhouseConnectionFactory, MssqlConnectionFactory, MysqlConnectionFactory,
-    PostgresConnectionFactory, RedisConnectionFactory, SqliteConnectionFactory,
+    ClickhouseConnectionFactory, DuckdbConnectionFactory, MssqlConnectionFactory,
+    MysqlConnectionFactory, PostgresConnectionFactory, RedisConnectionFactory,
+    SqliteConnectionFactory,
 };
 use crate::secret_prompt::{
     rejected_secret, NoSecretPrompt, SecretPrompt, SecretPromptCancelled, SecretPromptRequest,
@@ -106,6 +107,7 @@ impl DatabaseService {
                 DatabaseType::SQLite,
                 Arc::new(SqliteConnectionFactory) as Arc<dyn ConnectionFactory>,
             ),
+            (DatabaseType::DuckDb, Arc::new(DuckdbConnectionFactory)),
             (
                 DatabaseType::PostgreSQL,
                 Arc::new(PostgresConnectionFactory::new()),

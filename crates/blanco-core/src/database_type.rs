@@ -11,6 +11,7 @@ use std::fmt;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum DatabaseType {
     SQLite,
+    DuckDb,
     PostgreSQL,
     MySQL,
     ClickHouse,
@@ -64,6 +65,7 @@ impl DatabaseType {
     pub fn as_str(&self) -> &'static str {
         match self {
             DatabaseType::SQLite => "SQLite",
+            DatabaseType::DuckDb => "DuckDB",
             DatabaseType::PostgreSQL => "PostgreSQL",
             DatabaseType::MySQL => "MySQL",
             DatabaseType::ClickHouse => "ClickHouse",
@@ -76,6 +78,7 @@ impl DatabaseType {
     pub fn from_name(s: &str) -> Option<Self> {
         match s {
             "SQLite" => Some(DatabaseType::SQLite),
+            "DuckDB" => Some(DatabaseType::DuckDb),
             "PostgreSQL" => Some(DatabaseType::PostgreSQL),
             "MySQL" => Some(DatabaseType::MySQL),
             "ClickHouse" => Some(DatabaseType::ClickHouse),
@@ -118,6 +121,11 @@ impl DatabaseType {
     /// See [`crate::Dialect::editor_language`].
     pub fn editor_language(&self) -> &'static str {
         self.dialect().editor_language()
+    }
+
+    /// See [`crate::Dialect::sql_grammar`].
+    pub fn sql_grammar(&self) -> crate::SqlGrammar {
+        self.dialect().sql_grammar()
     }
 
     /// See [`crate::Dialect::sqruff_dialect`].

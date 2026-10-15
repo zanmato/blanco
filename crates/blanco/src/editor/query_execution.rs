@@ -43,9 +43,14 @@ pub(super) fn statement_parameters(
     if !db_type.supports_sql() {
         return Vec::new();
     }
-    extract_statement_info_with_styles(&Rope::from_str(query), 0, db_type.parameter_styles())
-        .map(|info| info.parameters)
-        .unwrap_or_default()
+    extract_statement_info_with_styles(
+        db_type.sql_grammar(),
+        &Rope::from_str(query),
+        0,
+        db_type.parameter_styles(),
+    )
+    .map(|info| info.parameters)
+    .unwrap_or_default()
 }
 
 impl EditorPanel {
@@ -136,10 +141,20 @@ impl EditorPanel {
         let param_styles = db_type.parameter_styles();
         let statement_info = if !selected_text.trim().is_empty() {
             let selected_text = Rope::from_str(&selected_text);
-            extract_statement_info_with_styles(&selected_text, 0, param_styles)
+            extract_statement_info_with_styles(
+                db_type.sql_grammar(),
+                &selected_text,
+                0,
+                param_styles,
+            )
         } else {
             let full_text = Rope::from_str(&full_text);
-            extract_statement_info_with_styles(&full_text, cursor_pos, param_styles)
+            extract_statement_info_with_styles(
+                db_type.sql_grammar(),
+                &full_text,
+                cursor_pos,
+                param_styles,
+            )
         };
         let query = if !selected_text.trim().is_empty() {
             selected_text
@@ -218,7 +233,7 @@ impl EditorPanel {
             selected_text
         } else {
             let full = Rope::from_str(&full_text);
-            extract_statement_info(&full, cursor_pos)
+            extract_statement_info(db_type.sql_grammar(), &full, cursor_pos)
                 .map(|info| info.text)
                 .unwrap_or_default()
         };

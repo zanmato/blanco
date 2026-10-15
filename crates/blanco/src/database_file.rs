@@ -1,21 +1,35 @@
-//! Opening a SQLite database straight from a file: from a launch argument, a
-//! file the platform asks the app to open, or a file dropped on the window.
-//! Files are recognised by their header, so any extension (or none) works.
+//! Opening a database file (SQLite or DuckDB) straight from a file: from a
+//! launch argument, a file the platform asks the app to open, or a file
+//! dropped on the window. Files are recognised by their header, so any
+//! extension (or none) works.
 
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
 
+use database::DatabaseType;
 use gpui::Global;
 
 /// The first 16 bytes of every SQLite 3 database file.
 const SQLITE_HEADER: &[u8; 16] = b"SQLite format 3\0";
 
-/// Whether `path` is a SQLite database, judged by its header.
-pub fn is_sqlite_file(path: &Path) -> bool {
+/// DuckDB's magic bytes, after the 8-byte checksum that starts its files.
+const DUCKDB_MAGIC: &[u8; 4] = b"DUCK";
+const DUCKDB_MAGIC_OFFSET: usize = 8;
+
+/// The backend whose database `path` is, judged by its header.
+pub fn database_file_type(path: &Path) -> Option<DatabaseType> {
     let mut header = [0u8; 16];
     std::fs::File::open(path)
         .and_then(|mut file| file.read_exact(&mut header))
-        .is_ok_and(|()| &header == SQLITE_HEADER)
+        .ok()?;
+    if &header == SQLITE_HEADER {
+        Some(DatabaseType::SQLite)
+    } else if &header[DUCKDB_MAGIC_OFFSET..DUCKDB_MAGIC_OFFSET + DUCKDB_MAGIC.len()] == DUCKDB_MAGIC
+    {
+        Some(DatabaseType::DuckDb)
+    } else {
+        None
+    }
 }
 
 /// The file paths among the launch arguments, skipping the program name and
@@ -52,16 +66,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_is_sqlite_file_reads_the_header() {
+    fn test_database_file_type_reads_the_header() {
         let dir = tempfile::tempdir().unwrap();
         let database = dir.path().join("data.anything");
         write_header_only_database(&database);
-        assert!(is_sqlite_file(&database));
+        assert_eq!(database_file_type(&database), Some(DatabaseType::SQLite));
+
+        let duckdb = dir.path().join("analytics.db");
+        let mut bytes = vec![0u8; 12288];
+        bytes[DUCKDB_MAGIC_OFFSET..DUCKDB_MAGIC_OFFSET + 4].copy_from_slice(DUCKDB_MAGIC);
+        std::fs::write(&duckdb, bytes).unwrap();
+        assert_eq!(database_file_type(&duckdb), Some(DatabaseType::DuckDb));
 
         let text = dir.path().join("notes.db");
         std::fs::write(&text, "not a database at all").unwrap();
-        assert!(!is_sqlite_file(&text));
-        assert!(!is_sqlite_file(&dir.path().join("missing.db")));
+        assert_eq!(database_file_type(&text), None);
+        assert_eq!(database_file_type(&dir.path().join("missing.db")), None);
     }
 
     /// Writes the smallest valid header, enough for detection.

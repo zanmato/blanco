@@ -25,3 +25,4 @@ pub use ssh_tunnel::{SshTunnel, SshTunnelConfig, TunnelInfo};
 
 // Re-export blanco_core traits for convenience
 pub use blanco_core::{Connection, ConnectionFactory, DatabaseService as DatabaseServiceTrait};
+pub use blanco_duckdb::MEMORY_PATH;

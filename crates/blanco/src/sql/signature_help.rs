@@ -174,7 +174,9 @@ impl SignatureHelpProvider for SqlSignatureHelpProvider {
 
         cx.background_spawn(async move {
             let offset = offset.min(rope.len());
-            let Some(context) = statement_parser::extract_completion_context(&rope, offset) else {
+            let Some(context) =
+                statement_parser::extract_completion_context(driver.sql_grammar(), &rope, offset)
+            else {
                 return Ok(None);
             };
             let Some(call) = context.enclosing_call else {

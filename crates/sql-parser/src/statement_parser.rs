@@ -1,7 +1,7 @@
-use blanco_core::ParamStyles;
-use once_cell::sync::Lazy;
+use blanco_core::{ParamStyles, SqlGrammar};
 use ropey::Rope;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::ops::Range;
 use tree_sitter::{Language, Node, Parser};
 
@@ -37,36 +37,70 @@ struct SqlStatementParser {
 /// [`with_cursor_placeholder`].
 const CURSOR_PLACEHOLDER: &str = "__blanco_cursor__";
 
-static SQL_LANGUAGE: Lazy<Language> = Lazy::new(|| tree_sitter_sequel::LANGUAGE.into());
+/// The tree-sitter language of `grammar`.
+pub fn language(grammar: SqlGrammar) -> Language {
+    use tree_sitter_sql_polyglot as polyglot;
+    match grammar {
+        SqlGrammar::Ansi => polyglot::LANGUAGE.into(),
+        SqlGrammar::PostgreSql => polyglot::LANGUAGE_POSTGRES.into(),
+        SqlGrammar::MariaDb => polyglot::LANGUAGE_MARIADB.into(),
+        SqlGrammar::Sqlite => polyglot::LANGUAGE_SQLITE.into(),
+        SqlGrammar::TSql => polyglot::LANGUAGE_TSQL.into(),
+        SqlGrammar::ClickHouse => polyglot::LANGUAGE_CLICKHOUSE.into(),
+        SqlGrammar::DuckDb => polyglot::LANGUAGE_DUCKDB.into(),
+    }
+}
 
-// Thread-local parser instance for reuse.
-// Each thread gets its own parser, avoiding contention and ensuring thread safety.
+/// The highlight query of `grammar`: the base captures plus the dialect's
+/// own, so it compiles against that dialect's language.
+pub fn highlights_query(grammar: SqlGrammar) -> &'static str {
+    use tree_sitter_sql_polyglot as polyglot;
+    match grammar {
+        SqlGrammar::Ansi => polyglot::HIGHLIGHTS_QUERY,
+        SqlGrammar::PostgreSql => polyglot::HIGHLIGHTS_QUERY_POSTGRES,
+        SqlGrammar::MariaDb => polyglot::HIGHLIGHTS_QUERY_MARIADB,
+        SqlGrammar::Sqlite => polyglot::HIGHLIGHTS_QUERY_SQLITE,
+        SqlGrammar::TSql => polyglot::HIGHLIGHTS_QUERY_TSQL,
+        SqlGrammar::ClickHouse => polyglot::HIGHLIGHTS_QUERY_CLICKHOUSE,
+        SqlGrammar::DuckDb => polyglot::HIGHLIGHTS_QUERY_DUCKDB,
+    }
+}
+
+// One parser per grammar and thread, created the first time the thread parses
+// that grammar, so a dialect nobody uses never gets one.
 thread_local! {
     // `set_language` only fails on a tree-sitter ABI mismatch, which is a build
     // defect rather than a runtime condition. Keep the error instead of
     // panicking so a broken grammar degrades to "no statement detected" on the
     // editor keystroke path rather than tearing down the thread.
-    static TLS_PARSER: RefCell<Result<SqlStatementParser, String>> = {
-        let parser = SqlStatementParser::new();
-        if let Err(error) = &parser {
-            tracing::error!("Failed to create thread-local SQL parser: {error}");
-        }
-        RefCell::new(parser)
-    };
+    static TLS_PARSERS: RefCell<HashMap<SqlGrammar, Result<SqlStatementParser, String>>> =
+        RefCell::new(HashMap::new());
 }
 
-/// Run `f` against the thread-local parser, returning `None` when the parser
-/// failed to initialize.
-fn with_parser<T>(f: impl FnOnce(&mut SqlStatementParser) -> Option<T>) -> Option<T> {
-    TLS_PARSER.with_borrow_mut(|parser| f(parser.as_mut().ok()?))
+/// Run `f` against this thread's parser for `grammar`, returning `None` when
+/// the parser failed to initialize.
+fn with_parser<T>(
+    grammar: SqlGrammar,
+    f: impl FnOnce(&mut SqlStatementParser) -> Option<T>,
+) -> Option<T> {
+    TLS_PARSERS.with_borrow_mut(|parsers| {
+        let parser = parsers.entry(grammar).or_insert_with(|| {
+            let parser = SqlStatementParser::new(grammar);
+            if let Err(error) = &parser {
+                tracing::error!("Failed to create the {grammar:?} SQL parser: {error}");
+            }
+            parser
+        });
+        f(parser.as_mut().ok()?)
+    })
 }
 
 impl SqlStatementParser {
     /// Create a new SQL statement parser
-    fn new() -> Result<Self, String> {
+    fn new(grammar: SqlGrammar) -> Result<Self, String> {
         let mut parser = Parser::new();
         parser
-            .set_language(&SQL_LANGUAGE)
+            .set_language(&language(grammar))
             .map_err(|e| format!("Failed to set SQL language: {}", e))?;
 
         Ok(Self { parser })
@@ -150,8 +184,18 @@ impl SqlStatementParser {
 
     /// Collect all statement nodes from the tree
     fn collect_statements<'a>(&self, node: Node<'a>, statements: &mut Vec<Node<'a>>) {
-        // Check if this node is a statement
-        if self.is_statement_node(node.kind()) {
+        // Error recovery can leave an unfinished statement (`WITH x AS (...)`
+        // without its body) as an ERROR at the top level that still holds
+        // complete inner statements. Taking the ERROR as the statement runs
+        // the whole text the user wrote rather than the CTE body alone. An
+        // ERROR holding no statement is a stray token (the `.` of `FROM s.`)
+        // and stays out, so the statement before it keeps the cursor.
+        let unfinished_statement = node.kind() == "ERROR"
+            && node
+                .parent()
+                .is_some_and(|parent| parent.kind() == "program")
+            && self.holds_statement(node);
+        if unfinished_statement || self.is_statement_node(node.kind()) {
             statements.push(node);
         }
 
@@ -163,6 +207,12 @@ impl SqlStatementParser {
                 break;
             }
         }
+    }
+
+    fn holds_statement(&self, node: Node) -> bool {
+        (0..node.child_count() as u32)
+            .filter_map(|i| node.child(i))
+            .any(|child| self.is_statement_node(child.kind()) || self.holds_statement(child))
     }
 
     /// Check if a node kind represents a SQL statement
@@ -353,18 +403,25 @@ impl SqlStatementParser {
 ///
 /// # Returns
 /// The statement info, or None if no statement found
-pub fn extract_statement_info(text: &Rope, cursor_pos: usize) -> Option<StatementInfo> {
-    extract_statement_info_with_styles(text, cursor_pos, ParamStyles::all())
+pub fn extract_statement_info(
+    grammar: SqlGrammar,
+    text: &Rope,
+    cursor_pos: usize,
+) -> Option<StatementInfo> {
+    extract_statement_info_with_styles(grammar, text, cursor_pos, ParamStyles::all())
 }
 
 /// Extract statement info at cursor position, recognizing only the placeholder
 /// styles enabled in `styles`.
 pub fn extract_statement_info_with_styles(
+    grammar: SqlGrammar,
     text: &Rope,
     cursor_pos: usize,
     styles: ParamStyles,
 ) -> Option<StatementInfo> {
-    with_parser(|parser| parser.extract_statement_at_cursor(text, cursor_pos, styles))
+    with_parser(grammar, |parser| {
+        parser.extract_statement_at_cursor(text, cursor_pos, styles)
+    })
 }
 
 /// Report whether the parse tree of `sql` contains a node of any of the given
@@ -373,7 +430,7 @@ pub fn extract_statement_info_with_styles(
 /// text could not be parsed cleanly (parser unavailable or syntax errors), so
 /// callers can fall back to a conservative textual check instead of trusting a
 /// partial tree.
-pub fn contains_node_kind(sql: &str, kinds: &[&str]) -> Option<bool> {
+pub fn contains_node_kind(grammar: SqlGrammar, sql: &str, kinds: &[&str]) -> Option<bool> {
     fn walk(node: Node, kinds: &[&str]) -> bool {
         if kinds.contains(&node.kind()) {
             return true;
@@ -382,7 +439,7 @@ pub fn contains_node_kind(sql: &str, kinds: &[&str]) -> Option<bool> {
         node.children(&mut cursor).any(|child| walk(child, kinds))
     }
 
-    with_parser(|parser| {
+    with_parser(grammar, |parser| {
         let tree = parser.parser.parse(sql, None)?;
         let root_node = tree.root_node();
         if root_node.has_error() {
@@ -489,10 +546,11 @@ pub struct EnclosingCall {
 /// an AST-based approach that correctly handles strings, comments, and
 /// nested queries.
 pub fn extract_completion_context(
+    grammar: SqlGrammar,
     text: &Rope,
     cursor_byte_pos: usize,
 ) -> Option<CompletionContext> {
-    with_parser(|parser| {
+    with_parser(grammar, |parser| {
         let text_str: String = text.chunks().collect();
         let tree = parser.parser.parse(&text_str, None)?;
         let root_node = tree.root_node();
@@ -641,8 +699,12 @@ pub struct Relation {
 /// The tables named in the FROM and JOIN clauses of the statement at
 /// `cursor_byte_pos`, in order. Tables of subqueries and CTEs are left out:
 /// they are not what the statement's own select list reads.
-pub fn extract_relations(text: &Rope, cursor_byte_pos: usize) -> Vec<Relation> {
-    with_parser(|parser| {
+pub fn extract_relations(
+    grammar: SqlGrammar,
+    text: &Rope,
+    cursor_byte_pos: usize,
+) -> Vec<Relation> {
+    with_parser(grammar, |parser| {
         let text_str: String = text.chunks().collect();
         let tree = parser.parser.parse(&text_str, None)?;
         let root_node = tree.root_node();
@@ -1187,6 +1249,23 @@ fn determine_clause(root: Node, source: &str, cursor_byte_pos: usize) -> Option<
                     Some(SqlClause::From)
                 }
             }
+            // DuckDB's `FROM t SELECT ...` holds its relations, the select
+            // list and the later clauses as direct children.
+            "from_first_select" => {
+                if let Some(specific) = find_specific_clause_in_from(node, source, cursor_byte_pos)
+                {
+                    Some(specific)
+                } else if (0..node.child_count() as u32)
+                    .filter_map(|i| node.child(i))
+                    .any(|child| {
+                        child.kind() == "keyword_select" && child.end_byte() <= cursor_byte_pos
+                    })
+                {
+                    Some(SqlClause::Select)
+                } else {
+                    Some(SqlClause::From)
+                }
+            }
             "where" => Some(SqlClause::Where),
             "join" => {
                 // Check if we're in the ON part
@@ -1644,15 +1723,40 @@ mod tests {
     use super::*;
     use blanco_core::DatabaseType;
 
+    #[test]
+    fn every_highlights_query_compiles_against_its_grammar() {
+        for grammar in SqlGrammar::ALL {
+            if let Err(error) =
+                tree_sitter::Query::new(&language(grammar), highlights_query(grammar))
+            {
+                panic!("{grammar:?}: {error}");
+            }
+        }
+    }
+
+    #[test]
+    fn duckdb_from_first_clauses() {
+        let sql = "FROM selections SELECT b WHERE a = 1";
+        let clause_at = |marker: &str| {
+            let text = Rope::from_str(sql);
+            let cursor = sql.find(marker).expect("marker") + marker.len();
+            extract_completion_context(SqlGrammar::DuckDb, &text, cursor)
+                .and_then(|context| context.clause)
+        };
+        assert_eq!(clause_at("selec"), Some(SqlClause::From));
+        assert_eq!(clause_at("SELECT b"), Some(SqlClause::Select));
+        assert_eq!(clause_at("a ="), Some(SqlClause::Where));
+    }
+
     fn create_test_parser() -> SqlStatementParser {
-        SqlStatementParser::new().expect("Failed to create test parser")
+        SqlStatementParser::new(SqlGrammar::PostgreSql).expect("Failed to create test parser")
     }
 
     /// Enclosing call at the `|` marker in `sql`, as (name, argument index).
     fn enclosing_call_at(sql: &str) -> Option<(String, usize)> {
         let cursor = sql.find('|').expect("marker");
         let text = Rope::from_str(&sql.replace('|', ""));
-        extract_completion_context(&text, cursor)
+        extract_completion_context(SqlGrammar::PostgreSql, &text, cursor)
             .expect("context")
             .enclosing_call
             .map(|call| (call.name, call.argument_index))
@@ -2341,7 +2445,7 @@ DELETE FROM users WHERE id = 1;",
             "SELECT a FROM t ORDER BY a NULLS FIRST FOR UPDATE SKIP LOCKED;",
         ] {
             assert_eq!(
-                contains_node_kind(sql, &["ERROR"]),
+                contains_node_kind(SqlGrammar::PostgreSql, sql, &["ERROR"]),
                 Some(false),
                 "expected a clean parse of {sql}"
             );
@@ -2350,7 +2454,13 @@ DELETE FROM users WHERE id = 1;",
 
     #[test]
     fn test_select_above_cte() {
-        let mut parser = create_test_parser();
+        for grammar in [SqlGrammar::MariaDb, SqlGrammar::PostgreSql] {
+            assert_select_above_cte(grammar);
+        }
+    }
+
+    fn assert_select_above_cte(grammar: SqlGrammar) {
+        let mut parser = SqlStatementParser::new(grammar).expect("Failed to create test parser");
         let text = Rope::from_str(
             "SELECT * FROM ps_customer
 WHERE id_shop = 3
@@ -2486,7 +2596,7 @@ WITH customer_addresses AS (
         let sql = "SELECT 1;\nSELECT * FROM public.\"Users\" u JOIN orders ON true \
                    WHERE u.id IN (SELECT x FROM other)";
         let rope = Rope::from_str(sql);
-        let relations = extract_relations(&rope, sql.find('*').unwrap());
+        let relations = extract_relations(SqlGrammar::PostgreSql, &rope, sql.find('*').unwrap());
         assert_eq!(
             relations,
             [

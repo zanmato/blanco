@@ -5,7 +5,7 @@
 use std::collections::HashSet;
 use std::sync::{Mutex, PoisonError};
 
-use blanco_core::{QueryResult, StatementAccess};
+use blanco_core::{QueryResult, SqlGrammar, StatementAccess};
 
 /// Rows a tool result carries before it is cut off. Agents iterate rather than
 /// page, so a small cap keeps a stray `SELECT *` from flooding the context.
@@ -97,8 +97,9 @@ impl SessionGrants {
 /// trip the guard, while `DROP\tTABLE` / `TRUNCATE\nTABLE` still do. When the
 /// text does not parse cleanly the tree cannot be trusted, so fall back to a
 /// word-boundary scan and err on the side of confirming.
-pub(crate) fn contains_destructive_ddl(sql: &str) -> bool {
+pub(crate) fn contains_destructive_ddl(grammar: SqlGrammar, sql: &str) -> bool {
     match sql_parser::statement_parser::contains_node_kind(
+        grammar,
         sql,
         &["keyword_drop", "keyword_truncate"],
     ) {
@@ -259,19 +260,32 @@ mod tests {
 
     #[test]
     fn destructive_ddl_guard_matches_any_whitespace() {
-        assert!(contains_destructive_ddl("DROP TABLE users"));
-        assert!(contains_destructive_ddl("drop\ttable users"));
-        assert!(contains_destructive_ddl("TRUNCATE\nTABLE users;"));
-        assert!(contains_destructive_ddl("SELECT 1; DROP TABLE users"));
+        for grammar in SqlGrammar::ALL {
+            for sql in [
+                "DROP TABLE users",
+                "drop\ttable users",
+                "TRUNCATE\nTABLE users;",
+                "SELECT 1; DROP TABLE users",
+            ] {
+                assert!(contains_destructive_ddl(grammar, sql), "{grammar:?}: {sql}");
+            }
+        }
     }
 
     #[test]
     fn destructive_ddl_guard_ignores_literals_and_identifiers() {
-        assert!(!contains_destructive_ddl(
-            "SELECT 'please DROP this' AS note"
-        ));
-        assert!(!contains_destructive_ddl("SELECT drop_count FROM stats"));
-        assert!(!contains_destructive_ddl("SELECT * FROM users"));
+        for grammar in SqlGrammar::ALL {
+            for sql in [
+                "SELECT 'please DROP this' AS note",
+                "SELECT drop_count FROM stats",
+                "SELECT * FROM users",
+            ] {
+                assert!(
+                    !contains_destructive_ddl(grammar, sql),
+                    "{grammar:?}: {sql}"
+                );
+            }
+        }
     }
 
     fn result_with_rows(row_count: usize) -> QueryResult {

@@ -185,7 +185,11 @@ impl CodeActionProvider for ExpandStarProvider {
             let Some(star) = star_at(&text, range.start) else {
                 return Ok(Vec::new());
             };
-            let relations = statement_parser::extract_relations(&rope, star.range.start);
+            let relations = statement_parser::extract_relations(
+                provider.driver.sql_grammar(),
+                &rope,
+                star.range.start,
+            );
             let Some(new_text) = expansion(&provider, &star, &relations).await else {
                 return Ok(Vec::new());
             };

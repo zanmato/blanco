@@ -61,7 +61,13 @@ impl EditorPanel {
             // statement around it would only compete with it.
             selection
                 .is_empty()
-                .then(|| active_statement_range(state.text(), state.cursor()))
+                .then(|| {
+                    active_statement_range(
+                        query_tab.context.db_type.sql_grammar(),
+                        state.text(),
+                        state.cursor(),
+                    )
+                })
                 .flatten()
         };
 
@@ -251,7 +257,8 @@ impl EditorPanel {
         };
 
         // Extract current statement using existing function
-        let Some(statement_info) = extract_statement_info(&text, cursor_pos) else {
+        let grammar = query_tab.context.db_type.sql_grammar();
+        let Some(statement_info) = extract_statement_info(grammar, &text, cursor_pos) else {
             window.push_notification((NotificationType::Info, "No query found at cursor"), cx);
             return;
         };

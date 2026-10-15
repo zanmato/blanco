@@ -6,7 +6,9 @@
 //! two dozen scattered matches.
 
 use crate::{DatabaseType, ParamStyles, QueryResult, explain_plan};
-use sqlparser::dialect::{GenericDialect, MsSqlDialect, MySqlDialect, PostgreSqlDialect};
+use sqlparser::dialect::{
+    DuckDbDialect, GenericDialect, MsSqlDialect, MySqlDialect, PostgreSqlDialect,
+};
 
 /// Dialect facts for one [`DatabaseType`]. Obtained through
 /// [`DatabaseType::dialect`]; cheap to copy.
@@ -33,6 +35,52 @@ pub struct ValuesQueryStyle {
     pub row_keyword: bool,
 }
 
+/// The tree-sitter grammar that parses and highlights a backend's SQL. Each
+/// is one dialect of tree-sitter-sql-polyglot; `Ansi` is its strict base,
+/// for SQL that belongs to no backend, such as snippets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SqlGrammar {
+    Ansi,
+    PostgreSql,
+    MariaDb,
+    Sqlite,
+    TSql,
+    ClickHouse,
+    DuckDb,
+}
+
+impl SqlGrammar {
+    pub const ALL: [SqlGrammar; 7] = [
+        SqlGrammar::Ansi,
+        SqlGrammar::PostgreSql,
+        SqlGrammar::MariaDb,
+        SqlGrammar::Sqlite,
+        SqlGrammar::TSql,
+        SqlGrammar::ClickHouse,
+        SqlGrammar::DuckDb,
+    ];
+
+    /// The name the grammar is registered under for editor highlighting.
+    pub fn language_name(&self) -> &'static str {
+        match self {
+            SqlGrammar::Ansi => "sql",
+            SqlGrammar::PostgreSql => "sql_postgres",
+            SqlGrammar::MariaDb => "sql_mariadb",
+            SqlGrammar::Sqlite => "sql_sqlite",
+            SqlGrammar::TSql => "sql_tsql",
+            SqlGrammar::ClickHouse => "sql_clickhouse",
+            SqlGrammar::DuckDb => "sql_duckdb",
+        }
+    }
+
+    /// The grammar registered under `name`, if any.
+    pub fn from_language_name(name: &str) -> Option<SqlGrammar> {
+        Self::ALL
+            .into_iter()
+            .find(|grammar| grammar.language_name() == name)
+    }
+}
+
 /// The family of native command line tools (dump, restore, shell) that can
 /// back up and restore a backend's databases.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -57,8 +105,9 @@ impl ClientTools {
 impl DatabaseType {
     /// Every supported backend, in the order the connection dialog lists
     /// them. Index into it with [`DatabaseType::index`].
-    pub const ALL: [DatabaseType; 6] = [
+    pub const ALL: [DatabaseType; 7] = [
         DatabaseType::SQLite,
+        DatabaseType::DuckDb,
         DatabaseType::PostgreSQL,
         DatabaseType::MySQL,
         DatabaseType::ClickHouse,
@@ -70,11 +119,12 @@ impl DatabaseType {
     pub fn index(&self) -> usize {
         match self {
             DatabaseType::SQLite => 0,
-            DatabaseType::PostgreSQL => 1,
-            DatabaseType::MySQL => 2,
-            DatabaseType::ClickHouse => 3,
-            DatabaseType::MsSql => 4,
-            DatabaseType::Redis => 5,
+            DatabaseType::DuckDb => 1,
+            DatabaseType::PostgreSQL => 2,
+            DatabaseType::MySQL => 3,
+            DatabaseType::ClickHouse => 4,
+            DatabaseType::MsSql => 5,
+            DatabaseType::Redis => 6,
         }
     }
 
@@ -97,11 +147,42 @@ impl Dialect {
     pub fn supports_sql(&self) -> bool {
         match self.0 {
             DatabaseType::SQLite
+            | DatabaseType::DuckDb
             | DatabaseType::PostgreSQL
             | DatabaseType::MySQL
             | DatabaseType::ClickHouse
             | DatabaseType::MsSql => true,
             DatabaseType::Redis => false,
+        }
+    }
+
+    /// Whether the database is a local file opened by path rather than a
+    /// server reached by host and port, and so has no password.
+    pub fn is_file_based(&self) -> bool {
+        matches!(self.0, DatabaseType::SQLite | DatabaseType::DuckDb)
+    }
+
+    /// The database name a query tab on a database file is opened with.
+    /// The sidebar addresses a SQLite file by its `main` schema; an empty
+    /// name keeps a DuckDB tab in the file's own default database.
+    pub fn file_database_name(&self) -> &'static str {
+        match self.0 {
+            DatabaseType::SQLite => "main",
+            _ => "",
+        }
+    }
+
+    /// Statements that make a newly created database file write its header,
+    /// so the file is recognised as a database when opened again. SQLite
+    /// leaves a new file empty until its first write, and in WAL mode that
+    /// write waits in the log until a checkpoint. DuckDB writes the header
+    /// when the file is created.
+    pub fn new_file_statement(&self) -> Option<&'static str> {
+        match self.0 {
+            DatabaseType::SQLite => {
+                Some("PRAGMA user_version = 0; PRAGMA wal_checkpoint(TRUNCATE)")
+            }
+            _ => None,
         }
     }
 
@@ -161,6 +242,7 @@ impl Dialect {
             DatabaseType::PostgreSQL => Some(ClientTools::PostgreSql),
             DatabaseType::MySQL => Some(ClientTools::MySql),
             DatabaseType::SQLite
+            | DatabaseType::DuckDb
             | DatabaseType::ClickHouse
             | DatabaseType::MsSql
             | DatabaseType::Redis => None,
@@ -172,10 +254,11 @@ impl Dialect {
         self.supports_sql() && !matches!(self.0, DatabaseType::ClickHouse)
     }
 
-    /// Whether foreign keys can be added and dropped in place. SQLite only
-    /// declares them in CREATE TABLE.
+    /// Whether foreign keys can be added and dropped in place. SQLite and
+    /// DuckDB only declare them in CREATE TABLE.
     pub fn supports_foreign_key_ddl(&self) -> bool {
-        self.supports_foreign_keys() && !matches!(self.0, DatabaseType::SQLite)
+        self.supports_foreign_keys()
+            && !matches!(self.0, DatabaseType::SQLite | DatabaseType::DuckDb)
     }
 
     // ----- sidebar / editor facts -----
@@ -215,7 +298,7 @@ impl Dialect {
     /// The entries of [`Self::BACKEND_KEYWORDS`] this backend understands.
     pub fn backend_keywords(&self) -> &'static [&'static str] {
         match self.0 {
-            DatabaseType::PostgreSQL => &["LIMIT", "RETURNING", "ILIKE"],
+            DatabaseType::PostgreSQL | DatabaseType::DuckDb => &["LIMIT", "RETURNING", "ILIKE"],
             DatabaseType::SQLite => &["LIMIT", "RETURNING"],
             DatabaseType::MySQL => &["LIMIT"],
             DatabaseType::ClickHouse => &["LIMIT", "FINAL", "SETTINGS", "ILIKE"],
@@ -229,11 +312,26 @@ impl Dialect {
         !Self::BACKEND_KEYWORDS.contains(&keyword) || self.backend_keywords().contains(&keyword)
     }
 
+    /// The SQL grammar for this backend. MySQL connections use MariaDB's,
+    /// which reads MySQL's syntax plus MariaDB's additions. Redis speaks no
+    /// SQL and gets the ANSI base for anything SQL-shaped around it.
+    pub fn sql_grammar(&self) -> SqlGrammar {
+        match self.0 {
+            DatabaseType::PostgreSQL => SqlGrammar::PostgreSql,
+            DatabaseType::MySQL => SqlGrammar::MariaDb,
+            DatabaseType::SQLite => SqlGrammar::Sqlite,
+            DatabaseType::MsSql => SqlGrammar::TSql,
+            DatabaseType::ClickHouse => SqlGrammar::ClickHouse,
+            DatabaseType::DuckDb => SqlGrammar::DuckDb,
+            DatabaseType::Redis => SqlGrammar::Ansi,
+        }
+    }
+
     /// Name of the registered editor language used for syntax highlighting.
     pub fn editor_language(&self) -> &'static str {
         match self.0 {
             DatabaseType::Redis => "redis",
-            _ => "sql",
+            _ => self.sql_grammar().language_name(),
         }
     }
 
@@ -241,6 +339,7 @@ impl Dialect {
     pub fn sqruff_dialect(&self) -> &'static str {
         match self.0 {
             DatabaseType::SQLite => "sqlite",
+            DatabaseType::DuckDb => "duckdb",
             DatabaseType::PostgreSQL => "postgres",
             DatabaseType::MySQL => "mysql",
             DatabaseType::ClickHouse => "ansi",
@@ -257,6 +356,7 @@ impl Dialect {
             DatabaseType::PostgreSQL => Box::new(PostgreSqlDialect {}),
             DatabaseType::MySQL => Box::new(MySqlDialect {}),
             DatabaseType::MsSql => Box::new(MsSqlDialect {}),
+            DatabaseType::DuckDb => Box::new(DuckDbDialect {}),
             DatabaseType::SQLite | DatabaseType::ClickHouse | DatabaseType::Redis => {
                 Box::new(GenericDialect {})
             }
@@ -272,6 +372,11 @@ impl Dialect {
         match self.0 {
             DatabaseType::SQLite => ParamStyles::all(),
             DatabaseType::PostgreSQL => ParamStyles {
+                dollar_number: true,
+                ..ParamStyles::none()
+            },
+            DatabaseType::DuckDb => ParamStyles {
+                question_mark: true,
                 dollar_number: true,
                 ..ParamStyles::none()
             },
@@ -303,6 +408,7 @@ impl Dialect {
         match self.0 {
             DatabaseType::PostgreSQL => Some("public"),
             DatabaseType::MsSql => Some("dbo"),
+            DatabaseType::DuckDb => Some("main"),
             DatabaseType::MySQL
             | DatabaseType::SQLite
             | DatabaseType::ClickHouse
@@ -321,6 +427,7 @@ impl Dialect {
                     || schema.starts_with("pg_temp")
             }
             DatabaseType::MsSql => schema == "sys" || schema == "INFORMATION_SCHEMA",
+            DatabaseType::DuckDb => schema == "information_schema" || schema == "pg_catalog",
             DatabaseType::MySQL => matches!(
                 schema,
                 "information_schema" | "mysql" | "performance_schema" | "sys"
@@ -341,7 +448,7 @@ impl Dialect {
             DatabaseType::ClickHouse => 8123,
             DatabaseType::MsSql => 1433,
             DatabaseType::Redis => 6379,
-            DatabaseType::SQLite => 0,
+            DatabaseType::SQLite | DatabaseType::DuckDb => 0,
         }
     }
 
@@ -374,9 +481,10 @@ impl Dialect {
                 format!("`{}`", identifier.replace('`', "``"))
             }
             DatabaseType::MsSql => format!("[{}]", identifier.replace(']', "]]")),
-            DatabaseType::PostgreSQL | DatabaseType::SQLite | DatabaseType::Redis => {
-                format!("\"{}\"", identifier.replace('"', "\"\""))
-            }
+            DatabaseType::PostgreSQL
+            | DatabaseType::SQLite
+            | DatabaseType::DuckDb
+            | DatabaseType::Redis => format!("\"{}\"", identifier.replace('"', "\"\"")),
         }
     }
 
@@ -415,7 +523,10 @@ impl Dialect {
         match self.0 {
             DatabaseType::MySQL | DatabaseType::ClickHouse => ('`', '`'),
             DatabaseType::MsSql => ('[', ']'),
-            DatabaseType::PostgreSQL | DatabaseType::SQLite | DatabaseType::Redis => ('"', '"'),
+            DatabaseType::PostgreSQL
+            | DatabaseType::SQLite
+            | DatabaseType::DuckDb
+            | DatabaseType::Redis => ('"', '"'),
         }
     }
 
@@ -444,6 +555,7 @@ impl Dialect {
             DatabaseType::PostgreSQL => format!("'\\x{hex}'::bytea"),
             DatabaseType::MySQL | DatabaseType::SQLite => format!("X'{hex}'"),
             DatabaseType::MsSql => format!("0x{hex}"),
+            DatabaseType::DuckDb => format!("from_hex('{hex}')"),
             DatabaseType::ClickHouse | DatabaseType::Redis => format!("unhex('{hex}')"),
         }
     }
@@ -576,6 +688,7 @@ impl Dialect {
                 format!("SET SHOWPLAN_ALL ON; {trimmed}; SET SHOWPLAN_ALL OFF")
             }
             DatabaseType::SQLite => format!("EXPLAIN QUERY PLAN {trimmed}"),
+            DatabaseType::DuckDb => format!("EXPLAIN {trimmed}"),
             DatabaseType::ClickHouse => format!("EXPLAIN PLAN {trimmed}"),
             // Redis has no EXPLAIN; the action is gated off by supports_sql.
             DatabaseType::Redis => trimmed.to_string(),
@@ -589,7 +702,10 @@ impl Dialect {
             DatabaseType::PostgreSQL => explain_plan::parse_postgres(result),
             DatabaseType::SQLite => explain_plan::parse_sqlite(result),
             DatabaseType::MySQL => explain_plan::parse_mysql_tree(result),
-            DatabaseType::ClickHouse | DatabaseType::MsSql | DatabaseType::Redis => None,
+            DatabaseType::DuckDb
+            | DatabaseType::ClickHouse
+            | DatabaseType::MsSql
+            | DatabaseType::Redis => None,
         }
     }
 

@@ -132,7 +132,7 @@ impl FilterBar {
         let names = columns.iter().map(|column| column.name.clone()).collect();
         let where_editor = cx.new(|cx| {
             let mut editor = EditorState::new(window, cx)
-                .language("sql")
+                .language(crate::sql::grammar_language(dialect.sql_grammar()))
                 .single_line(true)
                 .placeholder("WHERE condition, e.g. status = 'open' AND total > 100");
             editor.lsp_mut().completion_provider =

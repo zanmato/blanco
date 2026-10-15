@@ -24,6 +24,19 @@
                   <string>application/x-sqlite3</string>
               </array>
           </dict>
+          <dict>
+              <key>CFBundleTypeName</key>
+              <string>DuckDB Database</string>
+              <key>CFBundleTypeRole</key>
+              <string>Editor</string>
+              <key>LSHandlerRank</key>
+              <string>Alternate</string>
+              <key>CFBundleTypeExtensions</key>
+              <array>
+                  <string>duckdb</string>
+                  <string>ddb</string>
+              </array>
+          </dict>
       </array>
       <key>CFBundleDevelopmentRegion</key>
       <string>en</string>

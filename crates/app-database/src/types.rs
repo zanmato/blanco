@@ -254,10 +254,16 @@ impl ConnectionData {
     }
 
     pub fn new_sqlite(name: String, database_path: String) -> Self {
+        Self::new_file(DatabaseType::SQLite, name, database_path)
+    }
+
+    /// A connection to the database file at `database_path`, for a
+    /// file-based backend (SQLite, DuckDB).
+    pub fn new_file(db_type: DatabaseType, name: String, database_path: String) -> Self {
         Self {
             id: None,
             name,
-            db_type: DatabaseType::SQLite,
+            db_type,
             host: None,
             port: None,
             database_name: None,
@@ -422,6 +428,15 @@ impl ConnectionData {
                 self.database_path
                     .clone()
                     .unwrap_or_else(|| format!("{}.db", self.name)),
+            ),
+            // A DuckDB connection without a file is an in-memory database.
+            DatabaseType::DuckDb => ConnectionConfig::new_duckdb(
+                connection_id,
+                self.name.clone(),
+                self.database_path
+                    .clone()
+                    .filter(|path| !path.is_empty())
+                    .unwrap_or_else(|| database::MEMORY_PATH.to_string()),
             ),
             _ => {
                 let default_port = i32::from(self.db_type.dialect().default_port());

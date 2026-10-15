@@ -1122,6 +1122,7 @@ impl CompletionProvider for SqlCompletionProvider {
         window.spawn(cx, async move |cx| {
             cx.background_spawn(async move {
                 let context = statement_parser::extract_completion_context(
+                    provider.driver.sql_grammar(),
                     &rope_clone,
                     offset.min(rope_clone.len()),
                 );
@@ -1387,6 +1388,7 @@ impl CompletionProvider for SqlCompletionProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use blanco_core::SqlGrammar;
     use sql_parser::statement_parser::TableAlias;
 
     fn schemas(names: &[&str]) -> Vec<String> {
@@ -1414,12 +1416,12 @@ mod tests {
 
     fn ctx(rope: &str, cursor: usize) -> TsCompletionContext {
         let rope = Rope::from_str(rope);
-        statement_parser::extract_completion_context(&rope, cursor).unwrap()
+        statement_parser::extract_completion_context(SqlGrammar::PostgreSql, &rope, cursor).unwrap()
     }
 
     fn ctx_end(rope: &str) -> TsCompletionContext {
         let r = Rope::from_str(rope);
-        statement_parser::extract_completion_context(&r, r.len()).unwrap()
+        statement_parser::extract_completion_context(SqlGrammar::PostgreSql, &r, r.len()).unwrap()
     }
 
     // ---- metadata fetching ----

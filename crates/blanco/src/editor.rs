@@ -1084,7 +1084,7 @@ impl EditorPanel {
                 let tab_size = editor_settings.tab_size;
 
                 let mut editor = EditorState::new(window, cx)
-                    .language(params.context.db_type.editor_language().to_string())
+                    .language(crate::sql::highlight_language(params.context.db_type).to_string())
                     .line_number(true)
                     .folding(folding)
                     .tab_size(TabSize {
@@ -1217,13 +1217,19 @@ impl EditorPanel {
                 SqlView::new(
                     10,
                     cx.theme().highlight_theme.clone(),
-                    params.context.db_type.editor_language(),
+                    crate::sql::highlight_language(params.context.db_type),
                     cx,
                 )
                 .show_copy_button(false)
             }),
-            commit_preview: cx
-                .new(|cx| SqlView::new(usize::MAX, cx.theme().highlight_theme.clone(), "sql", cx)),
+            commit_preview: cx.new(|cx| {
+                SqlView::new(
+                    usize::MAX,
+                    cx.theme().highlight_theme.clone(),
+                    crate::sql::highlight_language(params.context.db_type),
+                    cx,
+                )
+            }),
             sqruff_service,
             completion_provider: supports_sql.then_some(sql_completion_provider),
             sql_view_visible: true,

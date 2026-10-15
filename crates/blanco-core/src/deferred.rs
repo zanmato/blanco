@@ -161,7 +161,7 @@ impl Dialect {
             let quoted = self.quote_identifier(&column.name);
             match large[index] {
                 Some(kind) => {
-                    let size = self.byte_length_sql(&quoted);
+                    let size = self.byte_length_sql(&quoted, kind);
                     items.push(format!(
                         "CASE WHEN {size} > {threshold} THEN {} ELSE {quoted} END AS {quoted}",
                         self.preview_sql(&quoted, kind)
@@ -295,6 +295,12 @@ impl Dialect {
                     None
                 }
             }
+            // DuckDB's VARCHAR has no length limit.
+            DatabaseType::DuckDb => match base {
+                "varchar" | "text" | "string" => Some(LargeKind::Text),
+                "blob" | "bytea" => Some(LargeKind::Binary),
+                _ => None,
+            },
             DatabaseType::MsSql => match base {
                 "text" | "ntext" => Some(LargeKind::Text),
                 "image" => Some(LargeKind::Binary),
@@ -307,12 +313,16 @@ impl Dialect {
     }
 
     /// The size of `column` in bytes.
-    fn byte_length_sql(&self, column: &str) -> String {
-        match self.database_type() {
-            DatabaseType::PostgreSQL => format!("OCTET_LENGTH({column})"),
-            DatabaseType::MsSql => format!("DATALENGTH({column})"),
+    fn byte_length_sql(&self, column: &str, kind: LargeKind) -> String {
+        match (self.database_type(), kind) {
+            (DatabaseType::PostgreSQL, _) => format!("OCTET_LENGTH({column})"),
+            (DatabaseType::MsSql, _) => format!("DATALENGTH({column})"),
             // LENGTH counts characters of text in SQLite, bytes of a blob.
-            DatabaseType::SQLite => format!("LENGTH(CAST({column} AS BLOB))"),
+            (DatabaseType::SQLite, _) => format!("LENGTH(CAST({column} AS BLOB))"),
+            // DuckDB's text functions take no BLOB, and non-ASCII text does
+            // not cast to one.
+            (DatabaseType::DuckDb, LargeKind::Text) => format!("STRLEN({column})"),
+            (DatabaseType::DuckDb, LargeKind::Binary) => format!("OCTET_LENGTH({column})"),
             _ => format!("LENGTH({column})"),
         }
     }
@@ -323,6 +333,10 @@ impl Dialect {
             (DatabaseType::MsSql, _) => format!("SUBSTRING({column}, 1, {PREVIEW_LENGTH})"),
             (DatabaseType::PostgreSQL | DatabaseType::MySQL, LargeKind::Text) => {
                 format!("LEFT({column}, {PREVIEW_LENGTH})")
+            }
+            // SUBSTR takes no BLOB in DuckDB, so the bytes go through hex.
+            (DatabaseType::DuckDb, LargeKind::Binary) => {
+                format!("FROM_HEX(SUBSTR(HEX({column}), 1, {}))", PREVIEW_LENGTH * 2)
             }
             _ => format!("SUBSTR({column}, 1, {PREVIEW_LENGTH})"),
         }

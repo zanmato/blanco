@@ -1,0 +1,27 @@
+[package]
+name = "blanco-duckdb"
+version = "0.1.0"
+edition = "2024"
+description = "DuckDB database implementation for Blanco SQL editor"
+
+[lib]
+path = "src/duckdb_connection.rs"
+
+[dependencies]
+blanco-core = { path = "../blanco-core" }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+# Bundled: there is no system libduckdb on Windows or Debian, and the self
+# updater replaces only the executable, so a shared library would go stale.
+# The tilde keeps patch releases without moving to another DuckDB release.
+duckdb = { version = "~1.10506.0", features = ["bundled"] }
+tracing = { workspace = true }
+tokio = { version = "1", features = ["rt"] }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+tempfile = "3.8"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+
+[lints]
+workspace = true

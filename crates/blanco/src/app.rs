@@ -38,13 +38,13 @@ use crate::{
     connection_credentials,
     connection_modal::NewConnectionModal,
     connections::{ConnectionsPanel, ConnectionsPanelEvent},
+    database_file,
     editor::{
         EditorPanel, EditorPanelEvent, ObjectDdlParams, TabCreationParams, TableStructureParams,
     },
     history_panel::{HistoryPanel, HistoryPanelEvent},
     result_ext::ResultExt,
     snippets_panel::{RefreshSnippets, SnippetsPanel, SnippetsPanelEvent},
-    sqlite_file,
     status_bar::{ActivityReporter, StatusBarState, StatusKind},
     update_manager::{UpdateManager, UpdateState},
 };
@@ -64,7 +64,9 @@ actions!(
         OpenNewConnectionModal,
         ImportConnections,
         ExportConnections,
-        OpenSqliteFile,
+        OpenDatabaseFile,
+        NewSqliteDatabase,
+        NewDuckdbDatabase,
         NewSnippet,
         CommitChanges,
         RollbackChanges,
@@ -885,48 +887,138 @@ impl BlancoApp {
         });
     }
 
-    /// Open the SQLite database at `path` in a new query tab: through its
+    /// Open the database file at `path` in a new query tab: through its
     /// saved connection when there is one, otherwise through a temporary
-    /// connection that can be saved later. Files are recognised by their
-    /// header, whatever their extension.
+    /// connection that can be saved later. SQLite and DuckDB files are
+    /// recognised by their header, whatever their extension.
     pub(crate) fn open_database_file(
         &mut self,
         path: &std::path::Path,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !sqlite_file::is_sqlite_file(path) {
+        let Some(db_type) = database_file::database_file_type(path) else {
             window.push_notification(
                 (
                     NotificationType::Error,
-                    SharedString::from(format!("{} is not a SQLite database.", path.display())),
+                    SharedString::from(format!(
+                        "{} is not a SQLite or DuckDB database.",
+                        path.display()
+                    )),
                 ),
                 cx,
             );
             return;
-        }
+        };
         let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        self.open_file_connection(db_type, &path, false, window, cx);
+    }
 
-        if let Some(connection) = self.sidebar.read(cx).sqlite_connection_for(&path) {
+    /// Ask where to create a new `db_type` database file, create it and open
+    /// it like an existing one. An existing file is left alone: replacing a
+    /// database is not something a New command should do.
+    fn new_database_file(
+        &mut self,
+        db_type: database::DatabaseType,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let directory = dirs::document_dir()
+            .or_else(dirs::home_dir)
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+        let suggested_name = match db_type {
+            database::DatabaseType::DuckDb => "database.duckdb",
+            _ => "database.db",
+        };
+        let path = cx.prompt_for_new_path(&directory, Some(suggested_name));
+        cx.spawn_in(window, async move |app, cx| {
+            let path = match path.await {
+                Ok(Ok(Some(path))) => path,
+                Ok(Ok(None)) | Err(_) => return,
+                Ok(Err(error)) => {
+                    tracing::error!("Could not open the save dialog: {error:#}");
+                    return;
+                }
+            };
+            app.update_in(cx, |app, window, cx| {
+                if path.exists() {
+                    window.push_notification(
+                        (
+                            NotificationType::Error,
+                            SharedString::from(format!(
+                                "{} already exists. Open it with File, Open instead.",
+                                path.display()
+                            )),
+                        ),
+                        cx,
+                    );
+                    return;
+                }
+                app.open_file_connection(db_type, &path, true, window, cx);
+            })
+            .log_err();
+        })
+        .detach();
+    }
+
+    /// Open a query tab on the `db_type` database at `path`, adding a
+    /// temporary connection unless one already exists. `create` makes sure a
+    /// new file is written as a database before anything else opens it.
+    pub(crate) fn open_file_connection(
+        &mut self,
+        db_type: database::DatabaseType,
+        path: &std::path::Path,
+        create: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(connection) = self.sidebar.read(cx).file_connection_for(db_type, path) {
             self.open_query_tab_for_file(&connection, window, cx);
             return;
         }
 
         let connection = self.sidebar.update(cx, |sidebar, cx| {
-            sidebar.add_temporary_sqlite_connection(&path, cx)
+            sidebar.add_temporary_file_connection(db_type, path, cx)
         });
-        let Some(config) = connection.to_connection_config() else {
+        let (Some(config), Some(connection_id)) =
+            (connection.to_connection_config(), connection.id)
+        else {
             return;
         };
         let db_service = database::DatabaseService::global(cx).clone();
         cx.spawn_in(window, async move |app, cx| {
             db_service.add_connection_config(config).await;
+            // Connecting creates the file. Some backends write nothing to it
+            // until a statement does.
+            let created = match db_type.dialect().new_file_statement().filter(|_| create) {
+                Some(statement) => database::DatabaseServiceTrait::execute_script(
+                    &db_service,
+                    connection_id,
+                    None,
+                    statement,
+                )
+                .await
+                .map(|_| ()),
+                None if create => db_service
+                    .get_or_create_connection(connection_id, None)
+                    .await
+                    .map(|_| ()),
+                None => Ok(()),
+            };
             app.update_in(cx, |app, window, cx| {
-                if let Some(id) = connection.id {
-                    app.sidebar.update(cx, |sidebar, cx| {
-                        sidebar.expand_connection(id, window, cx);
-                    });
+                if let Err(error) = created {
+                    window.push_notification(
+                        (
+                            NotificationType::Error,
+                            SharedString::from(format!("Could not create the database: {error:#}")),
+                        ),
+                        cx,
+                    );
+                    return;
                 }
+                app.sidebar.update(cx, |sidebar, cx| {
+                    sidebar.expand_connection(connection_id, window, cx);
+                });
                 app.open_query_tab_for_file(&connection, window, cx);
             })
             .log_err();
@@ -950,8 +1042,11 @@ impl BlancoApp {
                 connection_id,
                 connection_name: connection.name.clone(),
                 db_type: connection.db_type,
-                // The sidebar addresses a SQLite database by its schema.
-                database_name: "main".to_string(),
+                database_name: connection
+                    .db_type
+                    .dialect()
+                    .file_database_name()
+                    .to_string(),
                 schema_name: None,
                 environment_type: Some(connection.environment_type),
             },
@@ -1028,7 +1123,7 @@ impl BlancoApp {
                 // Not when Blanco was started to open a database file.
                 ConnectionsPanelEvent::FirstLoadCompleted => {
                     let opening_files = cx
-                        .try_global::<sqlite_file::OpenFileRequests>()
+                        .try_global::<database_file::OpenFileRequests>()
                         .is_some_and(|requests| requests.at_launch);
                     if sidebar.read(cx).connections.is_empty() && !opening_files {
                         app.on_new_connection_modal(&OpenNewConnectionModal, window, cx);
@@ -1817,9 +1912,27 @@ impl BlancoApp {
             .update(cx, |sidebar, cx| sidebar.import_connections(window, cx));
     }
 
-    fn on_open_sqlite_file(
+    fn on_new_sqlite_database(
         &mut self,
-        _: &OpenSqliteFile,
+        _: &NewSqliteDatabase,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.new_database_file(database::DatabaseType::SQLite, window, cx);
+    }
+
+    fn on_new_duckdb_database(
+        &mut self,
+        _: &NewDuckdbDatabase,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.new_database_file(database::DatabaseType::DuckDb, window, cx);
+    }
+
+    fn on_open_database_file(
+        &mut self,
+        _: &OpenDatabaseFile,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1827,7 +1940,7 @@ impl BlancoApp {
             files: true,
             directories: false,
             multiple: true,
-            prompt: Some("Open SQLite database".into()),
+            prompt: Some("Open database".into()),
         });
         cx.spawn_in(window, async move |app, cx| {
             let Ok(Ok(Some(paths))) = paths.await else {
@@ -2834,7 +2947,9 @@ impl Render for BlancoApp {
             .on_action(cx.listener(Self::on_toggle_command_palette))
             .on_action(cx.listener(Self::on_import_connections))
             .on_action(cx.listener(Self::on_export_connections))
-            .on_action(cx.listener(Self::on_open_sqlite_file))
+            .on_action(cx.listener(Self::on_open_database_file))
+            .on_action(cx.listener(Self::on_new_sqlite_database))
+            .on_action(cx.listener(Self::on_new_duckdb_database))
             .on_action(cx.listener(Self::on_new_query_tab))
             .on_action(cx.listener(Self::on_activate_next_tab))
             .on_action(cx.listener(Self::on_activate_previous_tab))
@@ -2844,14 +2959,14 @@ impl Render for BlancoApp {
             .on_action(cx.listener(Self::on_export_table_data))
             .on_action(cx.listener(Self::on_refresh_connections))
             .drag_over::<ExternalPaths>(|style, _, _, cx| style.bg(cx.theme().drop_target))
-            // A SQLite database opens as a connection; any other file is
-            // SQL for the editor.
+            // A SQLite or DuckDB database opens as a connection; any other
+            // file is SQL for the editor.
             .on_drop(cx.listener(|app, paths: &ExternalPaths, window, cx| {
                 let (databases, sql_files): (Vec<_>, Vec<_>) = paths
                     .paths()
                     .iter()
                     .cloned()
-                    .partition(|path| sqlite_file::is_sqlite_file(path));
+                    .partition(|path| database_file::database_file_type(path).is_some());
                 for path in &databases {
                     app.open_database_file(path, window, cx);
                 }
@@ -3052,8 +3167,16 @@ fn build_menu() -> Vec<Menu> {
         MenuItem::action("New Window", NewWindow),
         MenuItem::separator(),
         MenuItem::submenu(Menu {
+            name: "New".into(),
+            items: vec![
+                MenuItem::action("SQLite Database…", NewSqliteDatabase),
+                MenuItem::action("DuckDB Database…", NewDuckdbDatabase),
+            ],
+            disabled: false,
+        }),
+        MenuItem::submenu(Menu {
             name: "Open".into(),
-            items: vec![MenuItem::action("SQLite Database…", OpenSqliteFile)],
+            items: vec![MenuItem::action("Database File…", OpenDatabaseFile)],
             disabled: false,
         }),
         MenuItem::action("Save", SaveTab),

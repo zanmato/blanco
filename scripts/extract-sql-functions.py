@@ -9,6 +9,8 @@ standard library plus the client each container already ships:
     mysql       `docker exec` into the mariadb container: mysql.help_topic
                 (the `HELP` tables, which carry a Syntax block per function)
     clickhouse  HTTP interface on 127.0.0.1:8124: system.functions
+    duckdb      duckdb_functions() from the DuckDB bundled with blanco-duckdb, read
+                through `cargo run --example function_catalog`
     sqlite      Python's sqlite3 module: pragma_function_list. SQLite has no
                 signature catalog, so sqlite.rs is curated by hand and this
                 subcommand only lints it for missing names.
@@ -369,6 +371,60 @@ def clickhouse(args):
 
 
 # ---------------------------------------------------------------------------
+# DuckDB
+
+
+IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def duckdb(args):
+    output = subprocess.run(
+        ["cargo", "run", "-q", "-p", "blanco-duckdb", "--example", "function_catalog"],
+        cwd=os.path.join(HERE, ".."),
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    lines = [json.loads(line) for line in output.splitlines() if line.strip()]
+    version = lines[0]["version"]
+
+    entries = []
+    for row in lines[1:]:
+        name = row["name"]
+        # Operators (`%`, `!~~`) and internal helpers are not called by name.
+        if not IDENTIFIER.match(name) or name.startswith("__"):
+            continue
+        # Built-ins mostly name their parameters col0, col1, ..., which says
+        # less than the type, so those show the type instead.
+        parameters = [
+            parameter_type if re.match(r"^col\d+$", parameter) or not parameter else parameter
+            for parameter, parameter_type in zip(row["parameters"], row["parameter_types"] + [""] * len(row["parameters"]))
+        ]
+        if row["varargs"]:
+            parameters.append(f"{row['varargs']}...")
+        parts = []
+        if row["description"].strip():
+            parts.append(trim_paragraphs(row["description"].strip(), 1200))
+        if row["examples"]:
+            parts.append("**Examples**\n\n" + "\n".join(f"`{example}`" for example in row["examples"]))
+        notes = []
+        if row["type"] == "aggregate":
+            notes.append("Aggregate function")
+        elif row["type"] in ("table", "table_macro"):
+            notes.append("Table function")
+        notes.extend(row["categories"])
+        if notes:
+            parts.append("*" + ", ".join(notes) + "*")
+        entries.append({
+            "name": name,
+            "parameters": parameters,
+            "return_type": "" if row["return_type"] in ("", "NULL") else row["return_type"],
+            "documentation": "\n\n".join(parts),
+        })
+    emit("duckdb", entries, f"duckdb_functions() on DuckDB {version}")
+
+
+# ---------------------------------------------------------------------------
 # SQLite (lint only)
 
 
@@ -399,7 +455,7 @@ def sqlite(args):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("dialect", choices=["postgres", "mysql", "clickhouse", "sqlite", "all"])
+    parser.add_argument("dialect", choices=["postgres", "mysql", "clickhouse", "duckdb", "sqlite", "all"])
     parser.add_argument("--pg-host", default="127.0.0.1")
     parser.add_argument("--pg-port", default=5488, type=int)
     parser.add_argument("--pg-user", default="blanco")
@@ -414,7 +470,13 @@ def main():
     parser.add_argument("--ch-password", default="blanco")
     args = parser.parse_args()
 
-    steps = {"postgres": postgres, "mysql": mysql, "clickhouse": clickhouse, "sqlite": sqlite}
+    steps = {
+        "postgres": postgres,
+        "mysql": mysql,
+        "clickhouse": clickhouse,
+        "duckdb": duckdb,
+        "sqlite": sqlite,
+    }
     selected = steps.keys() if args.dialect == "all" else [args.dialect]
     failed = False
     for name in selected:

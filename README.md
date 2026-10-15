@@ -4,7 +4,7 @@ Blanco is a cross platform SQL editor and database client built with
 [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui) and
 [gpui-kit](https://github.com/longbridge/gpui-kit).
 
-Supported backends: PostgreSQL, MySQL/MariaDB, SQLite, SQL Server, ClickHouse
+Supported backends: PostgreSQL, MySQL/MariaDB, SQLite, DuckDB, SQL Server, ClickHouse
 and Redis.
 
 ## Highlights
@@ -42,7 +42,7 @@ Requirements: a recent stable Rust toolchain and the tree-sitter CLI
 dependencies (X11/Wayland, Vulkan, fontconfig).
 
 ```bash
-./scripts/setup.sh        # init the grammar submodule and generate parsers
+./scripts/setup.sh        # generate the Redis grammar's parser
 cargo run --release -p blanco
 ```
 
@@ -53,7 +53,7 @@ cargo run --release -p blanco
   types, the read/write statement classifier, DDL builders and plan parsing.
 - `crates/database`: `DatabaseService`, connection configs, SSH tunnels and the
   tokio bridge every connection is wrapped in.
-- `crates/{postgres,mysql,sqlite,mssql,clickhouse,redis}`: drivers.
+- `crates/{postgres,mysql,sqlite,duckdb,mssql,clickhouse,redis}`: drivers.
 - `crates/app-database`: the SQLite app store (connections, tabs, history,
   snippets, settings) with versioned migrations.
 - `crates/sql-parser`: tree-sitter statement parsing and EXPLAIN wrapping.

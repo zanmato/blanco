@@ -15,6 +15,7 @@ mod connection_integration_test;
 mod connection_modal;
 mod connections;
 mod copy_handler;
+mod database_file;
 mod editor;
 mod export;
 mod history_panel;
@@ -35,7 +36,6 @@ mod settings;
 mod snippet_completion;
 mod snippets_panel;
 mod sql;
-mod sqlite_file;
 mod status_bar;
 #[cfg(test)]
 mod test_harness;
@@ -77,20 +77,20 @@ fn main() {
     // the platform asks the running app to open later (a double-clicked file
     // on macOS arrives as a `file://` URL rather than an argument).
     let (open_files, open_file_requests) = smol::channel::unbounded();
-    let launch_paths = sqlite_file::paths_from_args(std::env::args_os());
+    let launch_paths = database_file::paths_from_args(std::env::args_os());
     let at_launch = !launch_paths.is_empty();
     if at_launch {
         open_files.try_send(launch_paths).ok();
     }
     app.on_open_urls(move |urls| {
-        let paths = sqlite_file::paths_from_urls(&urls);
+        let paths = database_file::paths_from_urls(&urls);
         if !paths.is_empty() {
             open_files.try_send(paths).ok();
         }
     });
 
     app.run(move |cx| {
-        cx.set_global(sqlite_file::OpenFileRequests {
+        cx.set_global(database_file::OpenFileRequests {
             receiver: open_file_requests,
             at_launch,
         });

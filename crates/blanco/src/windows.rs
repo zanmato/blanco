@@ -21,10 +21,10 @@ use tracing::{error, info};
 
 use crate::app::{BlancoApp, NewWindow};
 use crate::app_settings::AppSettings;
+use crate::database_file;
 use crate::editor::MovedTab;
 use crate::mcp::McpService;
 use crate::result_ext::ResultExt as _;
-use crate::sqlite_file;
 use crate::status_bar::{ActivityResult, StatusBarState};
 use crate::update_manager::UpdateManager;
 
@@ -501,7 +501,7 @@ fn spawn_idle_disconnect(cx: &mut App) {
 /// running app to open, in the frontmost window.
 fn spawn_open_file_listener(cx: &mut App) {
     let Some(requests) = cx
-        .try_global::<sqlite_file::OpenFileRequests>()
+        .try_global::<database_file::OpenFileRequests>()
         .map(|requests| requests.receiver.clone())
     else {
         return;

@@ -118,7 +118,9 @@ impl SqlView {
         // terminator, so leave their commands untouched.
         let new_text = match text {
             SqlViewMessage::SqlStatement(statement) => {
-                if self.language == "sql" && !statement.trim_start().ends_with(";") {
+                // Every SQL grammar is registered under a name starting with
+                // `sql` (`sql`, `sql_postgres`, ...).
+                if self.language.starts_with("sql") && !statement.trim_start().ends_with(";") {
                     format!("{};", statement)
                 } else {
                     statement.clone()

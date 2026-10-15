@@ -3,6 +3,7 @@ use blanco_core::DatabaseType;
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum ConnectorType {
     SQLite,
+    DuckDb,
     PostgreSQL,
     MySQL,
     ClickHouse,
@@ -13,6 +14,7 @@ pub(super) enum ConnectorType {
 impl ConnectorType {
     pub(super) fn from_str(s: &str) -> Self {
         match s {
+            "DuckDB" => ConnectorType::DuckDb,
             "PostgreSQL" => ConnectorType::PostgreSQL,
             "MySQL" => ConnectorType::MySQL,
             "ClickHouse" => ConnectorType::ClickHouse,
@@ -27,6 +29,7 @@ impl From<DatabaseType> for ConnectorType {
     fn from(driver_type: DatabaseType) -> Self {
         match driver_type {
             DatabaseType::SQLite => ConnectorType::SQLite,
+            DatabaseType::DuckDb => ConnectorType::DuckDb,
             DatabaseType::PostgreSQL => ConnectorType::PostgreSQL,
             DatabaseType::MySQL => ConnectorType::MySQL,
             DatabaseType::ClickHouse => ConnectorType::ClickHouse,
@@ -40,6 +43,7 @@ impl From<ConnectorType> for DatabaseType {
     fn from(connector_type: ConnectorType) -> Self {
         match connector_type {
             ConnectorType::SQLite => DatabaseType::SQLite,
+            ConnectorType::DuckDb => DatabaseType::DuckDb,
             ConnectorType::PostgreSQL => DatabaseType::PostgreSQL,
             ConnectorType::MySQL => DatabaseType::MySQL,
             ConnectorType::ClickHouse => DatabaseType::ClickHouse,

@@ -1,4 +1,4 @@
-; Redis command highlighting. Capture names mirror tree-sitter-sequel's
+; Redis command highlighting. Capture names mirror the SQL grammar's
 ; highlights.scm so the existing gpui-component theme colors apply unchanged.
 
 [

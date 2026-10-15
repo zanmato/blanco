@@ -365,7 +365,7 @@ impl BlancoMcpServer {
             ));
         }
         let kinds = blanco_core::write_guard::write_kinds(connection.config.db_type, sql);
-        let destructive = contains_destructive_ddl(sql);
+        let destructive = contains_destructive_ddl(connection.config.db_type.sql_grammar(), sql);
         let is_prod = connection.is_prod();
         let in_session = is_session_request(request);
         let remembered = in_session && self.session_grants.covers(connection.config.id, &kinds);
@@ -387,7 +387,7 @@ impl BlancoMcpServer {
             connection_name: connection.config.name.clone(),
             database_name: connection.database.clone(),
             environment: connection.environment,
-            language: connection.config.db_type.dialect().editor_language(),
+            language: crate::sql::highlight_language(connection.config.db_type),
             sql: sql.to_string(),
             rememberable_kinds: rememberable_kinds.clone(),
         };

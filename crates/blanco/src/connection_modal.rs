@@ -1,13 +1,13 @@
+mod file_form;
 mod mssql;
 mod redis;
 mod server_form;
 mod shared;
-mod sqlite;
 mod types;
 
+use file_form::FileForm;
 use mssql::MssqlForm;
 use server_form::{CLICKHOUSE_SPEC, MYSQL_SPEC, POSTGRES_SPEC, ServerForm};
-use sqlite::SqliteForm;
 use types::ConnectorType;
 
 use gpui::{
@@ -43,7 +43,8 @@ pub struct NewConnectionModal {
     /// list for the dialog, since every backend's form edits the same
     /// connection.
     ask_secrets: Vec<SecretKind>,
-    sqlite_form: SqliteForm,
+    sqlite_form: FileForm,
+    duckdb_form: FileForm,
     postgres_form: ServerForm,
     mysql_form: ServerForm,
     clickhouse_form: ServerForm,
@@ -62,14 +63,11 @@ impl NewConnectionModal {
         cx: &mut Context<Self>,
         connection_data: Option<ConnectionData>,
     ) -> Self {
-        let db_types = vec![
-            "SQLite".to_string(),
-            "PostgreSQL".to_string(),
-            "MySQL".to_string(),
-            "ClickHouse".to_string(),
-            "SQL Server".to_string(),
-            "Redis".to_string(),
-        ];
+        // In `DatabaseType::ALL` order, which `index()` selects from.
+        let db_types: Vec<String> = blanco_core::DatabaseType::ALL
+            .iter()
+            .map(|db_type| db_type.as_str().to_string())
+            .collect();
 
         let (initial_name, initial_db_type, editing_connection_id, db_type_locked) =
             if let Some(conn) = &connection_data {
@@ -144,7 +142,8 @@ impl NewConnectionModal {
         let ask_secrets = conn_ref
             .map(|connection| connection.ask_secrets.clone())
             .unwrap_or_default();
-        let sqlite_form = SqliteForm::new(window, cx, conn_ref);
+        let sqlite_form = FileForm::new(blanco_core::DatabaseType::SQLite, window, cx, conn_ref);
+        let duckdb_form = FileForm::new(blanco_core::DatabaseType::DuckDb, window, cx, conn_ref);
         let postgres_form = ServerForm::new(&POSTGRES_SPEC, window, cx, conn_ref);
         let mysql_form = ServerForm::new(&MYSQL_SPEC, window, cx, conn_ref);
         let clickhouse_form = ServerForm::new(&CLICKHOUSE_SPEC, window, cx, conn_ref);
@@ -163,6 +162,7 @@ impl NewConnectionModal {
             idle_timeout_input,
             ask_secrets,
             sqlite_form,
+            duckdb_form,
             postgres_form,
             mysql_form,
             clickhouse_form,
@@ -200,6 +200,7 @@ impl NewConnectionModal {
         }
         match connector_type {
             ConnectorType::SQLite => self.sqlite_form.validate(cx),
+            ConnectorType::DuckDb => self.duckdb_form.validate(cx),
             ConnectorType::PostgreSQL => self.postgres_form.validate(cx),
             ConnectorType::MySQL => self.mysql_form.validate(cx),
             ConnectorType::ClickHouse => self.clickhouse_form.validate(cx),
@@ -218,6 +219,10 @@ impl NewConnectionModal {
         let mut connection = match connector_type {
             ConnectorType::SQLite => {
                 self.sqlite_form
+                    .get_connection_data(name, environment_type, cx)
+            }
+            ConnectorType::DuckDb => {
+                self.duckdb_form
                     .get_connection_data(name, environment_type, cx)
             }
             ConnectorType::PostgreSQL => {
@@ -371,7 +376,8 @@ impl NewConnectionModal {
     }
 
     /// Mark the ticked secrets as asked on `connection` and drop their values.
-    /// SQLite has no password, and SSH secrets only matter with a tunnel.
+    /// A database file has no password, and SSH secrets only matter with a
+    /// tunnel.
     fn apply_ask_secrets(&self, connection: &mut ConnectionData) {
         let uses_ssh = connection.uses_ssh_tunnel();
         connection.ask_secrets = self
@@ -379,7 +385,7 @@ impl NewConnectionModal {
             .iter()
             .copied()
             .filter(|kind| match kind {
-                SecretKind::Password => connection.db_type != database::DatabaseType::SQLite,
+                SecretKind::Password => !connection.db_type.dialect().is_file_based(),
                 SecretKind::SshPassword | SecretKind::SshPrivateKeyPassword => uses_ssh,
             })
             .collect();
@@ -463,14 +469,9 @@ impl NewConnectionModal {
 
     /// Select the database type by its display label (e.g. "PostgreSQL").
     pub fn select_db_type(&self, label: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let index = match label {
-            "PostgreSQL" => 1,
-            "MySQL" => 2,
-            "ClickHouse" => 3,
-            "SQL Server" => 4,
-            "Redis" => 5,
-            _ => 0,
-        };
+        let index = blanco_core::DatabaseType::from_name(label)
+            .unwrap_or_else(|| panic!("no backend named {label}"))
+            .index();
         self.db_type_select.update(cx, |state, cx| {
             state.set_selected_index(Some(IndexPath::new(index)), window, cx);
         });
@@ -525,8 +526,8 @@ impl NewConnectionModal {
                 &self.redis_form.username_input,
                 &self.redis_form.password_input,
             ),
-            ConnectorType::SQLite => {
-                panic!("set_network_credentials called for SQLite; use set_sqlite_path")
+            ConnectorType::SQLite | ConnectorType::DuckDb => {
+                panic!("set_network_credentials called for a database file; use set_file_path")
             }
         };
         let (host_input, port_input, database_input, username_input, password_input) = inputs;
@@ -537,10 +538,13 @@ impl NewConnectionModal {
         password_input.update(cx, |state, cx| state.set_value(password, window, cx));
     }
 
-    /// Set the SQLite database file path.
-    pub fn set_sqlite_path(&self, path: &str, window: &mut Window, cx: &mut Context<Self>) {
-        self.sqlite_form
-            .file_path_input
+    /// Set the database file path of the selected file-based backend.
+    pub fn set_file_path(&self, path: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let form = match self.get_selected_connector_type(cx) {
+            ConnectorType::DuckDb => &self.duckdb_form,
+            _ => &self.sqlite_form,
+        };
+        form.file_path_input
             .update(cx, |state, cx| state.set_value(path, window, cx));
     }
 
@@ -600,8 +604,8 @@ impl NewConnectionModal {
                     &self.redis_form.ssh_password_input,
                 )
             }
-            ConnectorType::SQLite => {
-                panic!("set_ssh_credentials called for SQLite; SQLite has no SSH support")
+            ConnectorType::SQLite | ConnectorType::DuckDb => {
+                panic!("set_ssh_credentials called for a database file, which has no SSH support")
             }
         };
         let (host_input, port_input, user_input, password_input) = inputs;
@@ -680,7 +684,8 @@ impl Render for NewConnectionModal {
                     },
                 )
                 .child(match connector_type {
-                    ConnectorType::SQLite => sqlite::render(self, cx),
+                    ConnectorType::SQLite => self.sqlite_form.render(cx),
+                    ConnectorType::DuckDb => self.duckdb_form.render(cx),
                     ConnectorType::PostgreSQL => server_form::render(
                         |modal| &mut modal.postgres_form,
                         &self.postgres_form,

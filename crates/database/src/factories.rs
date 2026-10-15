@@ -1,6 +1,7 @@
 //! Connection factory implementations for different database types
 
 pub mod clickhouse;
+pub mod duckdb;
 pub mod mssql;
 pub mod mysql;
 pub mod postgres;
@@ -8,6 +9,7 @@ pub mod redis;
 pub mod sqlite;
 
 pub use clickhouse::ClickhouseConnectionFactory;
+pub use duckdb::DuckdbConnectionFactory;
 pub use mssql::MssqlConnectionFactory;
 pub use mysql::MysqlConnectionFactory;
 pub use postgres::PostgresConnectionFactory;

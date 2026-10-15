@@ -34,6 +34,12 @@ const SQL_READ_KEYWORDS: &[&str] = &[
     "CHECKPOINT",
     "ANALYZE",
     "EXISTS",
+    // DuckDB's reads: a query may start with its FROM clause, and SUMMARIZE,
+    // PIVOT and UNPIVOT are queries.
+    "FROM",
+    "SUMMARIZE",
+    "PIVOT",
+    "UNPIVOT",
 ];
 
 /// Keywords that mark a data-modifying CTE body.

@@ -71,6 +71,7 @@ echo "Creating package directory structure..."
 mkdir -p "${PKG_DIR}/DEBIAN"
 mkdir -p "${PKG_DIR}/usr/bin"
 mkdir -p "${PKG_DIR}/usr/share/applications"
+mkdir -p "${PKG_DIR}/usr/share/mime/packages"
 mkdir -p "${PKG_DIR}/usr/share/icons/hicolor/scalable/apps"
 mkdir -p "${PKG_DIR}/usr/share/doc/${PACKAGE_NAME}"
 
@@ -81,6 +82,11 @@ cp "${TARGET_DIR}/${RUST_TARGET}/release/blanco" "${PKG_DIR}/usr/bin/"
 # Copy .desktop file
 echo "Copying .desktop file..."
 cp "${PROJECT_ROOT}/crates/blanco/resources/blanco.desktop" "${PKG_DIR}/usr/share/applications/"
+
+# shared-mime-info has no DuckDB type. Its dpkg trigger rebuilds the MIME
+# database when this definition is installed.
+echo "Copying MIME type..."
+cp "${PROJECT_ROOT}/crates/blanco/resources/blanco-duckdb.xml" "${PKG_DIR}/usr/share/mime/packages/"
 
 # Copy icon
 echo "Copying icon..."
@@ -111,7 +117,8 @@ Architecture: ${PACKAGE_ARCH}
 Maintainer: $(git config user.name) <$(git config user.email)>
 Homepage: https://github.com/zanmato/blanco
 Description: Blanco is a native SQL editor and database client for PostgreSQL,
- MySQL, SQLite, SQL Server, ClickHouse and Redis, with JavaScript scripting.
+ MySQL, SQLite, DuckDB, SQL Server, ClickHouse and Redis, with JavaScript
+ scripting.
 EOF
 
 # Create md5sums
@@ -123,6 +130,7 @@ find usr -type f -exec md5sum {} + > DEBIAN/md5sums
 chmod 644 "${PKG_DIR}/DEBIAN/control" "${PKG_DIR}/DEBIAN/md5sums"
 chmod 755 "${PKG_DIR}/usr/bin/blanco"
 chmod 644 "${PKG_DIR}/usr/share/applications/blanco.desktop"
+chmod 644 "${PKG_DIR}/usr/share/mime/packages/blanco-duckdb.xml"
 chmod 644 "${PKG_DIR}/usr/share/icons/hicolor/scalable/apps/blanco.svg"
 chmod 644 "${PKG_DIR}/usr/share/doc/${PACKAGE_NAME}"/*
 

@@ -319,14 +319,23 @@ impl ConnectionsPanel {
         Some(entry.item().metadata.connection_id)
     }
 
-    /// The saved or temporary SQLite connection for the database file at
+    #[cfg(test)]
+    pub fn temporary_connections(&self) -> &[ConnectionData] {
+        &self.temporary_connections
+    }
+
+    /// The saved or temporary `db_type` connection for the database file at
     /// `path`, if there is one.
-    pub fn sqlite_connection_for(&self, path: &std::path::Path) -> Option<ConnectionData> {
+    pub fn file_connection_for(
+        &self,
+        db_type: database::DatabaseType,
+        path: &std::path::Path,
+    ) -> Option<ConnectionData> {
         let canonical = |path: &std::path::Path| path.canonicalize().ok();
         let wanted = canonical(path)?;
         self.connections
             .iter()
-            .filter(|connection| connection.db_type == database::DatabaseType::SQLite)
+            .filter(|connection| connection.db_type == db_type)
             .find(|connection| {
                 connection
                     .database_path
@@ -337,10 +346,11 @@ impl ConnectionsPanel {
             .cloned()
     }
 
-    /// Add a temporary connection to the SQLite database at `path`, shown in
-    /// the sidebar until it is closed or saved.
-    pub fn add_temporary_sqlite_connection(
+    /// Add a temporary connection to the `db_type` database file at `path`,
+    /// shown in the sidebar until it is closed or saved.
+    pub fn add_temporary_file_connection(
         &mut self,
+        db_type: database::DatabaseType,
         path: &std::path::Path,
         cx: &mut Context<Self>,
     ) -> ConnectionData {
@@ -348,7 +358,8 @@ impl ConnectionsPanel {
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_else(|| path.display().to_string());
-        let mut connection = ConnectionData::new_sqlite(name, path.to_string_lossy().into_owned());
+        let mut connection =
+            ConnectionData::new_file(db_type, name, path.to_string_lossy().into_owned());
         // Every window's sidebar draws from the same ids: the connection is
         // registered with the one `DatabaseService` under it.
         static NEXT_TEMPORARY_ID: std::sync::atomic::AtomicI64 =
@@ -1568,6 +1579,7 @@ impl EventEmitter<ConnectionsPanelEvent> for ConnectionsPanel {}
 fn connection_type_icon(db_type: database::DatabaseType) -> IconName {
     match db_type {
         database::DatabaseType::SQLite => IconName::Sqlite,
+        database::DatabaseType::DuckDb => IconName::Duckdb,
         database::DatabaseType::PostgreSQL => IconName::Postgresql,
         database::DatabaseType::MySQL => IconName::Mysql,
         database::DatabaseType::ClickHouse => IconName::Clickhouse,

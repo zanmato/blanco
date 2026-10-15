@@ -12,6 +12,7 @@ use lsp_types::{Documentation, MarkupContent, MarkupKind, ParameterInformation, 
 use std::sync::OnceLock;
 
 mod clickhouse;
+mod duckdb;
 mod mssql;
 mod mysql;
 mod postgres;
@@ -95,6 +96,7 @@ pub fn builtin_functions(dialect: DatabaseType) -> &'static [FunctionSignature] 
         DatabaseType::PostgreSQL => postgres::FUNCTIONS,
         DatabaseType::MySQL => mysql::FUNCTIONS,
         DatabaseType::SQLite => sqlite::FUNCTIONS,
+        DatabaseType::DuckDb => duckdb::FUNCTIONS,
         DatabaseType::MsSql => mssql::FUNCTIONS,
         DatabaseType::ClickHouse => clickhouse::FUNCTIONS,
         DatabaseType::Redis => &[],
@@ -142,14 +144,8 @@ fn group_by_name(functions: &'static [FunctionSignature]) -> Vec<FunctionGroup> 
 /// The distinct function names of a dialect with their overloads, in catalog
 /// order. Built once per dialect.
 pub fn function_groups(dialect: DatabaseType) -> &'static [FunctionGroup] {
-    static GROUPS: [OnceLock<Vec<FunctionGroup>>; 6] = [
-        OnceLock::new(),
-        OnceLock::new(),
-        OnceLock::new(),
-        OnceLock::new(),
-        OnceLock::new(),
-        OnceLock::new(),
-    ];
+    static GROUPS: [OnceLock<Vec<FunctionGroup>>; DatabaseType::ALL.len()] =
+        [const { OnceLock::new() }; DatabaseType::ALL.len()];
     GROUPS[dialect.index()].get_or_init(|| group_by_name(builtin_functions(dialect)))
 }
 

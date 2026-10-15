@@ -207,6 +207,30 @@ impl Dialect {
             let (literal, _) = literal(value)?;
             Some(format!("{column} {symbol} {literal}"))
         };
+        // DuckDB's string functions take no BLOB, so its bytes are matched
+        // as hex text, two digits per byte.
+        if self.database_type() == DatabaseType::DuckDb
+            && matches!(
+                operator,
+                FilterOperator::Contains
+                    | FilterOperator::NotContains
+                    | FilterOperator::StartsWith
+                    | FilterOperator::EndsWith
+            )
+        {
+            let bytes = crate::binary::decode_lenient(value)?;
+            let hex: String = bytes.iter().map(|byte| format!("{byte:02X}")).collect();
+            let digits = format!("HEX({column})");
+            return Some(match operator {
+                // Anchored to whole bytes, so a match cannot straddle two.
+                FilterOperator::Contains => format!("REGEXP_MATCHES({digits}, '^(..)*{hex}')"),
+                FilterOperator::NotContains => {
+                    format!("NOT REGEXP_MATCHES({digits}, '^(..)*{hex}')")
+                }
+                FilterOperator::StartsWith => format!("STARTS_WITH({digits}, '{hex}')"),
+                _ => format!("ENDS_WITH({digits}, '{hex}')"),
+            });
+        }
         let length = match self.database_type() {
             DatabaseType::MsSql => format!("DATALENGTH({column})"),
             _ => format!("LENGTH({column})"),
@@ -323,15 +347,18 @@ impl Dialect {
             .replace('_', "\\_");
         let pattern = self.string_literal(&format!("{prefix}{escaped}{suffix}"));
         let text = match self.database_type() {
-            DatabaseType::PostgreSQL | DatabaseType::SQLite => format!("CAST({column} AS TEXT)"),
+            DatabaseType::PostgreSQL | DatabaseType::SQLite | DatabaseType::DuckDb => {
+                format!("CAST({column} AS TEXT)")
+            }
             DatabaseType::MySQL => format!("CAST({column} AS CHAR)"),
             DatabaseType::MsSql => format!("CAST({column} AS NVARCHAR(MAX))"),
             DatabaseType::ClickHouse | DatabaseType::Redis => format!("toString({column})"),
         };
         // PostgreSQL, MySQL and ClickHouse escape with a backslash by
-        // default; SQLite and SQL Server have no default escape character.
+        // default; SQLite, DuckDB and SQL Server have no default escape
+        // character.
         let escape = match self.database_type() {
-            DatabaseType::SQLite | DatabaseType::MsSql => " ESCAPE '\\'",
+            DatabaseType::SQLite | DatabaseType::DuckDb | DatabaseType::MsSql => " ESCAPE '\\'",
             _ => "",
         };
         let not = if negated { "NOT " } else { "" };

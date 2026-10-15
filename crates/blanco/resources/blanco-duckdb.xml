@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- shared-mime-info has no DuckDB type, so the package defines one for the
+     desktop entry to claim. DuckDB files carry "DUCK" after an 8-byte
+     checksum. -->
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/x-duckdb">
+    <comment>DuckDB database</comment>
+    <glob pattern="*.duckdb"/>
+    <glob pattern="*.ddb"/>
+    <magic priority="50">
+      <match type="string" value="DUCK" offset="8"/>
+    </magic>
+  </mime-type>
+</mime-info>
