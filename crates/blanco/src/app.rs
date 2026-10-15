@@ -337,6 +337,13 @@ pub struct OpenSchemaGraph {
     pub context: ConnectionContext,
 }
 
+/// Open the sessions and running queries of the server behind `context`.
+#[derive(Action, Clone, PartialEq, Eq)]
+#[action(namespace = blanco_app, no_json)]
+pub struct OpenProcessList {
+    pub context: ConnectionContext,
+}
+
 /// Open `.sql` files in query tabs on a database.
 #[derive(Action, Clone, PartialEq, Eq)]
 #[action(namespace = blanco_app, no_json)]
@@ -2275,6 +2282,18 @@ impl BlancoApp {
         crate::backup::open_restore(action.context.clone(), window, cx);
     }
 
+    fn on_open_process_list(
+        &mut self,
+        action: &OpenProcessList,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let tab = self.editor_panel.update(cx, |panel, cx| {
+            panel.create_process_list_tab(action.context.clone(), window, cx)
+        });
+        tab.update(cx, |tab, cx| tab.refresh(window, cx));
+    }
+
     fn on_open_schema_graph(
         &mut self,
         action: &OpenSchemaGraph,
@@ -2923,6 +2942,7 @@ impl Render for BlancoApp {
             .on_action(cx.listener(Self::on_open_table_structure))
             .on_action(cx.listener(Self::on_open_object_ddl))
             .on_action(cx.listener(Self::on_open_schema_graph))
+            .on_action(cx.listener(Self::on_open_process_list))
             .on_action(cx.listener(Self::on_backup_database))
             .on_action(cx.listener(Self::on_restore_database))
             .on_action(cx.listener(Self::on_new_connection_modal))

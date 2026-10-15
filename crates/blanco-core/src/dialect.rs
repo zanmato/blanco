@@ -10,6 +10,9 @@ use sqlparser::dialect::{
     DuckDbDialect, GenericDialect, MsSqlDialect, MySqlDialect, PostgreSqlDialect,
 };
 
+mod process_list;
+pub use process_list::ServerSession;
+
 /// Dialect facts for one [`DatabaseType`]. Obtained through
 /// [`DatabaseType::dialect`]; cheap to copy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

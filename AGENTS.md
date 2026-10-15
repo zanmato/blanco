@@ -164,6 +164,24 @@ to GPUI's plain text copy. Reading stays with GPUI. Remove the crate once GPUI
 can write other MIME types. `cargo run -p blanco-clipboard --example x11_write`
 exercises the X11 path against a real server.
 
+## Process list
+
+`editor/process_list.rs` lists a server's sessions and cancels a query or
+ends a session (connection menu, Process List; palette, a database's
+Process list). The listing query and the cancel and kill statements are
+`Dialect::process_list_query`, `cancel_query_statement` and
+`kill_session_statement` (`dialect/process_list.rs`): PostgreSQL, MySQL and
+MariaDB, SQL Server (kill only) and ClickHouse (cancel only, as it has no
+sessions). The statements accept only ids of the backend's form. The tab
+works through `DatabaseService::open_dedicated_connection`, a connection of
+its own outside the shared cache: PostgreSQL's pool holds one connection and
+SQL Server's client serves one request at a time, so on the shared
+connection the listing would wait behind the query it is meant to cancel.
+Actions are confirmed and refused on read-only connections, which the
+connection wrapper would not catch for PostgreSQL's `SELECT
+pg_terminate_backend`. `test_process_list_finds_cancels_and_kills_sessions`
+exercises every backend against the compose servers.
+
 ## Invisible characters
 
 One rule decides which characters look like nothing or a plain space:

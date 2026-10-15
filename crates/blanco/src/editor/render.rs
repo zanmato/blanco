@@ -277,6 +277,7 @@ impl EditorPanel {
             }
             TabType::TableStructure(_) => Icon::new(IconName::Sheet).text_color(theme.blue),
             TabType::SchemaGraph(_) => Icon::new(IconName::Network).text_color(theme.cyan),
+            TabType::ProcessList(_) => Icon::new(IconName::List).text_color(theme.magenta),
         })
     }
 
@@ -1074,6 +1075,13 @@ impl Render for EditorPanel {
                                 .h_full()
                                 .overflow_hidden()
                                 .child(schema_graph_tab.clone()),
+                        ),
+                        TabType::ProcessList(process_list_tab) => this.child(
+                            div()
+                                .flex_1()
+                                .h_full()
+                                .overflow_hidden()
+                                .child(process_list_tab.clone()),
                         ),
                     }),
             )

@@ -13,9 +13,9 @@ use gpui_component::{
 };
 
 use crate::app::CreateNewQueryTab;
-use crate::app::OpenSchemaGraph;
 use crate::app::OpenTableStructure;
 use crate::app::{BackupDatabase, OpenSqlFile, RestoreDatabase, RunSqlFile};
+use crate::app::{OpenProcessList, OpenSchemaGraph};
 use crate::connections::{
     ChildTables, ConnectionsPanel, CreateNewQueryTabParams, TreeItemIcon, TreeItemKind,
     TreeItemMetadata,
@@ -458,6 +458,41 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                             },
                         )),
                     );
+                // The server-wide process list runs on the connection's
+                // configured database.
+                let menu = if metadata.db_type.dialect().supports_process_list() {
+                    let context = ConnectionContext {
+                        connection_id,
+                        connection_name: connection_name.clone(),
+                        db_type: metadata.db_type,
+                        database_name: self
+                            .parent
+                            .read(cx)
+                            .connections
+                            .iter()
+                            .find(|connection| connection.id == Some(connection_id))
+                            .and_then(|connection| connection.database_name.clone())
+                            .unwrap_or_default(),
+                        schema_name: None,
+                        environment_type: metadata.environment_type,
+                    };
+                    menu.separator()
+                        .item(
+                            PopupMenuItem::new("Process List").on_click(window.listener_for(
+                                &self.parent,
+                                move |_this, _event, window, cx| {
+                                    window.dispatch_action(
+                                        Box::new(OpenProcessList {
+                                            context: context.clone(),
+                                        }),
+                                        cx,
+                                    );
+                                },
+                            )),
+                        )
+                } else {
+                    menu
+                };
                 let menu = match backup_context {
                     Some(context) => {
                         let menu = self.sql_file_items(menu.separator(), context.clone(), window);

@@ -23,10 +23,10 @@ use crate::{
         ExportAsMarkdown, ExportAsSQL, ExportAsTSV, ExportConnections, ExportTableData,
         FormatQuery, ImportConnections, ImportTableData, MoveTabToNewWindow, NewDuckdbDatabase,
         NewQueryTab, NewSnippet, NewSqliteDatabase, NewWindow, OpenDatabaseFile,
-        OpenNewConnectionModal, OpenSettings, OpenSqlFile, OpenTerminal, RefreshConnections,
-        ReopenClosedTab, RestoreDatabase, RollbackChanges, RunQuery, RunSqlFile, SaveTab,
-        SaveTabAs, SwitchTheme, ToggleFilterBar, ToggleRenderWhitespace, ToggleResults,
-        ToggleSidebar, ToggleWordWrap,
+        OpenNewConnectionModal, OpenProcessList, OpenSettings, OpenSqlFile, OpenTerminal,
+        RefreshConnections, ReopenClosedTab, RestoreDatabase, RollbackChanges, RunQuery,
+        RunSqlFile, SaveTab, SaveTabAs, SwitchTheme, ToggleFilterBar, ToggleRenderWhitespace,
+        ToggleResults, ToggleSidebar, ToggleWordWrap,
     },
     connections::ConnectionsPanel,
     editor::EditorPanel,
@@ -156,6 +156,7 @@ pub enum CommandType {
     RunSqlFile(DatabaseRef),
     BackupDatabase(DatabaseRef),
     RestoreDatabase(DatabaseRef),
+    OpenProcessList(DatabaseRef),
 }
 
 /// One pushed level of the navigation stack. `crumb` labels the breadcrumb
@@ -884,6 +885,12 @@ fn execute_command(cmd: &CommandType, window: &mut Window, cx: &mut App) {
             }),
             cx,
         ),
+        CommandType::OpenProcessList(database) => window.dispatch_action(
+            Box::new(OpenProcessList {
+                context: database.context(),
+            }),
+            cx,
+        ),
         CommandType::RestoreDatabase(database) => window.dispatch_action(
             Box::new(RestoreDatabase {
                 context: database.context(),
@@ -1159,6 +1166,13 @@ fn database_action_leaves(database: &DatabaseRef) -> Vec<CommandItem> {
             label: "Restore…".into(),
             group: "Action".into(),
             kind: ItemKind::Command(CommandType::RestoreDatabase(database.clone())),
+        });
+    }
+    if database.db_type.dialect().supports_process_list() {
+        leaves.push(CommandItem {
+            label: "Process list".into(),
+            group: "Action".into(),
+            kind: ItemKind::Command(CommandType::OpenProcessList(database.clone())),
         });
     }
     leaves
@@ -1738,9 +1752,10 @@ mod visual_tests {
                 "Open SQL file…",
                 "Run SQL file…",
                 "Back up…",
-                "Restore…"
+                "Restore…",
+                "Process list",
             ],
-            "a PostgreSQL database level should hold the new tab, SQL file and backup leaves, got {labels:?}"
+            "a PostgreSQL database level should hold the new tab, SQL file, backup and process list leaves, got {labels:?}"
         );
 
         let crumbs = palette.read_with(&cx, |p, cx| p.breadcrumbs_for_test(cx));

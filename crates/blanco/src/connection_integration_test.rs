@@ -1269,6 +1269,152 @@ fn test_dropped_pool_connection_reconnects_on_next_run() {
     }
 }
 
+/// The process list against every server backend: a marked sleep running
+/// on the shared connection shows up in the listing read through a
+/// dedicated connection, even where the shared one holds the only pool slot,
+/// and the backend's cancel and kill statements stop it.
+#[test]
+fn test_process_list_finds_cancels_and_kills_sessions() {
+    use blanco_core::{DatabaseService as _, ServerSession};
+    use database::ConnectionConfig;
+    use std::time::{Duration, Instant};
+
+    const MARKER: &str = "blanco_process_list_test";
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let server = |case: &DriverCase, id: i64| {
+        ConnectionConfig::new(
+            id,
+            case.name.to_string(),
+            case.db_type,
+            case.host.clone(),
+            case.port.parse().expect("port"),
+            case.database.clone(),
+            case.username.clone(),
+            Some(case.password.clone()),
+        )
+        // The compose SQL Server presents a self-signed certificate.
+        .with_trust_server_certificate(case.db_type == DatabaseType::MsSql)
+    };
+    let cases = [
+        (
+            postgres_case(),
+            9201,
+            "SELECT pg_sleep(30) AS {marker}".to_string(),
+        ),
+        (
+            mysql_case(),
+            9202,
+            "SELECT SLEEP(30) AS {marker}".to_string(),
+        ),
+        (
+            mssql_case(),
+            9203,
+            "WAITFOR DELAY '00:00:30'; SELECT 1 AS {marker}".to_string(),
+        ),
+        (
+            clickhouse_case(),
+            9204,
+            "SELECT sleepEachRow(1) AS {marker} FROM numbers(30) SETTINGS max_block_size = 1"
+                .to_string(),
+        ),
+    ];
+
+    let service = DatabaseService::new(runtime.handle().clone());
+    for (case, config_id, sleep_sql) in cases {
+        let label = case.label;
+        let dialect = case.db_type.dialect();
+        let database = case.database.clone();
+        let sleep_sql = sleep_sql.replace("{marker}", MARKER);
+        let reachable = runtime.block_on(async {
+            service
+                .add_connection_config(server(&case, config_id))
+                .await;
+            service
+                .execute_script(config_id, Some(&database), "SELECT 1")
+                .await
+                .map(|_| ())
+        });
+        if let Err(error) = reachable {
+            if strict() {
+                panic!("{label}: {error:#}");
+            }
+            eprintln!(
+                "skip {label}: server unreachable ({error:#}). Set BLANCO_RUN_DB_TESTS=1 to require."
+            );
+            continue;
+        }
+        let dedicated = runtime
+            .block_on(service.open_dedicated_connection(config_id, Some(&database)))
+            .unwrap_or_else(|error| panic!("{label}: dedicated connection: {error:#}"));
+
+        // Start the marked sleep on the shared connection, find it, run
+        // `statement_for` on its id and check the sleep stops early.
+        let stop_with = |statement_for: &dyn Fn(&str) -> Option<String>, what: &str| {
+            let sleeper = runtime.spawn({
+                let service = service.clone();
+                let database = database.clone();
+                let sleep_sql = sleep_sql.clone();
+                async move {
+                    service
+                        .execute_script(config_id, Some(&database), &sleep_sql)
+                        .await
+                }
+            });
+            let started = Instant::now();
+            let session = runtime.block_on(async {
+                loop {
+                    let result = dedicated
+                        .execute_query(
+                            dialect.process_list_query().expect("process list"),
+                            Some(&database),
+                            None,
+                        )
+                        .await
+                        .unwrap_or_else(|error| panic!("{label}: listing: {error:#}"));
+                    let found = result
+                        .rows
+                        .iter()
+                        .filter_map(|row| ServerSession::from_row(row))
+                        .find(|session| {
+                            session
+                                .query
+                                .as_deref()
+                                .is_some_and(|query| query.contains(MARKER))
+                        });
+                    if let Some(session) = found {
+                        return session;
+                    }
+                    assert!(
+                        started.elapsed() < Duration::from_secs(10),
+                        "{label}: the sleeping session never showed up"
+                    );
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                }
+            });
+            let statement = statement_for(&session.id)
+                .unwrap_or_else(|| panic!("{label}: no {what} statement for {}", session.id));
+            runtime
+                .block_on(dedicated.execute_query(&statement, Some(&database), None))
+                .unwrap_or_else(|error| panic!("{label}: {what}: {error:#}"));
+            let outcome = runtime
+                .block_on(async { tokio::time::timeout(Duration::from_secs(15), sleeper).await })
+                .unwrap_or_else(|_| panic!("{label}: the sleep outlived its {what}"))
+                .expect("sleeper task");
+            assert!(
+                outcome.is_err() || started.elapsed() < Duration::from_secs(25),
+                "{label}: the sleep ran to its end despite the {what}"
+            );
+        };
+
+        if dialect.can_cancel_queries() {
+            stop_with(&|id| dialect.cancel_query_statement(id), "cancel");
+        }
+        if dialect.can_kill_sessions() {
+            stop_with(&|id| dialect.kill_session_statement(id), "kill");
+        }
+    }
+}
+
 /// The column/index DDL builders against every live backend: create a
 /// scratch table, add a column and an index, alter the column, drop both,
 /// and check the driver's metadata between steps.

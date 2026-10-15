@@ -1,6 +1,7 @@
 mod file_runner;
 mod object_ddl;
 mod parameter_form;
+pub(crate) mod process_list;
 mod query_execution;
 #[cfg(test)]
 mod query_execution_test;
@@ -751,6 +752,33 @@ impl EditorPanel {
         self.scroll_tabbar_to_the_end(window, cx);
         cx.notify();
         weak
+    }
+
+    /// Open a process list for the server behind `context`, reusing the one
+    /// already open for that connection.
+    pub fn create_process_list_tab(
+        &mut self,
+        context: blanco_core::ConnectionContext,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<process_list::ProcessListTab> {
+        let existing = self.tabs.iter().position(|tab| {
+            matches!(tab, TabType::ProcessList(tab)
+                if tab.read(cx).context.connection_id == context.connection_id)
+        });
+        if let Some(ix) = existing
+            && let Some(TabType::ProcessList(tab)) = self.tabs.get(ix)
+        {
+            let tab = tab.clone();
+            self.activate_tab(ix, window, cx);
+            return tab;
+        }
+        let tab = cx.new(|cx| process_list::ProcessListTab::new(context, window, cx));
+        self.tabs.push(TabType::ProcessList(tab.clone()));
+        self.active_tab_ix = self.tabs.len() - 1;
+        self.scroll_tabbar_to_the_end(window, cx);
+        cx.notify();
+        tab
     }
 
     pub fn create_schema_graph_tab(

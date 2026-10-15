@@ -361,6 +361,34 @@ impl DatabaseService {
             }
         }
 
+        self.connect_with_secrets(&config, database, true).await
+    }
+
+    /// A connection of its own to `database`, kept out of the shared cache
+    /// and closed when the caller drops it. The process list reads and kills
+    /// sessions through one, as the shared connection may be busy with the
+    /// very query it is asked to cancel: PostgreSQL's pool holds a single
+    /// connection and SQL Server's client serves one request at a time.
+    pub async fn open_dedicated_connection(
+        &self,
+        config_id: DatabaseConfigId,
+        database: Option<&str>,
+    ) -> Result<Arc<dyn Connection>> {
+        let config = self.get_connection_config(config_id).await.ok_or_else(|| {
+            anyhow::anyhow!("Connection configuration not found for ID: {}", config_id)
+        })?;
+        self.connect_with_secrets(&config, database, false).await
+    }
+
+    /// Open a connection for `config`, asking for a secret the server
+    /// refuses. With `cache` it becomes the shared connection for `database`.
+    async fn connect_with_secrets(
+        &self,
+        config: &ConnectionConfig,
+        database: Option<&str>,
+        cache: bool,
+    ) -> Result<Arc<dyn Connection>> {
+        let config_id = config.id;
         // Secrets are resolved only now, after the cache misses, and live in
         // a local copy of the config for the duration of the connect. A
         // refused secret that the user can supply is asked for again, a few
@@ -374,7 +402,7 @@ impl DatabaseService {
                 .await?;
             self.apply_password_file(&mut attempt_config, database);
             match self
-                .open_connection(&attempt_config, database, &from_user)
+                .open_connection(&attempt_config, database, &from_user, cache)
                 .await
             {
                 Ok(connection) => return Ok(connection),
@@ -429,6 +457,7 @@ impl DatabaseService {
         config: &ConnectionConfig,
         database: Option<&str>,
         from_user: &[SecretKind],
+        cache: bool,
     ) -> Result<Arc<dyn Connection>> {
         let config_id = config.id;
         let connection_id = (config_id, database.unwrap_or("default").to_string());
@@ -524,6 +553,10 @@ impl DatabaseService {
                 }
                 tracing::debug!("Ping after connect failed: {error:#}");
             }
+        }
+
+        if !cache {
+            return Ok(conn_arc);
         }
 
         // Store in active_connections
