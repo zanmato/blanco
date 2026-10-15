@@ -19,6 +19,7 @@ members = [
     "crates/sql-parser",
     "crates/transformers",
     "crates/terminal",
+    "crates/clipboard",
 ]
 
 [workspace.package]

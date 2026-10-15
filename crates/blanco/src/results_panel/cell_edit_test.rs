@@ -1131,6 +1131,56 @@ async fn test_column_header_selects_and_has_a_menu(cx: &mut TestAppContext) {
     assert!(!menu.read_with(&cx, |menu, _| menu.is_empty()));
 }
 
+/// Copy as HTML writes the selected row as an escaped table, and the cell
+/// menu builds with its Copy as and Export as submenus.
+#[gpui::test]
+async fn test_copy_as_html_and_cell_menu(cx: &mut TestAppContext) {
+    let harness = TestHarness::new(cx);
+    let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+
+    set_editor_text(
+        &harness,
+        "SELECT 1 AS id, '<b>' AS v, NULL AS note",
+        &mut cx,
+    );
+    run_query(&harness, &mut cx);
+    wait_for_query(&harness, &mut cx).await;
+    let results_panel = harness.editor_panel.read_with(&cx, |panel, _| {
+        panel
+            .active_query_tab()
+            .expect("query tab")
+            .results_panel
+            .clone()
+    });
+    let table_state = results_panel.read_with(&cx, |panel, _| panel.table_state().clone());
+    table_state.update(&mut cx, |state, cx| {
+        state.set_selection(TableSelection::Cell(0, 1), cx);
+    });
+
+    results_panel.update_in(&mut cx, |panel, window, cx| {
+        panel.on_copy_as_html(&crate::app::CopyAsHTML, window, cx);
+    });
+    cx.run_until_parked();
+    let copied = cx
+        .read_from_clipboard()
+        .and_then(|item| item.text())
+        .unwrap_or_default();
+    assert!(
+        copied.contains("<tr><th>id</th><th>v</th><th>note</th></tr>")
+            && copied.contains("<tr><td>1</td><td>&lt;b&gt;</td><td>NULL</td></tr>"),
+        "{copied}"
+    );
+
+    let menu = cx.update(|window, cx| {
+        PopupMenu::build(window, cx, move |menu, window, cx| {
+            table_state.update(cx, |state, cx| {
+                state.delegate_mut().context_menu((0, 1), menu, window, cx)
+            })
+        })
+    });
+    assert!(!menu.read_with(&cx, |menu, _| menu.is_empty()));
+}
+
 /// Dates read in the configured display format, but the cell editor, the
 /// copy paths and the picker all work with the text the driver returned.
 #[gpui::test]

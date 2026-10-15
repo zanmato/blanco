@@ -139,6 +139,23 @@ same way; `Dialect::new_file_statement` makes SQLite write its header at once.
 The `.deb` ships `blanco-duckdb.xml`, since shared-mime-info has no DuckDB
 type for the desktop entry to claim.
 
+## Rich clipboard
+
+GPUI's `ClipboardItem` holds only text and images, so Copy as HTML writes
+through `crates/clipboard` (`blanco-clipboard`), which offers one copy under
+several MIME types (`text/html` plus a `text/plain` alternative). Its platform
+modules are adapted from GPUI's own clipboards (Apache-2.0) and cut down to
+writing: NSPasteboard on macOS, Win32 with "HTML Format" on Windows, a
+selection server thread on X11 (from GPUI's arboard-derived code), and on
+Wayland a seat and data device bound on GPUI's own `wl_display`, from the
+window's raw display handle, because only input serials from that connection
+may take the selection. `blanco_clipboard::init` runs when a window opens so
+the Wayland seat has seen the click before the copy. A window without a
+display (tests) makes `write` fail on every platform, and the caller falls back
+to GPUI's plain text copy. Reading stays with GPUI. Remove the crate once GPUI
+can write other MIME types. `cargo run -p blanco-clipboard --example x11_write`
+exercises the X11 path against a real server.
+
 ## Query timing
 
 `QueryResult::timing` is measured by each driver around its own row loop with

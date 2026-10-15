@@ -22,8 +22,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 use transformers::{
-    BinaryEncoding, CsvOptions, CsvQuoting, CsvTransformer, DataTransformer, JsonTransformer,
-    MarkdownTransformer, SqlTransformer, TextEncoding, TsvTransformer,
+    BinaryEncoding, CsvOptions, CsvQuoting, CsvTransformer, DataTransformer, HtmlTransformer,
+    JsonTransformer, MarkdownTransformer, SqlTransformer, TextEncoding, TsvTransformer,
 };
 
 use super::service::ExportResult;
@@ -39,6 +39,7 @@ pub enum ExportFormat {
     Json,
     Sql,
     Markdown,
+    Html,
 }
 
 impl ExportFormat {
@@ -48,6 +49,7 @@ impl ExportFormat {
             "JSON" => ExportFormat::Json,
             "SQL" => ExportFormat::Sql,
             "Markdown" => ExportFormat::Markdown,
+            "HTML" => ExportFormat::Html,
             _ => ExportFormat::Csv,
         }
     }
@@ -59,6 +61,7 @@ impl ExportFormat {
             ExportFormat::Json => "json",
             ExportFormat::Sql => "sql",
             ExportFormat::Markdown => "md",
+            ExportFormat::Html => "html",
         }
     }
 }
@@ -185,7 +188,7 @@ impl ExportModal {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let formats = ["CSV", "TSV", "JSON", "SQL", "Markdown"]
+        let formats = ["CSV", "TSV", "JSON", "SQL", "Markdown", "HTML"]
             .into_iter()
             .map(str::to_string)
             .collect::<Vec<_>>();
@@ -408,6 +411,7 @@ impl ExportModal {
                         }
                         ExportFormat::Tsv => Box::new(TsvTransformer),
                         ExportFormat::Markdown => Box::new(MarkdownTransformer),
+                        ExportFormat::Html => Box::new(HtmlTransformer),
                         ExportFormat::Json => {
                             Box::new(JsonTransformer::new().binary_encoding(binary))
                         }

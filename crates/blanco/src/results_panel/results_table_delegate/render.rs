@@ -14,7 +14,7 @@ use gpui_component::{
     clipboard::Clipboard,
     h_flex,
     input::{Editor, EditorState, Input, InputState, MoveLeft, MoveRight},
-    menu::PopupMenu,
+    menu::{PopupMenu, PopupMenuItem},
     table::{Column, ColumnSort, TableDelegate, TableState},
     tooltip::Tooltip,
     v_flex,
@@ -25,11 +25,11 @@ use blanco_core::connection_trait::ColumnType;
 use super::{ResultsTableDelegate, results_settings};
 use crate::app::{
     AddRow, ClearCompareSelection, CompareCellWithSelected, CompareRowWithSelected, CopyAsCSV,
-    CopyAsJSON, CopyAsMarkdown, CopyAsSQL, CopyAsTSV, CopyAsVALUES, CopyCellValue,
-    CopyColumnValues, DeleteRow, DuplicateRow, ExportAsCSV, ExportAsJSON, ExportAsMarkdown,
-    ExportAsSQL, ExportAsTSV, FilterByCellValue, HideResultColumn, OpenReferencedRow,
-    PinResultColumn, SelectCellForCompare, SelectRowForCompare, SetCellDefault, SetCellNull,
-    ToggleCellExpression,
+    CopyAsHTML, CopyAsJSON, CopyAsMarkdown, CopyAsSQL, CopyAsTSV, CopyAsVALUES, CopyCellValue,
+    CopyColumnValues, DeleteRow, DuplicateRow, ExportAsCSV, ExportAsHTML, ExportAsJSON,
+    ExportAsMarkdown, ExportAsSQL, ExportAsTSV, FilterByCellValue, HideResultColumn,
+    OpenReferencedRow, PinResultColumn, SelectCellForCompare, SelectRowForCompare, SetCellDefault,
+    SetCellNull, ToggleCellExpression,
 };
 use crate::results_panel::binary_viewer::BinaryViewer;
 use crate::results_panel::cell_edit_state::{CellInput, compare_numeric, format_value_for_display};
@@ -1020,15 +1020,18 @@ impl TableDelegate for ResultsTableDelegate {
         _window: &mut Window,
         _cx: &mut Context<TableState<Self>>,
     ) -> PopupMenu {
-        self.column_layout_items(column_copy_items(menu, col_ix, false).separator(), col_ix)
+        self.column_layout_items(
+            column_copy_items(menu, col_ix, false, false).separator(),
+            col_ix,
+        )
     }
 
     fn context_menu(
         &mut self,
         cell: (usize, usize),
         menu: PopupMenu,
-        _window: &mut Window,
-        _cx: &mut Context<TableState<Self>>,
+        window: &mut Window,
+        cx: &mut Context<TableState<Self>>,
     ) -> PopupMenu {
         // Check if the column is nullable (cell.1 is the 0-based data column index)
         let is_nullable = self
@@ -1053,64 +1056,55 @@ impl TableDelegate for ResultsTableDelegate {
             )
             .separator()
         })
-        .menu_with_icon(
-            "Copy as CSV",
-            Icon::new(IconName::Sheet),
-            Box::new(CopyAsCSV),
+        .item(
+            PopupMenuItem::submenu(
+                "Copy as",
+                PopupMenu::build(window, cx, |menu, _, _| {
+                    menu.menu_with_icon("CSV", Icon::new(IconName::Sheet), Box::new(CopyAsCSV))
+                        .menu_with_icon("TSV", Icon::new(IconName::Sheet), Box::new(CopyAsTSV))
+                        .menu_with_icon("JSON", Icon::new(IconName::Braces), Box::new(CopyAsJSON))
+                        .menu_with_icon("SQL", Icon::new(IconName::Database), Box::new(CopyAsSQL))
+                        .menu_with_icon(
+                            "VALUES",
+                            Icon::new(IconName::Database),
+                            Box::new(CopyAsVALUES),
+                        )
+                        .menu_with_icon(
+                            "Markdown",
+                            Icon::new(IconName::Markdown),
+                            Box::new(CopyAsMarkdown),
+                        )
+                        .menu_with_icon("HTML", Icon::new(IconName::Code), Box::new(CopyAsHTML))
+                }),
+            )
+            .icon(Icon::new(IconName::Copy)),
         )
-        .menu_with_icon(
-            "Copy as TSV",
-            Icon::new(IconName::Sheet),
-            Box::new(CopyAsTSV),
+        .item(
+            PopupMenuItem::submenu(
+                "Copy Column",
+                PopupMenu::build(window, cx, move |menu, _, _| {
+                    column_copy_items(menu, cell.1, true, true)
+                }),
+            )
+            .icon(Icon::new(IconName::List)),
         )
-        .menu_with_icon(
-            "Copy as JSON",
-            Icon::new(IconName::Braces),
-            Box::new(CopyAsJSON),
-        )
-        .menu_with_icon(
-            "Copy as SQL",
-            Icon::new(IconName::Database),
-            Box::new(CopyAsSQL),
-        )
-        .menu_with_icon(
-            "Copy as VALUES",
-            Icon::new(IconName::Database),
-            Box::new(CopyAsVALUES),
-        )
-        .menu_with_icon(
-            "Copy as Markdown",
-            Icon::new(IconName::Markdown),
-            Box::new(CopyAsMarkdown),
-        )
-        .separator()
-        .map(|menu| column_copy_items(menu, cell.1, true))
-        .separator()
-        // Export operations
-        .menu_with_icon(
-            "Export as CSV",
-            Icon::new(IconName::File),
-            Box::new(ExportAsCSV),
-        )
-        .menu_with_icon(
-            "Export as TSV",
-            Icon::new(IconName::File),
-            Box::new(ExportAsTSV),
-        )
-        .menu_with_icon(
-            "Export as JSON",
-            Icon::new(IconName::File),
-            Box::new(ExportAsJSON),
-        )
-        .menu_with_icon(
-            "Export as SQL",
-            Icon::new(IconName::File),
-            Box::new(ExportAsSQL),
-        )
-        .menu_with_icon(
-            "Export as Markdown",
-            Icon::new(IconName::File),
-            Box::new(ExportAsMarkdown),
+        .item(
+            PopupMenuItem::submenu(
+                "Export as",
+                PopupMenu::build(window, cx, |menu, _, _| {
+                    menu.menu_with_icon("CSV", Icon::new(IconName::Sheet), Box::new(ExportAsCSV))
+                        .menu_with_icon("TSV", Icon::new(IconName::Sheet), Box::new(ExportAsTSV))
+                        .menu_with_icon("JSON", Icon::new(IconName::Braces), Box::new(ExportAsJSON))
+                        .menu_with_icon("SQL", Icon::new(IconName::Database), Box::new(ExportAsSQL))
+                        .menu_with_icon(
+                            "Markdown",
+                            Icon::new(IconName::Markdown),
+                            Box::new(ExportAsMarkdown),
+                        )
+                        .menu_with_icon("HTML", Icon::new(IconName::Code), Box::new(ExportAsHTML))
+                }),
+            )
+            .icon(Icon::new(IconName::Download)),
         )
         .separator()
         // Row operations
@@ -1205,7 +1199,15 @@ impl TableDelegate for ResultsTableDelegate {
 
 /// The entries that copy one column's values. From the cell menu
 /// (`selected_only`) they cover the selected rows when several are selected.
-fn column_copy_items(menu: PopupMenu, column: usize, selected_only: bool) -> PopupMenu {
+/// In a Copy Column submenu (`in_submenu`) the labels leave out what its
+/// title says.
+fn column_copy_items(
+    menu: PopupMenu,
+    column: usize,
+    selected_only: bool,
+    in_submenu: bool,
+) -> PopupMenu {
+    let label = |full: &'static str, short: &'static str| if in_submenu { short } else { full };
     let copy = |distinct: bool, as_in_list: bool| {
         Box::new(CopyColumnValues {
             column,
@@ -1215,22 +1217,22 @@ fn column_copy_items(menu: PopupMenu, column: usize, selected_only: bool) -> Pop
         })
     };
     menu.menu_with_icon(
-        "Copy Column Values",
+        label("Copy Column Values", "Values"),
         Icon::new(IconName::List),
         copy(false, false),
     )
     .menu_with_icon(
-        "Copy Distinct Column Values",
+        label("Copy Distinct Column Values", "Distinct Values"),
         Icon::new(IconName::List),
         copy(true, false),
     )
     .menu_with_icon(
-        "Copy Column as IN List",
+        label("Copy Column as IN List", "IN List"),
         Icon::new(IconName::Parentheses),
         copy(false, true),
     )
     .menu_with_icon(
-        "Copy Distinct Column as IN List",
+        label("Copy Distinct Column as IN List", "Distinct IN List"),
         Icon::new(IconName::Parentheses),
         copy(true, true),
     )

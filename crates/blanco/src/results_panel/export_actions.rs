@@ -5,11 +5,14 @@ use std::path::PathBuf;
 use gpui::{Context, SharedString, Window};
 use gpui_component::{WindowExt as _, notification::NotificationType};
 
-use crate::app::{ExportAsCSV, ExportAsJSON, ExportAsMarkdown, ExportAsSQL, ExportAsTSV};
+use crate::app::{
+    ExportAsCSV, ExportAsHTML, ExportAsJSON, ExportAsMarkdown, ExportAsSQL, ExportAsTSV,
+};
 use crate::export::service::{ExportResult, ExportService};
 use crate::result_ext::ResultExt;
 use transformers::{
-    CsvTransformer, DataTransformer, JsonTransformer, MarkdownTransformer, SqlTransformer,
+    CsvTransformer, DataTransformer, HtmlTransformer, JsonTransformer, MarkdownTransformer,
+    SqlTransformer, TsvTransformer,
 };
 
 use super::ResultsPanel;
@@ -60,6 +63,15 @@ impl ResultsPanel {
         self.export_selected_as("markdown", window, cx);
     }
 
+    pub(super) fn on_export_as_html(
+        &mut self,
+        _action: &ExportAsHTML,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.export_selected_as("html", window, cx);
+    }
+
     /// Export selected data in the specified format
     fn export_selected_as(&mut self, format: &str, window: &mut Window, cx: &mut Context<Self>) {
         let selected_rows = self.table_state.read(cx).selected_rows().clone();
@@ -93,9 +105,11 @@ impl ResultsPanel {
 
         let extension = match format {
             "csv" => "csv",
+            "tsv" => "tsv",
             "json" => "json",
             "sql" => "sql",
             "markdown" => "md",
+            "html" => "html",
             _ => "txt",
         };
 
@@ -129,12 +143,14 @@ impl ResultsPanel {
 
             let transformer: Box<dyn DataTransformer> = match format_owned.as_str() {
                 "csv" => Box::new(CsvTransformer::new(csv_options)),
+                "tsv" => Box::new(TsvTransformer),
                 "json" => Box::new(JsonTransformer::new()),
                 "sql" => Box::new(SqlTransformer::with_table_name(
                     table_name_for_sql.clone(),
                     db_type,
                 )),
                 "markdown" => Box::new(MarkdownTransformer),
+                "html" => Box::new(HtmlTransformer),
                 _ => {
                     tracing::error!("Unknown format: {}", format_owned);
                     return;

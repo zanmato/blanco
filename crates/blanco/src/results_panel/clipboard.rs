@@ -3,7 +3,8 @@
 use gpui::{Context, Window};
 
 use crate::app::{
-    CopyAsCSV, CopyAsJSON, CopyAsMarkdown, CopyAsSQL, CopyAsTSV, CopyAsVALUES, CopyCellValue,
+    CopyAsCSV, CopyAsHTML, CopyAsJSON, CopyAsMarkdown, CopyAsSQL, CopyAsTSV, CopyAsVALUES,
+    CopyCellValue,
 };
 
 use super::ResultsPanel;
@@ -38,7 +39,8 @@ impl ResultsPanel {
 
         let delegate = self.table_state.read(cx).delegate();
         let selected_data = self.get_selected_data_for_rows(&selected_rows, delegate);
-        self.copy_handler.copy_as_format(&selected_data, format, cx);
+        self.copy_handler
+            .copy_as_format(&selected_data, format, window, cx);
     }
 
     /// Copy one cell's value, fetching it first when the grid holds only a
@@ -121,5 +123,14 @@ impl ResultsPanel {
         cx: &mut Context<Self>,
     ) {
         self.copy_selected_as("markdown", window, cx);
+    }
+
+    pub(super) fn on_copy_as_html(
+        &mut self,
+        _action: &CopyAsHTML,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.copy_selected_as("html", window, cx);
     }
 }

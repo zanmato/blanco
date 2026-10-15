@@ -168,6 +168,7 @@ impl TransformerRegistry {
 // Re-export transformer modules and types
 pub mod csv_transformer;
 pub mod encoding;
+pub mod html_transformer;
 pub mod json_transformer;
 pub mod markdown_transformer;
 pub mod sql_transformer;
@@ -177,6 +178,7 @@ pub mod values_transformer;
 // Export types for convenience
 pub use csv_transformer::{CsvOptions, CsvQuoting, CsvTransformer};
 pub use encoding::TextEncoding;
+pub use html_transformer::HtmlTransformer;
 pub use json_transformer::JsonTransformer;
 pub use markdown_transformer::MarkdownTransformer;
 pub use sql_transformer::SqlTransformer;
@@ -192,6 +194,7 @@ impl Default for TransformerRegistry {
         registry.register(ValuesTransformer::new());
         registry.register(JsonTransformer::new());
         registry.register(MarkdownTransformer);
+        registry.register(HtmlTransformer);
         registry
     }
 }

@@ -189,6 +189,11 @@ fn open(
     let id = saved.id;
     let mut app = None;
     let handle = cx.open_window(options, |window, cx| {
+        // Copy as HTML can then take the Wayland clipboard with the serial
+        // of the click that asked for it.
+        if let Err(error) = blanco_clipboard::init(window) {
+            tracing::warn!("Rich clipboard unavailable, copies are plain text: {error:#}");
+        }
         let blanco_app = cx.new(|cx| BlancoApp::new(&saved, window, cx));
         if let Some(tab) = tab {
             blanco_app.update(cx, |app, cx| app.adopt_tab(tab, window, cx));

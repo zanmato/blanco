@@ -1,4 +1,4 @@
-use gpui::{AppContext, ClipboardItem, Context};
+use gpui::{AppContext, ClipboardItem, Context, Window};
 use std::sync::Arc;
 
 use crate::app_settings::AppSettings;
@@ -25,6 +25,7 @@ impl CopyHandler {
         &self,
         data: &SelectedTableData,
         format: &str,
+        window: &mut Window,
         cx: &mut Context<ResultsPanel>,
     ) {
         if !data.has_selection() {
@@ -43,6 +44,7 @@ impl CopyHandler {
             tracing::error!("Failed to copy: unknown format {}", format);
             return;
         };
+        let is_html = format.eq_ignore_ascii_case("html");
         let data_clone = data.clone();
 
         let transform_task = cx.background_spawn(async move {
@@ -52,7 +54,7 @@ impl CopyHandler {
             result
         });
 
-        cx.spawn(async move |entity, cx| {
+        cx.spawn_in(window, async move |entity, cx| {
             let transformed = match transform_task.await {
                 Ok(transformed) => transformed,
                 Err(e) => {
@@ -63,8 +65,22 @@ impl CopyHandler {
 
             if !transformed.is_empty() {
                 entity
-                    .update(cx, |_, cx| {
+                    .update_in(cx, |_, window, cx| {
                         tracing::debug!("Writing transformed data to clipboard");
+                        if is_html {
+                            // Offered as HTML so a mail or a document pastes a
+                            // table, and as text so an editor pastes the markup.
+                            let representations = vec![
+                                blanco_clipboard::Representation::html(transformed.clone()),
+                                blanco_clipboard::Representation::text(transformed.clone()),
+                            ];
+                            match blanco_clipboard::write(window, representations) {
+                                Ok(()) => return,
+                                Err(error) => tracing::warn!(
+                                    "Copying as HTML fell back to plain text: {error:#}"
+                                ),
+                            }
+                        }
                         cx.write_to_clipboard(ClipboardItem::new_string(transformed));
                     })
                     .log_err();

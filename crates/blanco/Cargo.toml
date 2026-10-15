@@ -28,6 +28,7 @@ sql-parser = { path = "../sql-parser" }
 transformers = { path = "../transformers" }
 blanco_ui = { path = "../ui", package = "blanco-ui" }
 blanco-core = { path = "../blanco-core" }
+blanco-clipboard = { path = "../clipboard" }
 blanco-terminal = { path = "../terminal" }
 database = { path = "../database" }
 
