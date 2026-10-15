@@ -394,19 +394,40 @@ def duckdb(args):
         # Operators (`%`, `!~~`) and internal helpers are not called by name.
         if not IDENTIFIER.match(name) or name.startswith("__"):
             continue
+        typed = list(zip(row["parameters"], row["parameter_types"] + [""] * len(row["parameters"])))
+        # A table function lists its positional parameters (col0, col1, ...)
+        # first and then its named options (`read_csv(path, delim = ',')`).
+        # Shown as positional, read_csv would take 46 arguments and highlight
+        # the wrong one, so the options fold into one trailing parameter and
+        # are listed in the documentation instead.
+        named = []
+        if row["type"] == "table":
+            first_named = next(
+                (index for index, (parameter, _) in enumerate(typed) if not re.match(r"^col\d+$", parameter)),
+                len(typed),
+            )
+            typed, named = typed[:first_named], typed[first_named:]
         # Built-ins mostly name their parameters col0, col1, ..., which says
         # less than the type, so those show the type instead.
         parameters = [
             parameter_type if re.match(r"^col\d+$", parameter) or not parameter else parameter
-            for parameter, parameter_type in zip(row["parameters"], row["parameter_types"] + [""] * len(row["parameters"]))
+            for parameter, parameter_type in typed
         ]
         if row["varargs"]:
             parameters.append(f"{row['varargs']}...")
+        if named:
+            parameters.append("[option = value, ...]")
         parts = []
         if row["description"].strip():
             parts.append(trim_paragraphs(row["description"].strip(), 1200))
         if row["examples"]:
             parts.append("**Examples**\n\n" + "\n".join(f"`{example}`" for example in row["examples"]))
+        if named:
+            options = ", ".join(
+                f"`{parameter}` {parameter_type}" if parameter_type else f"`{parameter}`"
+                for parameter, parameter_type in sorted(named)
+            )
+            parts.append(f"**Options**\n\n{options}")
         notes = []
         if row["type"] == "aggregate":
             notes.append("Aggregate function")

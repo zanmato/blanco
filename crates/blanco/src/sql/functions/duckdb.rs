@@ -1645,9 +1645,9 @@ pub(super) const FUNCTIONS: &[FunctionSignature] = &[
     },
     FunctionSignature {
         name: "duckdb_logs",
-        parameters: &["denormalized_table"],
+        parameters: &["[option = value, ...]"],
         return_type: "",
-        documentation: "*Table function*",
+        documentation: "**Options**\n\n`denormalized_table` BOOLEAN\n\n*Table function*",
     },
     FunctionSignature {
         name: "duckdb_logs_parsed",
@@ -1693,9 +1693,9 @@ pub(super) const FUNCTIONS: &[FunctionSignature] = &[
     },
     FunctionSignature {
         name: "duckdb_secrets",
-        parameters: &["redact"],
+        parameters: &["[option = value, ...]"],
         return_type: "",
-        documentation: "*Table function*",
+        documentation: "**Options**\n\n`redact` BOOLEAN\n\n*Table function*",
     },
     FunctionSignature {
         name: "duckdb_sequences",
@@ -1759,15 +1759,15 @@ pub(super) const FUNCTIONS: &[FunctionSignature] = &[
     },
     FunctionSignature {
         name: "enable_logging",
-        parameters: &["storage_buffer_size", "storage_normalize", "storage_path", "storage_config", "storage", "level", "ANY..."],
+        parameters: &["ANY...", "[option = value, ...]"],
         return_type: "",
-        documentation: "*Table function*",
+        documentation: "**Options**\n\n`level` VARCHAR, `storage` VARCHAR, `storage_buffer_size` UBIGINT, `storage_config` ANY, `storage_normalize` BOOLEAN, `storage_path` VARCHAR\n\n*Table function*",
     },
     FunctionSignature {
         name: "enable_profiling",
-        parameters: &["mode", "metrics", "save_location", "coverage", "format", "VARCHAR[]..."],
+        parameters: &["VARCHAR[]...", "[option = value, ...]"],
         return_type: "",
-        documentation: "*Table function*",
+        documentation: "**Options**\n\n`coverage` VARCHAR, `format` VARCHAR, `metrics` ANY, `mode` VARCHAR, `save_location` VARCHAR\n\n*Table function*",
     },
     FunctionSignature {
         name: "encode",
@@ -3865,39 +3865,39 @@ pub(super) const FUNCTIONS: &[FunctionSignature] = &[
     },
     FunctionSignature {
         name: "read_csv",
-        parameters: &["VARCHAR", "thousands", "strict_mode", "dtypes", "column_types", "null_padding", "column_names", "buffer_size", "parallel", "force_not_null", "hive_types", "new_line", "files_to_sniff", "dateformat", "delim", "sep", "decimal_separator", "nullstr", "escape", "compression", "encoding", "hive_types_autocast", "all_varchar", "columns", "hive_partitioning", "auto_detect", "comment", "quote", "max_line_size", "store_rejects", "union_by_name", "header", "types", "skip", "filename", "sample_size", "timestampformat", "normalize_names", "ignore_errors", "names", "allow_quoted_nulls", "maximum_line_size", "rejects_table", "auto_type_candidates", "rejects_scan", "rejects_limit"],
+        parameters: &["VARCHAR", "[option = value, ...]"],
         return_type: "",
-        documentation: "*Table function*",
+        documentation: "**Options**\n\n`all_varchar` BOOLEAN, `allow_quoted_nulls` BOOLEAN, `auto_detect` BOOLEAN, `auto_type_candidates` ANY, `buffer_size` UBIGINT, `column_names` VARCHAR[], `column_types` ANY, `columns` ANY, `comment` VARCHAR, `compression` VARCHAR, `dateformat` VARCHAR, `decimal_separator` VARCHAR, `delim` VARCHAR, `dtypes` ANY, `encoding` VARCHAR, `escape` VARCHAR, `filename` ANY, `files_to_sniff` BIGINT, `force_not_null` VARCHAR[], `header` BOOLEAN, `hive_partitioning` BOOLEAN, `hive_types` ANY, `hive_types_autocast` BOOLEAN, `ignore_errors` BOOLEAN, `max_line_size` VARCHAR, `maximum_line_size` VARCHAR, `names` VARCHAR[], `new_line` VARCHAR, `normalize_names` BOOLEAN, `null_padding` BOOLEAN, `nullstr` ANY, `parallel` BOOLEAN, `quote` VARCHAR, `rejects_limit` BIGINT, `rejects_scan` VARCHAR, `rejects_table` VARCHAR, `sample_size` BIGINT, `sep` VARCHAR, `skip` BIGINT, `store_rejects` BOOLEAN, `strict_mode` BOOLEAN, `thousands` VARCHAR, `timestampformat` VARCHAR, `types` ANY, `union_by_name` BOOLEAN\n\n*Table function*",
     },
     FunctionSignature {
         name: "read_csv",
-        parameters: &["VARCHAR[]", "thousands", "strict_mode", "dtypes", "column_types", "null_padding", "column_names", "buffer_size", "parallel", "force_not_null", "hive_types", "new_line", "files_to_sniff", "dateformat", "delim", "sep", "decimal_separator", "nullstr", "escape", "compression", "encoding", "hive_types_autocast", "all_varchar", "columns", "hive_partitioning", "auto_detect", "comment", "quote", "max_line_size", "store_rejects", "union_by_name", "header", "types", "skip", "filename", "sample_size", "timestampformat", "normalize_names", "ignore_errors", "names", "allow_quoted_nulls", "maximum_line_size", "rejects_table", "auto_type_candidates", "rejects_scan", "rejects_limit"],
+        parameters: &["VARCHAR[]", "[option = value, ...]"],
         return_type: "",
-        documentation: "*Table function*",
+        documentation: "**Options**\n\n`all_varchar` BOOLEAN, `allow_quoted_nulls` BOOLEAN, `auto_detect` BOOLEAN, `auto_type_candidates` ANY, `buffer_size` UBIGINT, `column_names` VARCHAR[], `column_types` ANY, `columns` ANY, `comment` VARCHAR, `compression` VARCHAR, `dateformat` VARCHAR, `decimal_separator` VARCHAR, `delim` VARCHAR, `dtypes` ANY, `encoding` VARCHAR, `escape` VARCHAR, `filename` ANY, `files_to_sniff` BIGINT, `force_not_null` VARCHAR[], `header` BOOLEAN, `hive_partitioning` BOOLEAN, `hive_types` ANY, `hive_types_autocast` BOOLEAN, `ignore_errors` BOOLEAN, `max_line_size` VARCHAR, `maximum_line_size` VARCHAR, `names` VARCHAR[], `new_line` VARCHAR, `normalize_names` BOOLEAN, `null_padding` BOOLEAN, `nullstr` ANY, `parallel` BOOLEAN, `quote` VARCHAR, `rejects_limit` BIGINT, `rejects_scan` VARCHAR, `rejects_table` VARCHAR, `sample_size` BIGINT, `sep` VARCHAR, `skip` BIGINT, `store_rejects` BOOLEAN, `strict_mode` BOOLEAN, `thousands` VARCHAR, `timestampformat` VARCHAR, `types` ANY, `union_by_name` BOOLEAN\n\n*Table function*",
     },
     FunctionSignature {
         name: "read_csv_auto",
-        parameters: &["VARCHAR", "thousands", "strict_mode", "dtypes", "column_types", "null_padding", "column_names", "buffer_size", "parallel", "force_not_null", "hive_types", "new_line", "files_to_sniff", "dateformat", "delim", "sep", "decimal_separator", "nullstr", "escape", "compression", "encoding", "hive_types_autocast", "all_varchar", "columns", "hive_partitioning", "auto_detect", "comment", "quote", "max_line_size", "store_rejects", "union_by_name", "header", "types", "skip", "filename", "sample_size", "timestampformat", "normalize_names", "ignore_errors", "names", "allow_quoted_nulls", "maximum_line_size", "rejects_table", "auto_type_candidates", "rejects_scan", "rejects_limit"],
+        parameters: &["VARCHAR", "[option = value, ...]"],
         return_type: "",
-        documentation: "*Table function*",
+        documentation: "**Options**\n\n`all_varchar` BOOLEAN, `allow_quoted_nulls` BOOLEAN, `auto_detect` BOOLEAN, `auto_type_candidates` ANY, `buffer_size` UBIGINT, `column_names` VARCHAR[], `column_types` ANY, `columns` ANY, `comment` VARCHAR, `compression` VARCHAR, `dateformat` VARCHAR, `decimal_separator` VARCHAR, `delim` VARCHAR, `dtypes` ANY, `encoding` VARCHAR, `escape` VARCHAR, `filename` ANY, `files_to_sniff` BIGINT, `force_not_null` VARCHAR[], `header` BOOLEAN, `hive_partitioning` BOOLEAN, `hive_types` ANY, `hive_types_autocast` BOOLEAN, `ignore_errors` BOOLEAN, `max_line_size` VARCHAR, `maximum_line_size` VARCHAR, `names` VARCHAR[], `new_line` VARCHAR, `normalize_names` BOOLEAN, `null_padding` BOOLEAN, `nullstr` ANY, `parallel` BOOLEAN, `quote` VARCHAR, `rejects_limit` BIGINT, `rejects_scan` VARCHAR, `rejects_table` VARCHAR, `sample_size` BIGINT, `sep` VARCHAR, `skip` BIGINT, `store_rejects` BOOLEAN, `strict_mode` BOOLEAN, `thousands` VARCHAR, `timestampformat` VARCHAR, `types` ANY, `union_by_name` BOOLEAN\n\n*Table function*",
     },
     FunctionSignature {
         name: "read_csv_auto",
-        parameters: &["VARCHAR[]", "thousands", "strict_mode", "dtypes", "column_types", "null_padding", "column_names", "buffer_size", "parallel", "force_not_null", "hive_types", "new_line", "files_to_sniff", "dateformat", "delim", "sep", "decimal_separator", "nullstr", "escape", "compression", "encoding", "hive_types_autocast", "all_varchar", "columns", "hive_partitioning", "auto_detect", "comment", "quote", "max_line_size", "store_rejects", "union_by_name", "header", "types", "skip", "filename", "sample_size", "timestampformat", "normalize_names", "ignore_errors", "names", "allow_quoted_nulls", "maximum_line_size", "rejects_table", "auto_type_candidates", "rejects_scan", "rejects_limit"],
+        parameters: &["VARCHAR[]", "[option = value, ...]"],
         return_type: "",
-        documentation: "*Table function*",
+        documentation: "**Options**\n\n`all_varchar` BOOLEAN, `allow_quoted_nulls` BOOLEAN, `auto_detect` BOOLEAN, `auto_type_candidates` ANY, `buffer_size` UBIGINT, `column_names` VARCHAR[], `column_types` ANY, `columns` ANY, `comment` VARCHAR, `compression` VARCHAR, `dateformat` VARCHAR, `decimal_separator` VARCHAR, `delim` VARCHAR, `dtypes` ANY, `encoding` VARCHAR, `escape` VARCHAR, `filename` ANY, `files_to_sniff` BIGINT, `force_not_null` VARCHAR[], `header` BOOLEAN, `hive_partitioning` BOOLEAN, `hive_types` ANY, `hive_types_autocast` BOOLEAN, `ignore_errors` BOOLEAN, `max_line_size` VARCHAR, `maximum_line_size` VARCHAR, `names` VARCHAR[], `new_line` VARCHAR, `normalize_names` BOOLEAN, `null_padding` BOOLEAN, `nullstr` ANY, `parallel` BOOLEAN, `quote` VARCHAR, `rejects_limit` BIGINT, `rejects_scan` VARCHAR, `rejects_table` VARCHAR, `sample_size` BIGINT, `sep` VARCHAR, `skip` BIGINT, `store_rejects` BOOLEAN, `strict_mode` BOOLEAN, `thousands` VARCHAR, `timestampformat` VARCHAR, `types` ANY, `union_by_name` BOOLEAN\n\n*Table function*",
     },
     FunctionSignature {
         name: "read_duckdb",
-        parameters: &["VARCHAR", "table_name", "schema_name", "hive_types_autocast", "hive_types", "hive_partitioning", "union_by_name", "filename"],
+        parameters: &["VARCHAR", "[option = value, ...]"],
         return_type: "",
-        documentation: "*Table function*",
+        documentation: "**Options**\n\n`filename` ANY, `hive_partitioning` BOOLEAN, `hive_types` ANY, `hive_types_autocast` BOOLEAN, `schema_name` VARCHAR, `table_name` VARCHAR, `union_by_name` BOOLEAN\n\n*Table function*",
     },
     FunctionSignature {
         name: "read_duckdb",
-        parameters: &["VARCHAR[]", "table_name", "schema_name", "hive_types_autocast", "hive_types", "hive_partitioning", "union_by_name", "filename"],
+        parameters: &["VARCHAR[]", "[option = value, ...]"],
         return_type: "",
-        documentation: "*Table function*",
+        documentation: "**Options**\n\n`filename` ANY, `hive_partitioning` BOOLEAN, `hive_types` ANY, `hive_types_autocast` BOOLEAN, `schema_name` VARCHAR, `table_name` VARCHAR, `union_by_name` BOOLEAN\n\n*Table function*",
     },
     FunctionSignature {
         name: "read_text",
@@ -4117,9 +4117,9 @@ pub(super) const FUNCTIONS: &[FunctionSignature] = &[
     },
     FunctionSignature {
         name: "repeat_row",
-        parameters: &["num_rows", "ANY..."],
+        parameters: &["ANY...", "[option = value, ...]"],
         return_type: "",
-        documentation: "*Table function*",
+        documentation: "**Options**\n\n`num_rows` BIGINT\n\n*Table function*",
     },
     FunctionSignature {
         name: "replace",
@@ -4315,9 +4315,9 @@ pub(super) const FUNCTIONS: &[FunctionSignature] = &[
     },
     FunctionSignature {
         name: "sniff_csv",
-        parameters: &["VARCHAR", "force_match", "hive_types", "union_by_name", "hive_partitioning", "filename", "thousands", "strict_mode", "hive_types_autocast", "encoding", "dtypes", "column_types", "auto_detect", "sample_size", "files_to_sniff", "dateformat", "columns", "all_varchar", "new_line", "header", "types", "skip", "compression", "comment", "quote", "max_line_size", "store_rejects", "delim", "sep", "column_names", "buffer_size", "timestampformat", "normalize_names", "ignore_errors", "names", "allow_quoted_nulls", "maximum_line_size", "rejects_table", "force_not_null", "parallel", "auto_type_candidates", "rejects_scan", "rejects_limit", "nullstr", "escape", "decimal_separator", "null_padding"],
+        parameters: &["VARCHAR", "[option = value, ...]"],
         return_type: "",
-        documentation: "*Table function*",
+        documentation: "**Options**\n\n`all_varchar` BOOLEAN, `allow_quoted_nulls` BOOLEAN, `auto_detect` BOOLEAN, `auto_type_candidates` ANY, `buffer_size` UBIGINT, `column_names` VARCHAR[], `column_types` ANY, `columns` ANY, `comment` VARCHAR, `compression` VARCHAR, `dateformat` VARCHAR, `decimal_separator` VARCHAR, `delim` VARCHAR, `dtypes` ANY, `encoding` VARCHAR, `escape` VARCHAR, `filename` ANY, `files_to_sniff` BIGINT, `force_match` BOOLEAN, `force_not_null` VARCHAR[], `header` BOOLEAN, `hive_partitioning` BOOLEAN, `hive_types` ANY, `hive_types_autocast` BOOLEAN, `ignore_errors` BOOLEAN, `max_line_size` VARCHAR, `maximum_line_size` VARCHAR, `names` VARCHAR[], `new_line` VARCHAR, `normalize_names` BOOLEAN, `null_padding` BOOLEAN, `nullstr` ANY, `parallel` BOOLEAN, `quote` VARCHAR, `rejects_limit` BIGINT, `rejects_scan` VARCHAR, `rejects_table` VARCHAR, `sample_size` BIGINT, `sep` VARCHAR, `skip` BIGINT, `store_rejects` BOOLEAN, `strict_mode` BOOLEAN, `thousands` VARCHAR, `timestampformat` VARCHAR, `types` ANY, `union_by_name` BOOLEAN\n\n*Table function*",
     },
     FunctionSignature {
         name: "split",
@@ -4897,15 +4897,15 @@ pub(super) const FUNCTIONS: &[FunctionSignature] = &[
     },
     FunctionSignature {
         name: "test_all_types",
-        parameters: &["use_large_bignum", "use_large_enum"],
+        parameters: &["[option = value, ...]"],
         return_type: "",
-        documentation: "*Table function*",
+        documentation: "**Options**\n\n`use_large_bignum` BOOLEAN, `use_large_enum` BOOLEAN\n\n*Table function*",
     },
     FunctionSignature {
         name: "test_vector_types",
-        parameters: &["ANY", "all_flat", "ANY..."],
+        parameters: &["ANY", "ANY...", "[option = value, ...]"],
         return_type: "",
-        documentation: "*Table function*",
+        documentation: "**Options**\n\n`all_flat` BOOLEAN\n\n*Table function*",
     },
     FunctionSignature {
         name: "time_bucket",

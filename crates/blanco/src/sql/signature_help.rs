@@ -229,6 +229,26 @@ mod tests {
     }
 
     #[test]
+    fn duckdb_table_function_options_fold_into_one_parameter() {
+        // read_csv('a.csv', delim = ','): every argument after the path is a
+        // named option, so the second and later ones all land on the options.
+        for argument_index in [1, 5, 40] {
+            let help =
+                build_signature_help(&call("read_csv", argument_index), DatabaseType::DuckDb, &[])
+                    .expect("read_csv is a duckdb built-in");
+            assert_eq!(
+                active_label(&help),
+                ("read_csv(VARCHAR, [option = value, ...])", Some(1))
+            );
+            let signature = &help.signatures[help.active_signature.unwrap_or(0) as usize];
+            let Some(Documentation::MarkupContent(documentation)) = &signature.documentation else {
+                panic!("read_csv lists its options in the documentation");
+            };
+            assert!(documentation.value.contains("`delim` VARCHAR"));
+        }
+    }
+
+    #[test]
     fn overload_selection_prefers_signature_with_room() {
         // round(numeric) and round(numeric, integer): typing the second argument
         // must select the two-parameter overload.

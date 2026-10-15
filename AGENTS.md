@@ -126,7 +126,10 @@ filters compare blobs through `HEX()`. `ADD COLUMN` takes no constraint and
 built-in function catalog `sql/functions/duckdb.rs` is generated with
 `python3 scripts/extract-sql-functions.py duckdb`, which reads
 `duckdb_functions()` through `cargo run -p blanco-duckdb --example
-function_catalog`.
+function_catalog`. A table function's named options (`read_csv`'s `delim`,
+`header` and the rest) fold into one trailing `[option = value, ...]`
+parameter and are listed under Options in its documentation, since shown as
+positional parameters they made a 46 argument signature.
 
 Database files open from File, Open, a drop on the window, launch arguments
 and the platform's open requests. `database_file::database_file_type` tells
