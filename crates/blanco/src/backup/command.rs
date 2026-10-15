@@ -619,13 +619,10 @@ pub fn connection_settings(
                 environment.push(("PGHOSTADDR".to_string(), TUNNEL_ADDRESS.to_string()));
             }
             if let Some(mode) = ssl_mode {
-                let mode = match mode {
-                    "disabled" => "disable",
-                    "preferred" => "prefer",
-                    "required" => "require",
-                    other => other,
-                };
-                environment.push(("PGSSLMODE".to_string(), mode.to_string()));
+                environment.push((
+                    "PGSSLMODE".to_string(),
+                    database::postgres_ssl_mode(mode).to_string(),
+                ));
             }
             for (variable, path) in [
                 ("PGSSLCERT", &config.ssl_cert_path),

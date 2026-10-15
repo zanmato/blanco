@@ -145,6 +145,18 @@ impl std::fmt::Debug for ConnectionConfig {
     }
 }
 
+/// libpq's name for an SSL mode as the connection dialog stores it. The
+/// dialog shares its names (`preferred`, `required`) with MySQL, while libpq,
+/// and sqlx after it, accept only `prefer` and `require`.
+pub fn postgres_ssl_mode(mode: &str) -> &str {
+    match mode {
+        "disabled" => "disable",
+        "preferred" => "prefer",
+        "required" => "require",
+        other => other,
+    }
+}
+
 impl ConnectionConfig {
     /// Create a new connection config from individual parameters
     #[allow(clippy::too_many_arguments)]
@@ -385,47 +397,43 @@ impl ConnectionConfig {
                 )
             }
             DatabaseType::PostgreSQL => {
-                let mut conn_str = if let Some(password) = &self.password {
-                    if password.is_empty() {
-                        format!(
-                            "postgresql://{}@{}:{}/{}",
-                            self.username, conn_host, conn_port, db_name
-                        )
-                    } else {
-                        format!(
-                            "postgresql://{}:{}@{}:{}/{}",
-                            self.username, password, conn_host, conn_port, db_name
-                        )
+                // Through `url::Url`, so a user name, password, database or
+                // certificate path with `@`, `/`, `#`, `&`, `+` or spaces
+                // arrives as typed.
+                let raw = format!("postgresql://{conn_host}:{conn_port}");
+                let mut url = match url::Url::parse(&raw) {
+                    Ok(url) => url,
+                    Err(error) => {
+                        tracing::warn!("Invalid PostgreSQL host {conn_host:?}: {error}");
+                        return raw;
                     }
-                } else {
-                    format!(
-                        "postgresql://{}@{}:{}/{}",
-                        self.username, conn_host, conn_port, db_name
-                    )
                 };
-
-                let mut params = vec!["application_name=Blanco".to_string()];
-                if let Some(ssl_mode) = &self.ssl_mode {
-                    let pg_ssl_mode = match ssl_mode.as_str() {
-                        "disabled" => "disable",
-                        _ => ssl_mode.as_str(),
-                    };
-
-                    params.push(format!("sslmode={}", pg_ssl_mode));
+                if url.set_username(&self.username).is_err() {
+                    tracing::warn!("PostgreSQL URL cannot carry a user name");
                 }
-                if let Some(ssl_key) = &self.ssl_key_path {
-                    params.push(format!("sslkey={}", ssl_key));
+                if let Some(password) = self.password.as_deref().filter(|p| !p.is_empty()) {
+                    if url.set_password(Some(password)).is_err() {
+                        tracing::warn!("PostgreSQL URL cannot carry a password");
+                    }
                 }
-                if let Some(ssl_cert) = &self.ssl_cert_path {
-                    params.push(format!("sslcert={}", ssl_cert));
+                url.set_path(&format!("/{db_name}"));
+                {
+                    let mut query = url.query_pairs_mut();
+                    query.append_pair("application_name", "Blanco");
+                    if let Some(ssl_mode) = self.ssl_mode.as_deref().filter(|m| !m.is_empty()) {
+                        query.append_pair("sslmode", postgres_ssl_mode(ssl_mode));
+                    }
+                    for (key, path) in [
+                        ("sslkey", &self.ssl_key_path),
+                        ("sslcert", &self.ssl_cert_path),
+                        ("sslrootcert", &self.ssl_ca_cert_path),
+                    ] {
+                        if let Some(path) = path.as_deref().filter(|path| !path.is_empty()) {
+                            query.append_pair(key, path);
+                        }
+                    }
                 }
-                if let Some(ssl_ca) = &self.ssl_ca_cert_path {
-                    params.push(format!("sslrootcert={}", ssl_ca));
-                }
-
-                conn_str = format!("{}?{}", conn_str, params.join("&"));
-
-                conn_str
+                url.to_string()
             }
             DatabaseType::MySQL => {
                 let mut conn_str = if let Some(password) = &self.password {
@@ -838,7 +846,147 @@ mod tests {
         let conn_str = config.connection_string(None, None, None);
         assert_eq!(
             conn_str,
-            "postgresql://user:pass@localhost:5432/db?application_name=Blanco&sslmode=require&sslrootcert=/path/to/ca.pem"
+            "postgresql://user:pass@localhost:5432/db?application_name=Blanco&sslmode=require&sslrootcert=%2Fpath%2Fto%2Fca.pem"
+        );
+    }
+
+    /// Every SSL mode the dialog offers for PostgreSQL reaches sqlx in a
+    /// spelling it parses, and to the mode it names.
+    #[test]
+    fn postgres_ssl_modes_from_the_dialog_parse() {
+        use sqlx::postgres::{PgConnectOptions, PgSslMode};
+        use std::str::FromStr as _;
+
+        for (mode, expected) in [
+            ("disabled", PgSslMode::Disable),
+            ("allow", PgSslMode::Allow),
+            ("preferred", PgSslMode::Prefer),
+            ("required", PgSslMode::Require),
+            ("verify-ca", PgSslMode::VerifyCa),
+            ("verify-full", PgSslMode::VerifyFull),
+        ] {
+            let config = ConnectionConfig::new(
+                1,
+                "Test".to_string(),
+                DatabaseType::PostgreSQL,
+                "localhost".to_string(),
+                5432,
+                "db".to_string(),
+                "user".to_string(),
+                Some("pass".to_string()),
+            )
+            .with_ssl_config(Some(mode.to_string()), None, None, None);
+            let options = PgConnectOptions::from_str(&config.connection_string(None, None, None))
+                .unwrap_or_else(|error| panic!("{mode}: {error}"));
+            // PgSslMode has no PartialEq.
+            assert_eq!(
+                format!("{:?}", options.get_ssl_mode()),
+                format!("{expected:?}"),
+                "{mode}"
+            );
+        }
+    }
+
+    /// Against the compose server with TLS (`postgrestestdb_ssl`, port 5488),
+    /// each dialog mode connects, and encrypts exactly when it should.
+    /// Skipped when the server is down, unless `BLANCO_RUN_DB_TESTS=1`.
+    #[tokio::test]
+    async fn postgres_ssl_modes_connect_to_a_tls_server() {
+        use sqlx::Connection as _;
+        use std::str::FromStr as _;
+
+        let ca = format!(
+            "{}/../postgres/test_certs/ca.crt",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        for (mode, encrypted) in [
+            ("disabled", false),
+            ("allow", false),
+            ("preferred", true),
+            ("required", true),
+            ("verify-ca", true),
+            ("verify-full", true),
+        ] {
+            let config = ConnectionConfig::new(
+                1,
+                "Test".to_string(),
+                DatabaseType::PostgreSQL,
+                "localhost".to_string(),
+                5488,
+                "blanco".to_string(),
+                "blanco".to_string(),
+                Some("blanco".to_string()),
+            )
+            .with_ssl_config(Some(mode.to_string()), None, None, Some(ca.clone()));
+            let options = sqlx::postgres::PgConnectOptions::from_str(
+                &config.connection_string(None, None, None),
+            )
+            .unwrap_or_else(|error| panic!("{mode}: {error}"));
+            let mut connection = match sqlx::PgConnection::connect_with(&options).await {
+                Ok(connection) => connection,
+                Err(error) if mode == "disabled" => {
+                    if std::env::var("BLANCO_RUN_DB_TESTS").as_deref() == Ok("1") {
+                        panic!("the TLS test server is unreachable: {error}");
+                    }
+                    tracing::warn!("skip: the TLS test server on 5488 is unreachable ({error})");
+                    return;
+                }
+                Err(error) => panic!("{mode}: {error}"),
+            };
+            let ssl: bool =
+                sqlx::query_scalar("SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()")
+                    .fetch_one(&mut connection)
+                    .await
+                    .unwrap_or_else(|error| panic!("{mode}: {error}"));
+            assert_eq!(ssl, encrypted, "{mode}");
+        }
+    }
+
+    /// A password, user name, database and certificate path holding URL
+    /// syntax come through to the driver unchanged.
+    #[test]
+    fn postgres_connection_string_encodes_its_parts() {
+        use sqlx::postgres::PgConnectOptions;
+        use std::str::FromStr as _;
+
+        let config = ConnectionConfig::new(
+            1,
+            "Test".to_string(),
+            DatabaseType::PostgreSQL,
+            "db.example.com".to_string(),
+            5432,
+            "my db".to_string(),
+            "andreas.project".to_string(),
+            Some("p@ss/w:rd#1?%&+ ".to_string()),
+        )
+        .with_ssl_config(
+            Some("verify-full".to_string()),
+            None,
+            None,
+            Some("/home/me/certs & keys/ca+root.pem".to_string()),
+        );
+        let conn_str = config.connection_string(None, None, None);
+        let options = PgConnectOptions::from_str(&conn_str).expect("parses");
+        assert_eq!(options.get_host(), "db.example.com");
+        assert_eq!(options.get_username(), "andreas.project");
+        assert_eq!(options.get_database(), Some("my db"));
+        let url = url::Url::parse(&conn_str).expect("url");
+        let password = url.password().expect("password");
+        assert_eq!(
+            percent_encoding::percent_decode_str(password).decode_utf8_lossy(),
+            "p@ss/w:rd#1?%&+ "
+        );
+        let root_cert: Vec<(String, String)> = url
+            .query_pairs()
+            .filter(|(key, _)| key == "sslrootcert")
+            .map(|(key, value)| (key.into_owned(), value.into_owned()))
+            .collect();
+        assert_eq!(
+            root_cert,
+            [(
+                "sslrootcert".to_string(),
+                "/home/me/certs & keys/ca+root.pem".to_string()
+            )]
         );
     }
 

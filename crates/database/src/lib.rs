@@ -13,7 +13,8 @@ mod ssh_tunnel;
 mod tokio_connection;
 
 pub use connection_config::{
-    ConnectionConfig, ConnectionSecretStore, DatabaseType, NoSecretStore, ParamStyles, SecretKind,
+    postgres_ssl_mode, ConnectionConfig, ConnectionSecretStore, DatabaseType, NoSecretStore,
+    ParamStyles, SecretKind,
 };
 pub use factories::{MysqlConnectionFactory, PostgresConnectionFactory, SqliteConnectionFactory};
 pub use secret_prompt::{NoSecretPrompt, SecretPrompt, SecretPromptCancelled, SecretPromptRequest};
