@@ -10,6 +10,7 @@ use crate::results_panel::cell_edit_state::{CellInput, ChangeType, TableChange};
 use crate::results_panel::compare::pretty_json_or_original;
 use crate::results_panel::date_time_picker::{DateTimePicker, DateTimePickerEvent};
 use crate::results_panel::json_text::{is_json_document, json_error, minify_json};
+use crate::results_panel::key_value_editor::{KeyValueEditor, KeyValueEditorEvent};
 use crate::results_panel::temporal::{TemporalShape, TemporalValue};
 
 impl ResultsTableDelegate {
@@ -357,6 +358,85 @@ impl ResultsTableDelegate {
     /// Whether the cell's value is bytes the binary viewer can show: a
     /// binary column holding NULL or hex notation. Text someone typed into a
     /// binary cell without the `0x` is text and stays in the text editors.
+    /// Whether the cell expands into the pair editor: an hstore value, or
+    /// NULL, that reads as pairs and is not being edited as SQL.
+    pub(crate) fn opens_in_key_value_editor(&self, row_ix: usize, col_ix: usize) -> bool {
+        self.column_types.get(col_ix) == Some(&ColumnType::KeyValue)
+            && !self.edit_state.is_expression(row_ix, col_ix)
+            && self
+                .stored_cell_value(row_ix, col_ix)
+                .is_none_or(|value| blanco_core::hstore::parse(&value).is_ok())
+    }
+
+    pub(crate) fn open_key_value_editor(
+        state: &mut TableState<ResultsTableDelegate>,
+        row_ix: usize,
+        col_ix: usize,
+        window: &mut Window,
+        cx: &mut Context<'_, TableState<ResultsTableDelegate>>,
+    ) -> Entity<KeyValueEditor> {
+        let delegate = state.delegate();
+        // The pending edit wins over the stored value, so reopening shows
+        // the pairs as they were left.
+        let current = delegate
+            .edit_state
+            .edited_values
+            .get(&(row_ix, col_ix))
+            .cloned()
+            .unwrap_or_else(|| delegate.stored_cell_value(row_ix, col_ix));
+        let pairs = current
+            .as_deref()
+            .and_then(|value| blanco_core::hstore::parse(value).ok())
+            .unwrap_or_default();
+        let editable = delegate.is_editable();
+        let editor = cx.new(|cx| KeyValueEditor::new(pairs, editable, window, cx));
+        cx.subscribe_in(&editor, window, move |state, _, event, window, cx| {
+            if state.delegate().edit_state.editing_cell != Some((row_ix, col_ix)) {
+                return;
+            }
+            match event {
+                KeyValueEditorEvent::Changed(text) => {
+                    state
+                        .delegate_mut()
+                        .edit_state
+                        .edited_values
+                        .insert((row_ix, col_ix), Some(text.clone()));
+                    state.refresh(cx);
+                    cx.notify();
+                }
+                KeyValueEditorEvent::Close => Self::close_binary_viewer(state, window, cx),
+            }
+        })
+        .detach();
+
+        let original = delegate
+            .rows
+            .get(row_ix)
+            .and_then(|row| row.get(col_ix))
+            .cloned()
+            .flatten();
+        let is_new_row = delegate.edit_state.is_new_row(row_ix);
+        let edit_state = &mut state.delegate_mut().edit_state;
+        if !is_new_row {
+            edit_state
+                .original_values
+                .entry((row_ix, col_ix))
+                .or_insert(original);
+        }
+        edit_state.editing_cell = Some((row_ix, col_ix));
+        edit_state.expanded_cell = Some((row_ix, col_ix));
+        edit_state.editing_input = None;
+        edit_state.date_picker = None;
+        edit_state.editing_as_expression = false;
+        edit_state.binary_viewer = None;
+        edit_state.key_value_editor = Some(editor.clone());
+
+        editor.focus_handle(cx).focus(window, cx);
+        state.refresh(cx);
+        cx.notify();
+        editor
+    }
+
     pub(crate) fn opens_in_binary_viewer(&self, row_ix: usize, col_ix: usize) -> bool {
         self.column_types.get(col_ix) == Some(&ColumnType::Binary)
             && !self.edit_state.is_expression(row_ix, col_ix)
@@ -479,16 +559,17 @@ impl ResultsTableDelegate {
         window: &mut Window,
         cx: &mut Context<'_, TableState<ResultsTableDelegate>>,
     ) {
-        state.delegate_mut().finish_binary_viewer();
+        state.delegate_mut().finish_overlay_editor();
         state.focus_handle(cx).focus(window, cx);
         state.refresh(cx);
         cx.notify();
     }
 
-    /// End the binary viewer's edit: a loaded file becomes a pending change,
-    /// an untouched value is left as it was.
-    pub(crate) fn finish_binary_viewer(&mut self) {
-        if self.edit_state.binary_viewer.is_none() {
+    /// End the binary viewer's or the pair editor's edit: a loaded file or
+    /// changed pairs become a pending change, an untouched value is left as
+    /// it was.
+    pub(crate) fn finish_overlay_editor(&mut self) {
+        if !self.edit_state.has_overlay_editor() {
             return;
         }
         if let Some((row, col)) = self.edit_state.editing_cell
@@ -558,6 +639,22 @@ impl ResultsTableDelegate {
     ) {
         if state.delegate().opens_in_binary_viewer(row_ix, col_ix) {
             Self::open_binary_viewer(state, row_ix, col_ix, window, cx);
+            return;
+        }
+        if state.delegate().opens_in_key_value_editor(row_ix, col_ix) {
+            // A value typed inline before expanding is kept as the edit.
+            if let Some(input) = state.delegate().edit_state.editing_input.clone() {
+                let text = input.text(cx);
+                let edit_state = &mut state.delegate_mut().edit_state;
+                if edit_state.edited_values.contains_key(&(row_ix, col_ix))
+                    && blanco_core::hstore::parse(&text).is_ok()
+                {
+                    edit_state
+                        .edited_values
+                        .insert((row_ix, col_ix), Some(text));
+                }
+            }
+            Self::open_key_value_editor(state, row_ix, col_ix, window, cx);
             return;
         }
 

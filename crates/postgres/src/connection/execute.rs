@@ -47,6 +47,7 @@ impl PostgresConnection {
         let mut columns: Vec<String> = Vec::new();
         let mut column_types: Vec<ColumnType> = Vec::new();
         let mut raw_column_types: Vec<String> = Vec::new();
+        let mut unnamed: Vec<(usize, u32)> = Vec::new();
         let mut rows: Vec<Vec<Option<String>>> = Vec::new();
         let mut rows_affected: u64 = 0;
 
@@ -75,6 +76,7 @@ impl PostgresConnection {
                             .unzip();
                         column_types = types;
                         raw_column_types = raw_types;
+                        unnamed = unnamed_columns(&row);
                     }
 
                     // Convert row to strings immediately to avoid memory doubling
@@ -94,6 +96,19 @@ impl PostgresConnection {
             }
         }
         let timing = timer.finish();
+        drop(results);
+        drop(connection);
+        if !unnamed.is_empty() {
+            let oids: Vec<u32> = unnamed.iter().map(|&(_, oid)| oid).collect();
+            let names = type_names(pool, &oids).await?;
+            for (column, oid) in unnamed {
+                if let (Some(name), Some(column_type)) =
+                    (names.get(&oid), column_types.get_mut(column))
+                {
+                    *column_type = Self::map_postgres_type(name);
+                }
+            }
+        }
 
         Ok(QueryResult {
             columns,
@@ -120,35 +135,96 @@ impl PostgresConnection {
         use sqlx::Either;
 
         let mut out: Vec<QueryResult> = Vec::new();
+        // Columns whose type the simple query protocol named only by OID,
+        // as (result, column, OID): extension types such as hstore.
+        let mut unnamed: Vec<(usize, usize, u32)> = Vec::new();
         let mut current: Option<PgStatementAcc> = None;
+        let mut finish = |acc: PgStatementAcc, out: &mut Vec<QueryResult>| {
+            unnamed.extend(
+                acc.unnamed_types
+                    .iter()
+                    .map(|&(column, oid)| (out.len(), column, oid)),
+            );
+            out.push(acc.finish());
+        };
 
-        // Taken before the timer starts, so opening a connection does not
-        // count as execution.
-        let mut connection = pool.acquire().await?;
-        let mut timer = StatementTimer::start();
-        let mut results = sqlx::raw_sql(sql).fetch_many(&mut *connection);
-        while let Some(result) = results.next().await {
-            match result? {
-                Either::Left(execution_result) => {
-                    let mut acc = current.take().unwrap_or_default();
-                    acc.rows_affected += execution_result.rows_affected();
-                    acc.timing = Some(timer.finish_and_restart());
-                    out.push(acc.finish());
-                }
-                Either::Right(row) => {
-                    timer.row();
-                    let acc = current.get_or_insert_with(PgStatementAcc::default);
-                    acc.absorb_row(&row, self);
+        {
+            // Taken before the timer starts, so opening a connection does not
+            // count as execution.
+            let mut connection = pool.acquire().await?;
+            let mut timer = StatementTimer::start();
+            let mut results = sqlx::raw_sql(sql).fetch_many(&mut *connection);
+            while let Some(result) = results.next().await {
+                match result? {
+                    Either::Left(execution_result) => {
+                        let mut acc = current.take().unwrap_or_default();
+                        acc.rows_affected += execution_result.rows_affected();
+                        acc.timing = Some(timer.finish_and_restart());
+                        finish(acc, &mut out);
+                    }
+                    Either::Right(row) => {
+                        timer.row();
+                        let acc = current.get_or_insert_with(PgStatementAcc::default);
+                        acc.absorb_row(&row, self);
+                    }
                 }
             }
+            if let Some(mut acc) = current.take() {
+                acc.timing = Some(timer.finish());
+                finish(acc, &mut out);
+            }
         }
-        if let Some(mut acc) = current.take() {
-            acc.timing = Some(timer.finish());
-            out.push(acc.finish());
+
+        // The pool's one connection is free again now that the script is
+        // read, so the names come from `pg_type` in one query. The values
+        // are already text and stay as they are; only the column types
+        // change.
+        if !unnamed.is_empty() {
+            let oids: Vec<u32> = unnamed.iter().map(|&(_, _, oid)| oid).collect();
+            let names = type_names(pool, &oids).await?;
+            for (result, column, oid) in unnamed {
+                if let (Some(name), Some(column_type)) = (
+                    names.get(&oid),
+                    out.get_mut(result)
+                        .and_then(|result| result.column_types.get_mut(column)),
+                ) {
+                    *column_type = PostgresConnection::map_postgres_type(name);
+                }
+            }
         }
 
         Ok(out)
     }
+}
+
+/// The columns of `row` whose type the simple query protocol gave only as
+/// an OID, which sqlx names `?`: extension types such as hstore, which have
+/// no fixed OID. As (column, OID).
+fn unnamed_columns(row: &sqlx::postgres::PgRow) -> Vec<(usize, u32)> {
+    row.columns()
+        .iter()
+        .enumerate()
+        .filter(|(_, col)| col.type_info().name() == "?")
+        .filter_map(|(ix, col)| Some((ix, col.type_info().oid()?.0)))
+        .collect()
+}
+
+/// The names of the types `oids`, from `pg_type`. Run once the statement's
+/// rows are read: the pool holds a single connection.
+async fn type_names(
+    pool: &sqlx::PgPool,
+    oids: &[u32],
+) -> Result<std::collections::HashMap<u32, String>> {
+    let oids: Vec<i64> = oids.iter().map(|&oid| i64::from(oid)).collect();
+    let rows: Vec<(i64, String)> =
+        sqlx::query_as("SELECT oid::int8, typname::text FROM pg_type WHERE oid::int8 = ANY($1)")
+            .bind(&oids)
+            .fetch_all(pool)
+            .await?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|(oid, name)| Some((u32::try_from(oid).ok()?, name)))
+        .collect())
 }
 
 /// Per-statement accumulator used by `execute_script_inner` to keep rows and
@@ -161,6 +237,8 @@ struct PgStatementAcc {
     rows: Vec<Vec<Option<String>>>,
     rows_affected: u64,
     timing: Option<QueryTiming>,
+    /// Columns the protocol named only by OID, with that OID.
+    unnamed_types: Vec<(usize, u32)>,
 }
 
 impl PgStatementAcc {
@@ -181,6 +259,7 @@ impl PgStatementAcc {
                 .unzip();
             self.column_types = types;
             self.raw_column_types = raw_types;
+            self.unnamed_types = unnamed_columns(row);
         }
 
         let row_data: Vec<Option<String>> = (0..self.columns.len())

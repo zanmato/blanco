@@ -5,6 +5,7 @@ use gpui_component::input::{EditorState, InputState, InvisibleCharacter, invisib
 
 use super::binary_viewer::BinaryViewer;
 use super::date_time_picker::DateTimePicker;
+use super::key_value_editor::KeyValueEditor;
 
 /// Starting size of the expanded cell editor, before the user drags it.
 pub const EXPANDED_EDITOR_SIZE: Size<Pixels> = Size {
@@ -233,6 +234,9 @@ pub struct CellEditState {
     /// The viewer a binary cell is expanded into. It takes the place of the
     /// text editors, so `editing_input` is empty while it is open.
     pub binary_viewer: Option<Entity<BinaryViewer>>,
+    /// The pair editor an hstore cell is expanded into, which also takes the
+    /// place of the text editors.
+    pub key_value_editor: Option<Entity<KeyValueEditor>>,
     pub changes: Vec<TableChange>, // Track all changes for SQL generation
     pub selected_rows: HashSet<usize>, // Track selected rows
     pub current_column: usize,     // Track current column for selection
@@ -283,7 +287,14 @@ impl CellEditState {
         self.expanded_cell = None;
         self.date_picker = None;
         self.binary_viewer = None;
+        self.key_value_editor = None;
         self.editing_as_expression = false;
+    }
+
+    /// Whether the cell is edited in the binary viewer or the pair editor
+    /// rather than a text input.
+    pub fn has_overlay_editor(&self) -> bool {
+        self.binary_viewer.is_some() || self.key_value_editor.is_some()
     }
 
     pub fn get_editing_input(&self) -> Option<CellInput> {

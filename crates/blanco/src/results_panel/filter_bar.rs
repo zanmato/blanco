@@ -85,7 +85,7 @@ impl FilterColumn {
     fn is_text(&self) -> bool {
         matches!(
             self.column_type,
-            ColumnType::Text | ColumnType::Json | ColumnType::Uuid
+            ColumnType::Text | ColumnType::Json | ColumnType::Uuid | ColumnType::KeyValue
         )
     }
 }

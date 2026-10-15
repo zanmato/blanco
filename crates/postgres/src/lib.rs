@@ -477,6 +477,35 @@ mod tests {
         Ok(())
     }
 
+    /// hstore, an extension type without a fixed OID, reads as a key/value
+    /// column in the server's text form on both execution paths.
+    #[tokio::test]
+    async fn test_hstore_reads_as_key_value() -> Result<(), Box<dyn std::error::Error>> {
+        let connection_string = default_connection_string();
+        let mut conn = crate::PostgresConnection::from_connection_string(&connection_string)?;
+        conn.connect(&connection_string).await?;
+        if let Err(e) = conn.ping().await {
+            return handle_unreachable("test_hstore_reads_as_key_value", &e);
+        }
+        conn.execute_query(
+            "CREATE EXTENSION IF NOT EXISTS hstore",
+            Some("blanco"),
+            None,
+        )
+        .await?;
+        let select = r#"SELECT 'a=>1, "b c"=>NULL'::hstore AS h"#;
+        let scripted = conn.execute_script(select, Some("blanco")).await?;
+        let single = conn.execute_query(select, Some("blanco"), None).await?;
+        for result in [&scripted[0], &single] {
+            assert_eq!(result.column_types, vec![blanco_core::ColumnType::KeyValue]);
+            assert_eq!(
+                result.rows[0][0].as_deref(),
+                Some(r#""a"=>"1", "b c"=>NULL"#)
+            );
+        }
+        Ok(())
+    }
+
     #[tokio::test]
     async fn test_computed_column_type_detection() -> Result<(), Box<dyn std::error::Error>> {
         async {

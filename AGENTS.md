@@ -81,6 +81,19 @@ decodes its image itself and renders it as a `RenderImage`, so nothing lands in
 GPUI's asset cache, and drops the texture from every window when it is replaced
 or the viewer goes away.
 
+PostgreSQL `hstore` columns are `ColumnType::KeyValue`. hstore is an
+extension type without a fixed OID, and on the simple query protocol (scripts,
+and queries without parameters) sqlx gives such a column's type only as an
+OID, named `?`. The driver collects those OIDs while reading and names them
+from `pg_type` once the statement's rows are read, since the pool's single
+connection is busy until then; values are text either way. Cells show the
+pairs as `key: value` (`blanco_core::hstore` parses and formats the text
+form), copy and export keep the server's text, and expanding a cell opens
+`results_panel/key_value_editor.rs`, which writes its pairs back as an hstore
+literal through the cell's pending edit. It sits in the same overlay as the
+binary viewer (`CellOverlayEditor`), and `finish_overlay_editor` commits
+either.
+
 With `results.defer_values_over_kb` set, a plain `SELECT *` on one table with a
 primary key is rewritten by `Dialect::deferred_read` (`blanco_core::deferred`)
 so large text and binary columns come back as a preview plus a size helper

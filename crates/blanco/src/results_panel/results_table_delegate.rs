@@ -35,6 +35,24 @@ fn binary_display_text(value: &str) -> Option<String> {
     ))
 }
 
+/// An hstore as the grid shows it: `key: value` pairs, an empty value as
+/// `""` and NULL as `NULL`. `None` for text that is not an hstore, which is
+/// then shown as it is.
+fn key_value_display_text(value: &str) -> Option<String> {
+    let pairs = blanco_core::hstore::parse(value).ok()?;
+    Some(
+        pairs
+            .iter()
+            .map(|(key, value)| match value.as_deref() {
+                None => format!("{key}: NULL"),
+                Some("") => format!("{key}: \"\""),
+                Some(value) => format!("{key}: {value}"),
+            })
+            .collect::<Vec<_>>()
+            .join(", "),
+    )
+}
+
 pub(crate) fn results_settings(cx: &App) -> ResultsSettings {
     cx.try_global::<AppSettings>()
         .map(|app_settings| app_settings.settings.results.clone())
@@ -183,6 +201,11 @@ impl ResultsTableDelegate {
             && let Some(text) = binary_display_text(value)
         {
             return text.into();
+        }
+        if self.column_types.get(col_ix) == Some(&ColumnType::KeyValue)
+            && let Some(text) = key_value_display_text(value)
+        {
+            return display_text(&text, settings.show_invisible_characters);
         }
         display_text(value, settings.show_invisible_characters)
     }

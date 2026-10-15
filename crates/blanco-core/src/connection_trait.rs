@@ -121,6 +121,9 @@ pub enum ColumnType {
     Array,
     /// Binary types: bytea, blob, binary
     Binary,
+    /// Key/value maps: PostgreSQL's hstore. Values are the server's text
+    /// form, which `blanco_core::hstore` reads and writes.
+    KeyValue,
     /// Unknown/fallback type
     Unknown,
 }

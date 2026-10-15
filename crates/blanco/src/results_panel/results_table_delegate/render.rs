@@ -31,7 +31,6 @@ use crate::app::{
     OpenReferencedRow, PinResultColumn, SelectCellForCompare, SelectRowForCompare, SetCellDefault,
     SetCellNull, ToggleCellExpression,
 };
-use crate::results_panel::binary_viewer::BinaryViewer;
 use crate::results_panel::cell_edit_state::{
     CellInput, DisplayText, compare_numeric, display_preview, display_text,
 };
@@ -328,11 +327,11 @@ impl ResultsTableDelegate {
             )
     }
 
-    /// A binary cell expanded into its viewer, floating over the grid like
-    /// the expanded text editor.
-    fn render_binary_cell(
+    /// A cell expanded into the binary viewer or the pair editor, floating
+    /// over the grid like the expanded text editor.
+    fn render_overlay_cell(
         &self,
-        viewer: Entity<BinaryViewer>,
+        editor: AnyElement,
         row_ix: usize,
         col_ix: usize,
         cx: &mut Context<TableState<Self>>,
@@ -358,7 +357,7 @@ impl ResultsTableDelegate {
                         // grid underneath scrolls, opens its row menu and
                         // moves its selection.
                         .occlude()
-                        .key_context("BinaryViewer")
+                        .key_context("CellOverlayEditor")
                         .on_action(cx.listener(
                             |table, _: &gpui_component::input::Escape, window, cx| {
                                 Self::close_binary_viewer(table, window, cx);
@@ -367,7 +366,7 @@ impl ResultsTableDelegate {
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
                         .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
-                        .child(viewer)
+                        .child(editor)
                         .child(self.render_expanded_resize_handle(row_ix, col_ix, cx)),
                 )
                 .with_priority(99),
@@ -722,9 +721,13 @@ impl ResultsTableDelegate {
                 },
             )
             .when(
-                self.column_types.get(col_ix) == Some(&ColumnType::Json),
+                matches!(
+                    self.column_types.get(col_ix),
+                    Some(ColumnType::Json | ColumnType::KeyValue)
+                ),
                 |this| {
-                    this.text_color(cx.theme().yellow) // Yellow color for JSON
+                    // Yellow for structured values: JSON and hstore.
+                    this.text_color(cx.theme().yellow)
                 },
             )
             .when(is_edited, |this| {
@@ -957,9 +960,20 @@ impl TableDelegate for ResultsTableDelegate {
         let is_editing = self.edit_state.is_editing(row_ix, col_ix);
 
         if is_editing {
-            if let Some(viewer) = self.edit_state.binary_viewer.clone() {
+            let overlay_editor = self
+                .edit_state
+                .binary_viewer
+                .clone()
+                .map(IntoElement::into_any_element)
+                .or_else(|| {
+                    self.edit_state
+                        .key_value_editor
+                        .clone()
+                        .map(IntoElement::into_any_element)
+                });
+            if let Some(editor) = overlay_editor {
                 return self
-                    .render_binary_cell(viewer, row_ix, col_ix, cx)
+                    .render_overlay_cell(editor, row_ix, col_ix, cx)
                     .into_any_element();
             }
             // Embed Input directly in the cell

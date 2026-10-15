@@ -160,6 +160,8 @@ impl PostgresConnection {
             | "interval" => ColumnType::DateTime,
             "uuid" => ColumnType::Uuid,
             "json" | "jsonb" | "jsonpath" => ColumnType::Json,
+            // An extension type without a fixed OID, known by its name.
+            "hstore" => ColumnType::KeyValue,
             "bytea" => ColumnType::Binary,
             "array" => ColumnType::Array,
             _ if lower.ends_with("[]") => ColumnType::Array,
@@ -589,7 +591,10 @@ impl PostgresConnection {
             ColumnType::Uuid => self.handle_uuid_type(row, column_index, raw_type),
             ColumnType::Json => self.handle_json_type(row, column_index, raw_type),
             ColumnType::Binary => Self::handle_binary_type(row, column_index, raw_type),
-            ColumnType::Unknown => self.handle_unknown_type(row, column_index, raw_type),
+            // Read as text, as the server writes it.
+            ColumnType::KeyValue | ColumnType::Unknown => {
+                self.handle_unknown_type(row, column_index, raw_type)
+            }
         };
 
         // The cell is known to be non-NULL (we checked above). If a typed

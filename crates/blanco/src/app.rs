@@ -3111,11 +3111,12 @@ pub(crate) fn init_menus(cx: &mut App) {
             ToggleCellExpression,
             Some("ExpandedCellEditor"),
         ),
-        // The viewer holds no input whose own escape binding would reach it.
+        // The binary viewer holds no input whose own escape binding would
+        // reach the overlay, and the pair editor may have none focused.
         gpui::KeyBinding::new(
             "escape",
             gpui_component::input::Escape,
-            Some("BinaryViewer"),
+            Some("CellOverlayEditor"),
         ),
     ]);
 

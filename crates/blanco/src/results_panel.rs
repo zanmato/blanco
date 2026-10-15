@@ -52,6 +52,7 @@ mod export_actions;
 pub mod filter_bar;
 mod foreign_key_popover;
 pub(crate) mod json_text;
+mod key_value_editor;
 mod results_table_delegate;
 mod row_ops;
 mod server_filter;
@@ -1021,11 +1022,10 @@ impl ResultsPanel {
             .read(cx)
             .delegate()
             .edit_state
-            .binary_viewer
-            .is_some()
+            .has_overlay_editor()
         {
             self.table_state.update(cx, |state, cx| {
-                state.delegate_mut().finish_binary_viewer();
+                state.delegate_mut().finish_overlay_editor();
                 state.refresh(cx);
             });
             cx.notify();

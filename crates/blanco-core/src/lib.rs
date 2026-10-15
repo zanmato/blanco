@@ -13,6 +13,7 @@ pub mod ddl;
 pub mod deferred;
 pub mod dialect;
 pub mod explain_plan;
+pub mod hstore;
 pub mod statement_stream;
 pub mod table_extractor;
 pub mod table_filter;
