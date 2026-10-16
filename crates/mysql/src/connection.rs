@@ -19,6 +19,8 @@ pub struct MysqlConnection {
     display_name: String,
     server_connection_string: String, // Connection string without database
     initial_database: Option<String>, // Original database from connection string
+    /// Whether the server is MySQL or MariaDB, asked once.
+    server_variant: Arc<RwLock<Option<blanco_core::ServerVariant>>>,
 }
 
 /// Connection key for MySQL connections
@@ -182,6 +184,7 @@ impl MysqlConnection {
             display_name,
             server_connection_string,
             initial_database: Some(connection_key.database),
+            server_variant: Arc::new(RwLock::new(None)),
         })
     }
 

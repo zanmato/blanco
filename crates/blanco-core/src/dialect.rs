@@ -27,6 +27,37 @@ pub enum UpsertStyle {
     OnDuplicateKey,
 }
 
+/// Which plan an explain asks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExplainMode {
+    /// The planner's estimate. The statement is not executed.
+    Estimated,
+    /// The statement is executed and the plan carries actual rows and
+    /// timings.
+    Analyze,
+}
+
+/// The server behind a [`DatabaseType`] where servers of one type spell
+/// things differently. MySQL connections may talk to MariaDB, which has no
+/// `EXPLAIN FORMAT=TREE` and analyzes with `ANALYZE <statement>`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ServerVariant {
+    #[default]
+    Standard,
+    MariaDb,
+}
+
+impl ServerVariant {
+    /// The variant a MySQL server's `SELECT VERSION()` string names.
+    pub fn from_mysql_version(version: &str) -> Self {
+        if version.to_ascii_lowercase().contains("mariadb") {
+            ServerVariant::MariaDb
+        } else {
+            ServerVariant::Standard
+        }
+    }
+}
+
 /// How a `VALUES` list is turned into a selectable relation when exporting
 /// rows as a query.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -679,31 +710,61 @@ impl Dialect {
         )
     }
 
-    /// Wrap `sql` in this backend's EXPLAIN. `EXPLAIN ANALYZE` is only used
-    /// for plain selects on Postgres because `ANALYZE` executes the statement
-    /// and would mutate data otherwise.
-    pub fn explain(&self, sql: &str) -> String {
+    /// Whether servers of this type differ in syntax, so the connection's
+    /// [`ServerVariant`] must be asked before building their SQL.
+    pub fn has_server_variants(&self) -> bool {
+        matches!(self.0, DatabaseType::MySQL)
+    }
+
+    /// Whether the backend can execute a statement and report its actual
+    /// plan. SQLite and ClickHouse only estimate.
+    pub fn supports_explain_analyze(&self) -> bool {
+        matches!(
+            self.0,
+            DatabaseType::PostgreSQL
+                | DatabaseType::MySQL
+                | DatabaseType::MsSql
+                | DatabaseType::DuckDb
+        )
+    }
+
+    /// Wrap `sql` in this backend's EXPLAIN, or `None` when the backend has
+    /// no such plan (Redis, or [`ExplainMode::Analyze`] where
+    /// [`Self::supports_explain_analyze`] is false). In
+    /// [`ExplainMode::Analyze`] the statement runs, writes included.
+    pub fn explain(&self, sql: &str, mode: ExplainMode, variant: ServerVariant) -> Option<String> {
         let trimmed = sql.trim().trim_end_matches(';');
-        let is_select = trimmed
-            .split_whitespace()
-            .next()
-            .map(|word| word.eq_ignore_ascii_case("SELECT") || word.eq_ignore_ascii_case("WITH"))
-            .unwrap_or(false);
-        match self.0 {
-            DatabaseType::PostgreSQL if is_select => {
+        let analyze = mode == ExplainMode::Analyze;
+        if analyze && !self.supports_explain_analyze() {
+            return None;
+        }
+        let wrapped = match self.0 {
+            DatabaseType::PostgreSQL if analyze => {
                 format!("EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) {trimmed}")
             }
             DatabaseType::PostgreSQL => format!("EXPLAIN (FORMAT JSON) {trimmed}"),
-            DatabaseType::MySQL => format!("EXPLAIN FORMAT=TREE {trimmed}"),
+            DatabaseType::MySQL => match (variant, analyze) {
+                (ServerVariant::MariaDb, true) => format!("ANALYZE {trimmed}"),
+                (ServerVariant::MariaDb, false) => format!("EXPLAIN {trimmed}"),
+                // EXPLAIN ANALYZE prints the tree format with actual values.
+                (ServerVariant::Standard, true) => format!("EXPLAIN ANALYZE {trimmed}"),
+                (ServerVariant::Standard, false) => format!("EXPLAIN FORMAT=TREE {trimmed}"),
+            },
+            DatabaseType::MsSql if analyze => {
+                format!("SET STATISTICS PROFILE ON; {trimmed}; SET STATISTICS PROFILE OFF")
+            }
+            // SHOWPLAN must be alone in its batch, and the driver splits
+            // batches on `GO` lines.
             DatabaseType::MsSql => {
-                format!("SET SHOWPLAN_ALL ON; {trimmed}; SET SHOWPLAN_ALL OFF")
+                format!("SET SHOWPLAN_ALL ON\nGO\n{trimmed}\nGO\nSET SHOWPLAN_ALL OFF")
             }
             DatabaseType::SQLite => format!("EXPLAIN QUERY PLAN {trimmed}"),
+            DatabaseType::DuckDb if analyze => format!("EXPLAIN ANALYZE {trimmed}"),
             DatabaseType::DuckDb => format!("EXPLAIN {trimmed}"),
             DatabaseType::ClickHouse => format!("EXPLAIN PLAN {trimmed}"),
-            // Redis has no EXPLAIN; the action is gated off by supports_sql.
-            DatabaseType::Redis => trimmed.to_string(),
-        }
+            DatabaseType::Redis => return None,
+        };
+        Some(wrapped)
     }
 
     /// Parse the result of [`Self::explain`] into a plan tree, or `None` when
@@ -918,30 +979,111 @@ mod tests {
 
     #[test]
     fn explain_per_backend() {
+        use ExplainMode::{Analyze, Estimated};
+        use ServerVariant::{MariaDb, Standard};
+        let explain = |db_type: DatabaseType, sql: &str, mode, variant| {
+            dialect(db_type).explain(sql, mode, variant)
+        };
+        let cases = [
+            (
+                DatabaseType::PostgreSQL,
+                Estimated,
+                Standard,
+                Some("EXPLAIN (FORMAT JSON) SELECT 1"),
+            ),
+            (
+                DatabaseType::PostgreSQL,
+                Analyze,
+                Standard,
+                Some("EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) SELECT 1"),
+            ),
+            (
+                DatabaseType::MySQL,
+                Estimated,
+                Standard,
+                Some("EXPLAIN FORMAT=TREE SELECT 1"),
+            ),
+            (
+                DatabaseType::MySQL,
+                Analyze,
+                Standard,
+                Some("EXPLAIN ANALYZE SELECT 1"),
+            ),
+            (
+                DatabaseType::MySQL,
+                Estimated,
+                MariaDb,
+                Some("EXPLAIN SELECT 1"),
+            ),
+            (
+                DatabaseType::MySQL,
+                Analyze,
+                MariaDb,
+                Some("ANALYZE SELECT 1"),
+            ),
+            (
+                DatabaseType::MsSql,
+                Estimated,
+                Standard,
+                Some("SET SHOWPLAN_ALL ON\nGO\nSELECT 1\nGO\nSET SHOWPLAN_ALL OFF"),
+            ),
+            (
+                DatabaseType::MsSql,
+                Analyze,
+                Standard,
+                Some("SET STATISTICS PROFILE ON; SELECT 1; SET STATISTICS PROFILE OFF"),
+            ),
+            (
+                DatabaseType::SQLite,
+                Estimated,
+                Standard,
+                Some("EXPLAIN QUERY PLAN SELECT 1"),
+            ),
+            (DatabaseType::SQLite, Analyze, Standard, None),
+            (
+                DatabaseType::DuckDb,
+                Estimated,
+                Standard,
+                Some("EXPLAIN SELECT 1"),
+            ),
+            (
+                DatabaseType::DuckDb,
+                Analyze,
+                Standard,
+                Some("EXPLAIN ANALYZE SELECT 1"),
+            ),
+            (
+                DatabaseType::ClickHouse,
+                Estimated,
+                Standard,
+                Some("EXPLAIN PLAN SELECT 1"),
+            ),
+            (DatabaseType::ClickHouse, Analyze, Standard, None),
+            (DatabaseType::Redis, Estimated, Standard, None),
+        ];
+        for (db_type, mode, variant, expected) in cases {
+            assert_eq!(
+                explain(db_type, "SELECT 1;", mode, variant).as_deref(),
+                expected,
+                "{db_type:?} {mode:?} {variant:?}"
+            );
+        }
         assert_eq!(
-            dialect(DatabaseType::PostgreSQL).explain("SELECT 1;"),
-            "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) SELECT 1"
+            explain(
+                DatabaseType::PostgreSQL,
+                "DELETE FROM t",
+                Estimated,
+                Standard
+            )
+            .as_deref(),
+            Some("EXPLAIN (FORMAT JSON) DELETE FROM t"),
+            "an estimate never runs the statement"
         );
         assert_eq!(
-            dialect(DatabaseType::PostgreSQL).explain("DELETE FROM t"),
-            "EXPLAIN (FORMAT JSON) DELETE FROM t"
+            ServerVariant::from_mysql_version("11.4.2-MariaDB-ubu2404"),
+            MariaDb
         );
-        assert_eq!(
-            dialect(DatabaseType::MySQL).explain("SELECT 1"),
-            "EXPLAIN FORMAT=TREE SELECT 1"
-        );
-        assert_eq!(
-            dialect(DatabaseType::MsSql).explain("SELECT 1"),
-            "SET SHOWPLAN_ALL ON; SELECT 1; SET SHOWPLAN_ALL OFF"
-        );
-        assert_eq!(
-            dialect(DatabaseType::SQLite).explain("SELECT 1"),
-            "EXPLAIN QUERY PLAN SELECT 1"
-        );
-        assert_eq!(
-            dialect(DatabaseType::ClickHouse).explain("SELECT 1"),
-            "EXPLAIN PLAN SELECT 1"
-        );
+        assert_eq!(ServerVariant::from_mysql_version("8.4.0"), Standard);
     }
 
     #[test]

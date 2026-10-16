@@ -16,7 +16,7 @@ use crate::sql::{extract_statement_info, extract_statement_info_with_styles};
 use crate::status_bar::{ActivityReporter, ActivityResult};
 use crate::time_format;
 use app_database::{AppDatabase, QueryHistoryData};
-use blanco_core::{QueryTiming, StatementAccess};
+use blanco_core::{ExplainMode, QueryTiming, ServerVariant, StatementAccess};
 use database::{DatabaseService, DatabaseServiceTrait};
 use sql_parser::statement_parser::QueryParameter;
 
@@ -213,10 +213,16 @@ impl EditorPanel {
         }
     }
 
-    /// Wrap the statement at the cursor in an EXPLAIN appropriate to the
-    /// active connection's dialect and run it. The plan lands as a normal
-    /// result tab (multi-result aware) so the user can pin it.
-    pub fn on_explain_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// Wrap the statement at the cursor in the active connection's EXPLAIN
+    /// and run it. The plan lands as a normal result tab (multi-result aware)
+    /// so the user can pin it. [`ExplainMode::Analyze`] executes the
+    /// statement, so a write is confirmed first.
+    pub fn on_explain_query(
+        &mut self,
+        mode: ExplainMode,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let tab_index = self.active_tab_ix;
         let Some(TabType::Query(query_tab)) = self.tabs.get(tab_index) else {
             return;
@@ -228,7 +234,18 @@ impl EditorPanel {
         let connection_id = query_tab.context.connection_id;
         let database_name = query_tab.context.database_name.clone();
         let db_type = query_tab.context.db_type;
+        let dialect = db_type.dialect();
 
+        if mode == ExplainMode::Analyze && !dialect.supports_explain_analyze() {
+            window.push_notification(
+                (
+                    NotificationType::Error,
+                    SharedString::from(format!("{} has no Explain Analyze", db_type.as_str())),
+                ),
+                cx,
+            );
+            return;
+        }
         let raw = if !selected_text.trim().is_empty() {
             selected_text
         } else {
@@ -241,8 +258,133 @@ impl EditorPanel {
             window.push_notification((NotificationType::Error, "No query to explain"), cx);
             return;
         }
-        let wrapped = sql_parser::explain::wrap_explain(db_type, &raw);
-        self.execute_query(wrapped, connection_id, &database_name, window, cx);
+
+        if !dialect.has_server_variants() {
+            self.run_explain(raw, mode, ServerVariant::Standard, window, cx);
+            return;
+        }
+        // MySQL connections ask whether the server is MariaDB, which spells
+        // EXPLAIN differently. The answer is cached by the connection.
+        let db_service = DatabaseService::global(cx).clone();
+        cx.spawn_in(window, async move |panel, cx| {
+            let variant = match db_service
+                .get_or_create_connection_by_id(connection_id, Some(&database_name))
+                .await
+            {
+                Ok(connection) => connection.server_variant().await,
+                Err(error) => Err(error),
+            };
+            panel
+                .update_in(cx, |panel, window, cx| {
+                    // The statement belongs to the tab it was taken from.
+                    if panel.active_tab_ix != tab_index {
+                        return;
+                    }
+                    match variant {
+                        Ok(variant) => panel.run_explain(raw, mode, variant, window, cx),
+                        Err(error) => window.push_notification(
+                            (
+                                NotificationType::Error,
+                                SharedString::from(format!("Could not explain: {error:#}")),
+                            ),
+                            cx,
+                        ),
+                    }
+                })
+                .log_err();
+        })
+        .detach();
+    }
+
+    fn run_explain(
+        &mut self,
+        statement: String,
+        mode: ExplainMode,
+        variant: ServerVariant,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(TabType::Query(query_tab)) = self.tabs.get(self.active_tab_ix) else {
+            return;
+        };
+        let connection_id = query_tab.context.connection_id;
+        let database_name = query_tab.context.database_name.clone();
+        let db_type = query_tab.context.db_type;
+        let Some(wrapped) = db_type.dialect().explain(&statement, mode, variant) else {
+            return;
+        };
+        let runs_write = mode == ExplainMode::Analyze
+            && blanco_core::write_guard::classify(db_type, &statement) == StatementAccess::Write;
+        if runs_write {
+            self.confirm_explain_analyze_write(wrapped, connection_id, database_name, window, cx);
+        } else {
+            self.execute_query(wrapped, connection_id, &database_name, window, cx);
+        }
+    }
+
+    /// Explain Analyze runs the statement, so a write is confirmed on every
+    /// connection, not only PROD ones. The confirmation stands in for the
+    /// PROD one as well.
+    fn confirm_explain_analyze_write(
+        &mut self,
+        wrapped: String,
+        connection_id: i64,
+        database_name: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(TabType::Query(query_tab)) = self.tabs.get(self.active_tab_ix) else {
+            return;
+        };
+        let environment_note = match query_tab.context.environment_type {
+            Some(environment) if environment.confirms_writes() => format!(
+                " \"{}\" is tagged {environment}.",
+                query_tab.context.connection_name
+            ),
+            _ => String::new(),
+        };
+        let message = format!(
+            "Explain Analyze executes the statement to measure it, so its changes are made.{environment_note}"
+        );
+        let weak_panel = cx.entity().downgrade();
+        window.open_dialog(cx, move |dialog, _, _| {
+            let weak_panel = weak_panel.clone();
+            let wrapped = wrapped.clone();
+            let database_name = database_name.clone();
+            dialog
+                .title("Run the statement to analyze it?")
+                .child(message.clone())
+                .footer(
+                    DialogFooter::new()
+                        .child(
+                            DialogClose::new().child(
+                                Button::new("explain-analyze-cancel")
+                                    .label("Cancel")
+                                    .outline(),
+                            ),
+                        )
+                        .child(
+                            DialogAction::new().child(
+                                Button::new("explain-analyze-confirm")
+                                    .danger()
+                                    .label("Run and Analyze")
+                                    .on_click(move |_, window, cx| {
+                                        weak_panel
+                                            .update(cx, |panel, cx| {
+                                                panel.execute_query_unchecked(
+                                                    wrapped.clone(),
+                                                    connection_id,
+                                                    &database_name,
+                                                    window,
+                                                    cx,
+                                                );
+                                            })
+                                            .log_err();
+                                    }),
+                            ),
+                        ),
+                )
+        });
     }
 
     /// Execute a query with the given parameters

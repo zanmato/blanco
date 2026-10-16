@@ -49,7 +49,7 @@ use crate::{
     update_manager::{UpdateManager, UpdateState},
 };
 use app_database::{AppDatabase, ConnectionData};
-use blanco_core::ConnectionContext;
+use blanco_core::{ConnectionContext, ExplainMode};
 
 actions!(
     blanco_app,
@@ -98,6 +98,7 @@ actions!(
         ResetEditorFontSize,
         RunQuery,
         ExplainQuery,
+        ExplainAnalyzeQuery,
         ToggleCommandPalette,
         CloseActiveTab,
         NewQueryTab,
@@ -2889,7 +2890,18 @@ impl BlancoApp {
 
     fn on_explain_query(&mut self, _: &ExplainQuery, window: &mut Window, cx: &mut Context<Self>) {
         self.editor_panel.update(cx, |panel, cx| {
-            panel.on_explain_query(window, cx);
+            panel.on_explain_query(ExplainMode::Estimated, window, cx);
+        });
+    }
+
+    fn on_explain_analyze_query(
+        &mut self,
+        _: &ExplainAnalyzeQuery,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.editor_panel.update(cx, |panel, cx| {
+            panel.on_explain_query(ExplainMode::Analyze, window, cx);
         });
     }
 
@@ -2966,6 +2978,7 @@ impl Render for BlancoApp {
             .on_action(cx.listener(Self::on_reset_editor_font_size))
             .on_action(cx.listener(Self::on_run_query))
             .on_action(cx.listener(Self::on_explain_query))
+            .on_action(cx.listener(Self::on_explain_analyze_query))
             .on_action(cx.listener(Self::on_connect_to_connection))
             .on_action(cx.listener(Self::on_toggle_command_palette))
             .on_action(cx.listener(Self::on_import_connections))

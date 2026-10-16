@@ -82,6 +82,26 @@ impl Connection for MysqlConnection {
         result.map(|_| ())
     }
 
+    async fn server_variant(&self) -> Result<blanco_core::ServerVariant> {
+        if let Some(variant) = *self.server_variant.read().await {
+            return Ok(variant);
+        }
+        let database = self
+            .initial_database
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("No database specified"))?;
+        let pool = self.get_or_create_pool(database).await?;
+        let version: String = sqlx::query_scalar("SELECT VERSION()")
+            .fetch_one(&pool)
+            .await
+            .map_err(|error| {
+                blanco_core::tag_sqlx(error).context("Failed to read the MySQL server version")
+            })?;
+        let variant = blanco_core::ServerVariant::from_mysql_version(&version);
+        *self.server_variant.write().await = Some(variant);
+        Ok(variant)
+    }
+
     async fn execute_query(
         &self,
         query: &str,

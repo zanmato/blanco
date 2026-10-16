@@ -583,7 +583,7 @@ async fn stage_scene(
             hide_sql_log(&editor_panel, cx)?;
             place_caret_in_revenue_statement(&editor_panel, cx)?;
             editor_panel.update_in(cx, |panel, window, cx| {
-                panel.on_explain_query(window, cx);
+                panel.on_explain_query(blanco_core::ExplainMode::Estimated, window, cx);
             })?;
             wait_for_run(&editor_panel, cx).await?;
         }

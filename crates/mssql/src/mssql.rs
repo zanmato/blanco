@@ -1,3 +1,4 @@
+mod batches;
 pub mod connection;
 pub mod schema;
 
@@ -184,6 +185,41 @@ mod tests {
         assert_eq!(type_map["uuid_col"], ColumnType::Uuid);
         assert_eq!(type_map["varbinary_col"], ColumnType::Binary);
 
+        Ok(())
+    }
+
+    /// A script is sent batch by batch on its `GO` lines, `GO <count>` repeats
+    /// a batch, and a failing batch does not stop the ones after it, so a
+    /// script that switches SHOWPLAN on always switches it off again.
+    #[tokio::test]
+    async fn test_mssql_go_batches() -> Result<(), Box<dyn std::error::Error>> {
+        let conn = match connect_or_skip("test_mssql_go_batches").await {
+            ConnectOutcome::Connected(c) => c,
+            ConnectOutcome::Skip(r) => return r,
+        };
+
+        let results = conn
+            .execute_script(
+                "CREATE TABLE #go_batches (id INT IDENTITY)\nGO\nINSERT INTO #go_batches DEFAULT VALUES\nGO 3\nSELECT COUNT(*) AS n FROM #go_batches",
+                None,
+            )
+            .await?;
+        let counts: Vec<_> = results.iter().map(|result| result.rows.clone()).collect();
+        assert_eq!(counts, [vec![vec![Some("3".to_string())]]]);
+
+        let failed = conn
+            .execute_script(
+                "SET SHOWPLAN_ALL ON\nGO\nSELECT * FROM no_such_table\nGO\nSET SHOWPLAN_ALL OFF",
+                None,
+            )
+            .await;
+        assert!(failed.is_err(), "the failing batch is reported");
+        let after = conn.execute_query("SELECT 1 AS one", None, None).await?;
+        assert_eq!(
+            after.rows,
+            [vec![Some("1".to_string())]],
+            "SHOWPLAN was switched off, so the query runs instead of returning its plan"
+        );
         Ok(())
     }
 

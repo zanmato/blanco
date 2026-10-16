@@ -11,6 +11,7 @@ one there too.
 | --- | --- | --- |
 | Run current statement | <kbd>Ctrl+Enter</kbd> | <kbd>Cmd+Enter</kbd> |
 | Explain query | <kbd>Ctrl+E</kbd> | <kbd>Cmd+E</kbd> |
+| Explain analyze query | <kbd>Ctrl+Shift+E</kbd> | <kbd>Cmd+Shift+E</kbd> |
 | Cancel running query | <kbd>Ctrl+.</kbd> | <kbd>Cmd+.</kbd> |
 | Format SQL | <kbd>Shift+Alt+F</kbd> | <kbd>Shift+Option+F</kbd> |
 

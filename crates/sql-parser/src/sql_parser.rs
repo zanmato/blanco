@@ -2,7 +2,6 @@
 //! cursor, bind parameters, completion context) and the agent tools. Pure: no
 //! UI dependencies, so it builds and tests without GPUI.
 
-pub mod explain;
 pub mod statement_parser;
 
 pub use statement_parser::{

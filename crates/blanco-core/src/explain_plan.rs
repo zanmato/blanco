@@ -339,6 +339,24 @@ mod tests {
         assert_eq!(tree.max_time_ms(), Some(1.5));
     }
 
+    /// An estimated plan (EXPLAIN without ANALYZE) has no actual values.
+    #[test]
+    fn postgres_estimated_plan_has_no_timings() {
+        let json = r#"[{"Plan":{"Node Type":"Seq Scan","Relation Name":"orders","Alias":"orders","Plan Rows":100,"Total Cost":5.0}}]"#;
+        let tree = parse_plan(
+            DatabaseType::PostgreSQL,
+            &result(&["QUERY PLAN"], vec![vec![json]]),
+        )
+        .expect("plan");
+        let root = &tree.roots[0];
+        assert_eq!(root.label, "Seq Scan on orders");
+        assert_eq!(root.estimated_rows, Some(100.0));
+        assert_eq!(root.actual_rows, None);
+        assert_eq!(root.actual_time_ms, None);
+        assert_eq!(tree.execution_time_ms, None);
+        assert!(!tree.has_timings());
+    }
+
     #[test]
     fn sqlite_query_plan_rows_become_a_tree() {
         let rows = result(

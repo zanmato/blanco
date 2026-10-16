@@ -609,6 +609,12 @@ pub trait Connection: Send + Sync {
         self.get_schemas().await.map(|_| ())
     }
 
+    /// The server behind this connection where servers of one database type
+    /// differ in syntax (MariaDB behind a MySQL connection).
+    async fn server_variant(&self) -> Result<crate::ServerVariant, anyhow::Error> {
+        Ok(crate::ServerVariant::Standard)
+    }
+
     // === Query Execution ===
 
     /// Execute a SQL query and return the results

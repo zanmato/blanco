@@ -1,10 +1,10 @@
 use crate::app::{
     ActivateNextTab, ActivatePreviousTab, CancelQuery, CloseActiveTab, CloseWindow, CommitChanges,
-    CopySelection, DecreaseEditorFontSize, ExplainQuery, ExportTableData, FormatQuery,
-    ImportTableData, IncreaseEditorFontSize, NewQueryTab, NewWindow, OpenReferencedRow,
-    OpenSettings, OpenTerminal, RefreshConnections, ReopenClosedTab, ResetEditorFontSize,
-    RollbackChanges, RunQuery, SaveTab, SaveTabAs, ToggleCommandPalette, ToggleFilterBar,
-    ToggleResults, ToggleSidebar,
+    CopySelection, DecreaseEditorFontSize, ExplainAnalyzeQuery, ExplainQuery, ExportTableData,
+    FormatQuery, ImportTableData, IncreaseEditorFontSize, NewQueryTab, NewWindow,
+    OpenReferencedRow, OpenSettings, OpenTerminal, RefreshConnections, ReopenClosedTab,
+    ResetEditorFontSize, RollbackChanges, RunQuery, SaveTab, SaveTabAs, ToggleCommandPalette,
+    ToggleFilterBar, ToggleResults, ToggleSidebar,
 };
 use crate::settings::Settings;
 
@@ -51,6 +51,13 @@ pub const CUSTOMIZABLE_BINDINGS: &[BindingDef] = &[
         label: "Explain query",
         group: "Query",
         default: "secondary-e",
+        context: None,
+    },
+    BindingDef {
+        action: "ExplainAnalyzeQuery",
+        label: "Explain analyze query",
+        group: "Query",
+        default: "secondary-shift-e",
         context: None,
     },
     BindingDef {
@@ -326,6 +333,7 @@ fn key_binding(action: &str, keystrokes: &str, context: Option<&str>) -> Option<
     let binding = match action {
         "RunQuery" => gpui::KeyBinding::new(keystrokes, RunQuery, context),
         "ExplainQuery" => gpui::KeyBinding::new(keystrokes, ExplainQuery, context),
+        "ExplainAnalyzeQuery" => gpui::KeyBinding::new(keystrokes, ExplainAnalyzeQuery, context),
         "FormatQuery" => gpui::KeyBinding::new(keystrokes, FormatQuery, context),
         "ToggleCommandPalette" => gpui::KeyBinding::new(keystrokes, ToggleCommandPalette, context),
         "ToggleFilterBar" => gpui::KeyBinding::new(keystrokes, ToggleFilterBar, context),

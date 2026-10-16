@@ -19,10 +19,10 @@ use crate::{
         ActivateEditorTab, ActivateNextTab, ActivatePreviousTab, BackupDatabase, CancelQuery,
         ClearCompareSelection, CloseActiveTab, CloseWindow, CommitChanges, ConnectToConnection,
         CopyAsCSV, CopyAsHTML, CopyAsJSON, CopyAsMarkdown, CopyAsSQL, CopyAsTSV, CreateNewQueryTab,
-        CreateNewScriptTab, ExplainQuery, ExportAsCSV, ExportAsHTML, ExportAsJSON,
-        ExportAsMarkdown, ExportAsSQL, ExportAsTSV, ExportConnections, ExportTableData,
-        FormatQuery, ImportConnections, ImportTableData, MoveTabToNewWindow, NewDuckdbDatabase,
-        NewQueryTab, NewSnippet, NewSqliteDatabase, NewWindow, OpenDatabaseFile,
+        CreateNewScriptTab, ExplainAnalyzeQuery, ExplainQuery, ExportAsCSV, ExportAsHTML,
+        ExportAsJSON, ExportAsMarkdown, ExportAsSQL, ExportAsTSV, ExportConnections,
+        ExportTableData, FormatQuery, ImportConnections, ImportTableData, MoveTabToNewWindow,
+        NewDuckdbDatabase, NewQueryTab, NewSnippet, NewSqliteDatabase, NewWindow, OpenDatabaseFile,
         OpenNewConnectionModal, OpenProcessList, OpenSettings, OpenSqlFile, OpenTerminal,
         RefreshConnections, ReopenClosedTab, RestoreDatabase, RollbackChanges, RunQuery,
         RunSqlFile, SaveTab, SaveTabAs, SwitchTheme, ToggleFilterBar, ToggleRenderWhitespace,
@@ -104,6 +104,7 @@ pub struct DatabaseRef {
 pub enum CommandType {
     RunQuery,
     ExplainQuery,
+    ExplainAnalyzeQuery,
     FormatQuery,
     ToggleFilterBar,
     SaveTab,
@@ -792,6 +793,9 @@ fn execute_command(cmd: &CommandType, window: &mut Window, cx: &mut App) {
     match cmd {
         CommandType::RunQuery => window.dispatch_action(Box::new(RunQuery), cx),
         CommandType::ExplainQuery => window.dispatch_action(Box::new(ExplainQuery), cx),
+        CommandType::ExplainAnalyzeQuery => {
+            window.dispatch_action(Box::new(ExplainAnalyzeQuery), cx)
+        }
         CommandType::FormatQuery => window.dispatch_action(Box::new(FormatQuery), cx),
         CommandType::ToggleFilterBar => window.dispatch_action(Box::new(ToggleFilterBar), cx),
         CommandType::SaveTab => window.dispatch_action(Box::new(SaveTab), cx),
@@ -1217,6 +1221,11 @@ fn build_commands(
     let mut commands = vec![
         leaf("Run Query", "Query", CommandType::RunQuery),
         leaf("Explain Query", "Query", CommandType::ExplainQuery),
+        leaf(
+            "Explain Analyze Query",
+            "Query",
+            CommandType::ExplainAnalyzeQuery,
+        ),
         leaf("Format Query", "Query", CommandType::FormatQuery),
         leaf("Toggle Filter Bar", "Results", CommandType::ToggleFilterBar),
         leaf("Save", "File", CommandType::SaveTab),

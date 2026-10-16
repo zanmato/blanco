@@ -749,12 +749,36 @@ impl BlancoMcpServer {
             Ok(connection) => connection,
             Err(error) => return tool_error(error),
         };
-        // Some backends execute the statement to explain it, so the inner SQL
-        // is authorized like a run.
+        // The plan is an estimate and nothing runs, but the inner SQL is
+        // authorized like a run so the write policy sees what is explained.
         if let Err(error) = self.authorize(&connection, &params.sql, &request).await {
             return tool_error(error);
         }
-        let wrapped = sql_parser::explain::wrap_explain(connection.config.db_type, &params.sql);
+        let dialect = connection.config.db_type.dialect();
+        let variant = if dialect.has_server_variants() {
+            let live = match self
+                .db_service
+                .get_or_create_connection(connection.config.id, Some(&connection.database))
+                .await
+            {
+                Ok(live) => live,
+                Err(error) => return tool_error(format!("Failed to connect: {error:#}")),
+            };
+            match live.server_variant().await {
+                Ok(variant) => variant,
+                Err(error) => return tool_error(format!("EXPLAIN failed: {error:#}")),
+            }
+        } else {
+            blanco_core::ServerVariant::Standard
+        };
+        let Some(wrapped) =
+            dialect.explain(&params.sql, blanco_core::ExplainMode::Estimated, variant)
+        else {
+            return tool_error(format!(
+                "{} has no EXPLAIN",
+                connection.config.db_type.as_str()
+            ));
+        };
         match run_sql_json(
             self.db_service.as_ref(),
             connection.config.id,

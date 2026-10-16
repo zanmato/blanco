@@ -11,7 +11,9 @@ frame around that statement, so you can see what will run. With text selected
 it runs the selection instead.
 
 A selection with several statements gives one result tab per statement. They
-run in order and stop at the first error.
+run in order and stop at the first error. On SQL Server, a line holding only
+`GO` ends a batch, as in SQL Server Management Studio, and the batches after a
+failing one still run.
 
 <kbd>Ctrl+.</kbd> or the **Stop** button cancels a running query. Queries that
 run longer than the query timeout in Settings are cancelled too.
@@ -40,9 +42,17 @@ Which placeholders are recognised depends on the database:
 
 ## Explain
 
-<kbd>Ctrl+E</kbd> runs `EXPLAIN` for the statement under the cursor. For
-PostgreSQL, MySQL and SQLite the plan is shown as a tree. Where the database
-reports timings, bars show where the time went.
+<kbd>Ctrl+E</kbd> or **Explain** shows the estimated plan of the statement
+under the cursor. The statement is not run.
+
+**Explain Analyze** (<kbd>Ctrl+Shift+E</kbd>, or the menu next to **Explain**)
+runs the statement and shows the rows and time each step actually took. A
+statement that changes data is really changed, so Blanco asks first. SQLite
+and ClickHouse only estimate, so they have no Explain Analyze.
+
+For PostgreSQL, SQLite and MySQL (but not MariaDB) the plan is shown as a
+tree. After Explain
+Analyze, bars show where the time went.
 
 ## Timing
 

@@ -678,7 +678,7 @@ async fn test_explain_produces_plan_tree(cx: &mut TestAppContext) {
     harness
         .editor_panel
         .update_in(&mut cx, |panel, window, cx| {
-            panel.on_explain_query(window, cx);
+            panel.on_explain_query(blanco_core::ExplainMode::Estimated, window, cx);
         });
     wait_for_query(&harness, &mut cx).await;
 

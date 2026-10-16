@@ -1,4 +1,4 @@
-use blanco_core::RoutineKind;
+use blanco_core::{ExplainMode, RoutineKind};
 use blanco_ui::{IconName, SqlViewMessage, Tab, TabBar};
 use gpui::{
     AnyElement, App, AppContext as _, ClickEvent, Context, FocusHandle, Focusable, FontWeight,
@@ -8,7 +8,7 @@ use gpui::{
 };
 use gpui_component::{
     ActiveTheme, Disableable as _, Icon, Sizable, WindowExt as _,
-    button::{Button, ButtonVariants as _},
+    button::{Button, ButtonVariants as _, DropdownButton},
     dialog::{DialogAction, DialogClose, DialogFooter},
     h_flex,
     input::Editor,
@@ -21,7 +21,10 @@ use gpui_component::{
 
 use super::rename_form::RenameTabForm;
 use super::{EditorPanel, QueryTab, ScriptTab, TabType};
-use crate::app::{ExecuteSubstitutedQuery, FormatQuery, RenameTab, ToggleFilterBar};
+use crate::app::{
+    ExecuteSubstitutedQuery, ExplainAnalyzeQuery, ExplainQuery, FormatQuery, RenameTab,
+    ToggleFilterBar,
+};
 use crate::app_settings::AppSettings;
 use crate::result_ext::ResultExt;
 use crate::results_panel::ResultsPanel;
@@ -706,20 +709,34 @@ impl EditorPanel {
                             )
                         } else {
                             this.when(supports_sql, |this| {
-                                this.child(
-                                    Button::new("explain-query")
-                                        .outline()
-                                        .small()
-                                        .icon(IconName::Map)
-                                        .label("Explain")
-                                        .tooltip(
-                                            "Run EXPLAIN on the statement \
-                             at the cursor",
-                                        )
-                                        .on_click(cx.listener(|panel, _, window, cx| {
-                                            panel.on_explain_query(window, cx)
-                                        })),
-                                )
+                                let explain = Button::new("explain-query")
+                                    .outline()
+                                    .small()
+                                    .icon(IconName::Map)
+                                    .label("Explain")
+                                    .tooltip(
+                                        "Show the estimated plan of the statement \
+                                         at the cursor",
+                                    )
+                                    .on_click(cx.listener(|panel, _, window, cx| {
+                                        panel.on_explain_query(ExplainMode::Estimated, window, cx)
+                                    }));
+                                if query_tab.context.dialect().supports_explain_analyze() {
+                                    this.child(
+                                        DropdownButton::new("explain-query-menu")
+                                            .outline()
+                                            .small()
+                                            .button(explain)
+                                            .dropdown_menu(|menu, _, _| {
+                                                menu.menu("Explain", Box::new(ExplainQuery)).menu(
+                                                    "Explain Analyze",
+                                                    Box::new(ExplainAnalyzeQuery),
+                                                )
+                                            }),
+                                    )
+                                } else {
+                                    this.child(explain)
+                                }
                             })
                             .child(
                                 Button::new("run-query")

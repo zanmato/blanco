@@ -1415,6 +1415,179 @@ fn test_process_list_finds_cancels_and_kills_sessions() {
     }
 }
 
+/// Both explain modes against every backend: an estimate leaves the data
+/// alone, Explain Analyze runs the statement, and the plans of the backends
+/// with a parser come back as trees.
+#[test]
+fn test_explain_estimates_and_analyzes_per_backend() {
+    use blanco_core::{ExplainMode, ServerVariant};
+    use database::ConnectionConfig;
+
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let file = |name: &str| temp_dir.path().join(name).to_string_lossy().to_string();
+    let server = |case: &DriverCase, id: i64| {
+        ConnectionConfig::new(
+            id,
+            case.name.to_string(),
+            case.db_type,
+            case.host.clone(),
+            case.port.parse().expect("port"),
+            case.database.clone(),
+            case.username.clone(),
+            Some(case.password.clone()),
+        )
+        .with_trust_server_certificate(case.db_type == DatabaseType::MsSql)
+    };
+    let postgres = postgres_case();
+    let mysql = mysql_case();
+    let clickhouse = clickhouse_case();
+    let mssql = mssql_case();
+    // ClickHouse has no UPDATE statement to explain.
+    let cases = [
+        (
+            "SQLite",
+            ConnectionConfig::new_sqlite(9301, "explain-sqlite".to_string(), file("explain.db")),
+            "main".to_string(),
+            true,
+        ),
+        (
+            "DuckDB",
+            ConnectionConfig::new_duckdb(
+                9302,
+                "explain-duckdb".to_string(),
+                file("explain.duckdb"),
+            ),
+            String::new(),
+            true,
+        ),
+        (
+            postgres.label,
+            server(&postgres, 9303),
+            postgres.database.clone(),
+            true,
+        ),
+        (
+            mysql.label,
+            server(&mysql, 9304),
+            mysql.database.clone(),
+            true,
+        ),
+        (
+            clickhouse.label,
+            server(&clickhouse, 9305),
+            clickhouse.database.clone(),
+            false,
+        ),
+        (
+            mssql.label,
+            server(&mssql, 9306),
+            mssql.database.clone(),
+            true,
+        ),
+    ];
+
+    let service = DatabaseService::new(runtime.handle().clone());
+    for (label, config, database, explains_update) in cases {
+        let db_type = config.db_type;
+        let dialect = db_type.dialect();
+        let database = Some(database.as_str());
+        let connection = runtime.block_on(async {
+            service.add_connection_config(config.clone()).await;
+            let connection = service
+                .get_or_create_connection(config.id, database)
+                .await?;
+            connection.ping().await?;
+            anyhow::Ok(connection)
+        });
+        let connection = match connection {
+            Ok(connection) => connection,
+            Err(error) if strict() => panic!("{label}: server unreachable: {error:#}"),
+            Err(error) => {
+                eprintln!(
+                    "skip {label}: server unreachable ({error:#}). Set BLANCO_RUN_DB_TESTS=1 to require."
+                );
+                continue;
+            }
+        };
+        let run = |sql: &str| {
+            runtime
+                .block_on(connection.execute_script(sql, database))
+                .unwrap_or_else(|error| panic!("{label}: {sql}: {error:#}"))
+        };
+        let counter = || -> String {
+            run("SELECT n FROM blanco_explain_test WHERE id = 1")
+                .first()
+                .and_then(|result| result.rows.first())
+                .and_then(|row| row.first().cloned().flatten())
+                .unwrap_or_else(|| panic!("{label}: no counter row"))
+        };
+        let variant = runtime
+            .block_on(connection.server_variant())
+            .unwrap_or_else(|error| panic!("{label}: server variant: {error:#}"));
+        assert_eq!(
+            variant == ServerVariant::MariaDb,
+            db_type == DatabaseType::MySQL,
+            "{label}: the compose MySQL server is MariaDB"
+        );
+
+        runtime
+            .block_on(
+                connection.execute_script("DROP TABLE IF EXISTS blanco_explain_test", database),
+            )
+            .ok();
+        run(if db_type == DatabaseType::ClickHouse {
+            "CREATE TABLE blanco_explain_test (id Int32, n Int32) ENGINE = MergeTree ORDER BY id"
+        } else {
+            "CREATE TABLE blanco_explain_test (id integer PRIMARY KEY, n integer)"
+        });
+        run("INSERT INTO blanco_explain_test (id, n) VALUES (1, 0)");
+
+        let select = "SELECT * FROM blanco_explain_test WHERE id = 1";
+        for mode in [ExplainMode::Estimated, ExplainMode::Analyze] {
+            let Some(explain) = dialect.explain(select, mode, variant) else {
+                assert!(
+                    mode == ExplainMode::Analyze && !dialect.supports_explain_analyze(),
+                    "{label}: no {mode:?} explain"
+                );
+                continue;
+            };
+            let results = run(&explain);
+            let parses = matches!(db_type, DatabaseType::PostgreSQL | DatabaseType::SQLite)
+                || (db_type == DatabaseType::MySQL && variant == ServerVariant::Standard);
+            if parses {
+                let plan = results
+                    .iter()
+                    .find_map(|result| dialect.parse_explain_plan(result))
+                    .unwrap_or_else(|| panic!("{label}: {mode:?} plan did not parse"));
+                assert_eq!(
+                    plan.has_timings(),
+                    mode == ExplainMode::Analyze,
+                    "{label}: only an analyzed plan has timings"
+                );
+            }
+        }
+
+        if explains_update {
+            let update = "UPDATE blanco_explain_test SET n = n + 1 WHERE id = 1";
+            let estimate = dialect
+                .explain(update, ExplainMode::Estimated, variant)
+                .expect("estimate");
+            run(&estimate);
+            assert_eq!(
+                counter(),
+                "0",
+                "{label}: an estimate must not run the update"
+            );
+            if let Some(analyze) = dialect.explain(update, ExplainMode::Analyze, variant) {
+                run(&analyze);
+                assert_eq!(counter(), "1", "{label}: Explain Analyze runs the update");
+            }
+        }
+        run("DROP TABLE blanco_explain_test");
+    }
+}
+
 /// The column/index DDL builders against every live backend: create a
 /// scratch table, add a column and an index, alter the column, drop both,
 /// and check the driver's metadata between steps.

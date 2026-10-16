@@ -58,6 +58,33 @@ async fn timed_results(
     Ok(results)
 }
 
+/// Run a script batch by batch, split on its `GO` lines. Like SSMS, a batch
+/// that fails does not stop the ones after it, so a closing batch such as
+/// `SET SHOWPLAN_ALL OFF` always runs. The first failure is returned once
+/// every batch has run. A lost connection stops at once.
+async fn run_batches(
+    client: &mut MssqlClient,
+    sql: &str,
+) -> Result<Vec<(Vec<Row>, QueryTiming)>, tiberius::error::Error> {
+    let mut results = Vec::new();
+    let mut first_error = None;
+    for batch in crate::batches::split_batches(sql) {
+        for _ in 0..batch.count {
+            match timed_results(client, &batch.sql).await {
+                Ok(sets) => results.extend(sets),
+                Err(error) if is_connection_lost(&error) => return Err(error),
+                Err(error) => {
+                    first_error.get_or_insert(error);
+                }
+            }
+        }
+    }
+    match first_error {
+        Some(error) => Err(error),
+        None => Ok(results),
+    }
+}
+
 /// Cap on SQL Server connection redirects (`Error::Routing`, used by named
 /// instances / Azure gateways) before giving up.
 const MAX_ROUTING_REDIRECTS: usize = 2;
@@ -536,7 +563,7 @@ impl Connection for MssqlConnection {
         // `simple_query` + `into_results` both borrow the client; run them in one
         // block so only the owned result sets escape. On a transport error drop
         // the cached client so the next call reconnects.
-        let result_sets = match timed_results(client, query).await {
+        let result_sets = match run_batches(client, query).await {
             Ok(result_sets) => result_sets,
             Err(error) => {
                 if is_connection_lost(&error) {
@@ -652,7 +679,7 @@ impl Connection for MssqlConnection {
         }
         let client = guard.as_mut().expect("client established above");
 
-        let result_sets = match timed_results(client, query).await {
+        let result_sets = match run_batches(client, query).await {
             Ok(result_sets) => result_sets,
             Err(error) => {
                 if is_connection_lost(&error) {

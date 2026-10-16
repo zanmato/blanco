@@ -182,7 +182,7 @@ pub fn classify(driver: DatabaseType, text: &str) -> StatementAccess {
 
 /// Classify a SQL script: the result is `Write` if any statement in it writes.
 pub fn classify_sql(sql: &str) -> StatementAccess {
-    if split_statements(sql)
+    if executed_statements(sql)
         .iter()
         .any(|statement| sql_write_kind(statement).is_some())
     {
@@ -207,7 +207,7 @@ pub fn classify_redis(text: &str) -> StatementAccess {
 /// `CONFIG SET`). Empty when `text` only reads.
 pub fn write_kinds(driver: DatabaseType, text: &str) -> Vec<String> {
     let kinds: Vec<String> = if driver.dialect().supports_sql() {
-        split_statements(text)
+        executed_statements(text)
             .iter()
             .filter_map(|statement| sql_write_kind(statement))
             .collect()
@@ -223,20 +223,76 @@ pub fn write_kinds(driver: DatabaseType, text: &str) -> Vec<String> {
     distinct
 }
 
+/// The statements of `sql` that the server executes. SQL Server only
+/// compiles the statements between `SET SHOWPLAN_ALL ON` (or `_TEXT`, `_XML`)
+/// and the matching `OFF`, to show their estimated plan.
+fn executed_statements(sql: &str) -> Vec<String> {
+    let mut showplan = false;
+    split_statements(sql)
+        .into_iter()
+        .filter(|statement| {
+            let words = keywords(statement);
+            let switches_showplan = words.len() == 3
+                && words[0] == "SET"
+                && matches!(
+                    words[1].as_str(),
+                    "SHOWPLAN_ALL" | "SHOWPLAN_TEXT" | "SHOWPLAN_XML"
+                );
+            if switches_showplan {
+                showplan = words[2] == "ON";
+                return true;
+            }
+            !showplan
+        })
+        .collect()
+}
+
 fn sql_write_kind(statement: &str) -> Option<String> {
     let words = keywords(statement);
+    match words.first()?.as_str() {
+        // `PRAGMA name` and `PRAGMA name(arg)` (table_info, index_list)
+        // read, `PRAGMA name = value` writes. SQLite also accepts the
+        // parenthesised form for setting, but it is rare in practice.
+        "PRAGMA" => statement.contains('=').then(|| "PRAGMA".to_string()),
+        _ => words_write_kind(&words),
+    }
+}
+
+fn words_write_kind(words: &[String]) -> Option<String> {
     let first = words.first()?;
     match first.as_str() {
         "WITH" => words
             .iter()
             .find(|word| SQL_WRITE_KEYWORDS.contains(&word.as_str()))
             .cloned(),
-        // `PRAGMA name` and `PRAGMA name(arg)` (table_info, index_list)
-        // read, `PRAGMA name = value` writes. SQLite also accepts the
-        // parenthesised form for setting, but it is rare in practice.
-        "PRAGMA" => statement.contains('=').then(|| first.clone()),
+        // `EXPLAIN ANALYZE`, `EXPLAIN (ANALYZE, ...)` and MariaDB's
+        // `ANALYZE <statement>` execute the statement they explain, so they
+        // write when it does. `ANALYZE table` only gathers statistics.
+        "EXPLAIN" | "ANALYZE" => {
+            let verb = words
+                .iter()
+                .skip(1)
+                .position(|word| is_statement_verb(word))?
+                + 1;
+            let executes =
+                first == "ANALYZE" || words[1..verb].iter().any(|word| word == "ANALYZE");
+            if executes {
+                words_write_kind(&words[verb..])
+            } else {
+                None
+            }
+        }
         keyword => (!SQL_READ_KEYWORDS.contains(&keyword)).then(|| first.clone()),
     }
+}
+
+/// A keyword that starts the statement an `EXPLAIN` or `ANALYZE` wraps.
+fn is_statement_verb(word: &str) -> bool {
+    SQL_WRITE_KEYWORDS.contains(&word)
+        || matches!(
+            word,
+            "SELECT" | "WITH" | "VALUES" | "TABLE" | "FROM" | "EXECUTE"
+        )
 }
 
 fn redis_write_kind(line: &str) -> Option<String> {
@@ -282,12 +338,10 @@ fn scan(sql: &str, mut visit: impl FnMut(char, bool)) {
                 }
             }
             '-' if chars.peek() == Some(&'-') => {
-                for inner in chars.by_ref() {
-                    if inner == '\n' {
-                        break;
-                    }
-                }
-                visit(' ', false);
+                // The line break stays, since a SQL Server `GO` on the next
+                // line separates batches.
+                let ended_line = chars.by_ref().any(|inner| inner == '\n');
+                visit(if ended_line { '\n' } else { ' ' }, false);
             }
             '/' if chars.peek() == Some(&'*') => {
                 chars.next();
@@ -342,18 +396,49 @@ fn scan(sql: &str, mut visit: impl FnMut(char, bool)) {
 fn split_statements(sql: &str) -> Vec<String> {
     let mut statements = Vec::new();
     let mut current = String::new();
+    let mut line_start = 0;
+    let mut line_is_code = true;
     scan(sql, |c, inside| {
         if c == ';' && !inside {
             statements.push(std::mem::take(&mut current));
+            line_start = 0;
+        } else if c == '\n' && !inside && line_is_code && is_go_line(&current[line_start..]) {
+            // SQL Server's batch separator. Elsewhere it is a syntax error,
+            // so splitting on it cannot hide a write.
+            current.truncate(line_start);
+            statements.push(std::mem::take(&mut current));
+            line_start = 0;
         } else {
             current.push(c);
+            if c == '\n' && !inside {
+                line_start = current.len();
+                line_is_code = true;
+            }
+        }
+        if inside {
+            line_is_code = false;
         }
     });
+    if line_is_code && is_go_line(&current[line_start..]) {
+        current.truncate(line_start);
+    }
     statements.push(current);
     statements
         .into_iter()
         .filter(|statement| !statement.trim().is_empty())
         .collect()
+}
+
+/// A line holding only `GO` or `GO <count>`.
+fn is_go_line(line: &str) -> bool {
+    let mut words = line.split_whitespace();
+    words
+        .next()
+        .is_some_and(|word| word.eq_ignore_ascii_case("GO"))
+        && words
+            .next()
+            .is_none_or(|count| count.parse::<u32>().is_ok())
+        && words.next().is_none()
 }
 
 /// Remove string literals, quoted identifiers, comments and dollar quoted
@@ -438,6 +523,68 @@ mod tests {
                 "GET a\nset a 1\nCONFIG SET maxmemory 1mb"
             ),
             ["SET", "CONFIG SET"]
+        );
+    }
+
+    #[test]
+    fn explain_is_a_write_only_when_it_runs_a_write() {
+        for sql in [
+            "EXPLAIN DELETE FROM users",
+            "EXPLAIN (FORMAT JSON) UPDATE users SET name = 'x'",
+            "EXPLAIN ANALYZE SELECT * FROM users",
+            "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) SELECT 1",
+            "ANALYZE SELECT * FROM users",
+            "ANALYZE users",
+            "ANALYZE VERBOSE update_log",
+        ] {
+            assert_eq!(classify_sql(sql), StatementAccess::Read, "{sql}");
+        }
+        for sql in [
+            "EXPLAIN ANALYZE DELETE FROM users",
+            "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) UPDATE users SET name = 'x'",
+            "EXPLAIN ANALYZE WITH gone AS (DELETE FROM users RETURNING *) SELECT * FROM gone",
+            "ANALYZE INSERT INTO users VALUES (1)",
+            "ANALYZE FORMAT=JSON DELETE FROM users",
+            "SET STATISTICS PROFILE ON; DELETE FROM users; SET STATISTICS PROFILE OFF",
+        ] {
+            assert_eq!(classify_sql(sql), StatementAccess::Write, "{sql}");
+        }
+        assert_eq!(
+            write_kinds(
+                DatabaseType::PostgreSQL,
+                "EXPLAIN ANALYZE DELETE FROM users"
+            ),
+            ["DELETE"]
+        );
+    }
+
+    #[test]
+    fn go_separates_sql_server_batches() {
+        assert_eq!(
+            classify_sql("SET SHOWPLAN_ALL ON\nGO\nDELETE FROM users\nGO\nSET SHOWPLAN_ALL OFF"),
+            StatementAccess::Read,
+            "statements under SHOWPLAN are only compiled"
+        );
+        for sql in [
+            "SELECT 1\nGO\nDELETE FROM users",
+            "SELECT 1 -- note\ngo 2\nDELETE FROM users",
+            "SELECT 1\n  GO  \nINSERT INTO t VALUES (1)\nGO",
+        ] {
+            assert_eq!(classify_sql(sql), StatementAccess::Write, "{sql}");
+        }
+        assert_eq!(
+            write_kinds(DatabaseType::MsSql, "SELECT 1\nGO\nDELETE FROM users"),
+            ["DELETE"]
+        );
+        for sql in ["SELECT 'a\nGO\nDELETE'", "SELECT 1 GO"] {
+            assert_eq!(classify_sql(sql), StatementAccess::Read, "{sql}");
+        }
+        assert_eq!(
+            classify_sql(
+                "SET SHOWPLAN_XML ON\nGO\nSELECT 1\nGO\nSET SHOWPLAN_XML OFF\nGO\nDELETE FROM users"
+            ),
+            StatementAccess::Write,
+            "statements after SHOWPLAN is switched off run"
         );
     }
 
