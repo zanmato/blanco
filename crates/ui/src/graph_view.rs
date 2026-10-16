@@ -317,6 +317,12 @@ impl GraphView {
         }
     }
 
+    /// Draw every relationship, or only those of the selected tables.
+    pub fn set_show_all_edges(&mut self, show: bool, cx: &mut Context<Self>) {
+        self.show_all_edges = show;
+        cx.notify();
+    }
+
     pub fn set_model(&mut self, model: GraphModel, cx: &mut Context<Self>) {
         self.model = model;
         cx.notify();
@@ -882,7 +888,9 @@ impl Render for GraphView {
         let show_all_edges = self.show_all_edges;
         let selected_count = self.selected_nodes.len();
 
-        let edge_color = cx.theme().border;
+        // Not the border colour: themes may give the border and the secondary
+        // surface the canvas is tinted with the same colour, hiding the lines.
+        let edge_color = cx.theme().muted_foreground.opacity(0.5);
         let highlight_color = cx.theme().cyan;
         let bg = cx.theme().background;
         // Tint the canvas with the secondary surface so the background-filled
