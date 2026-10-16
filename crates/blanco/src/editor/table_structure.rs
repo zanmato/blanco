@@ -1438,7 +1438,7 @@ impl Render for TableStructureTab {
                     } else if self.loading {
                         div()
                             .text_color(theme.muted_foreground)
-                            .child("Loading...")
+                            .child("Loading…")
                             .into_any_element()
                     } else {
                         v_flex()

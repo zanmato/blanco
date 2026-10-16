@@ -282,7 +282,7 @@ impl SnippetsPanel {
     pub fn start_creating_group(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.creating_group = true;
         self.group_name_input =
-            Some(cx.new(|cx| InputState::new(window, cx).placeholder("Group name...")));
+            Some(cx.new(|cx| InputState::new(window, cx).placeholder("Group name")));
         cx.notify();
     }
 

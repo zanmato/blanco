@@ -1447,7 +1447,7 @@ impl BlancoApp {
                     .items_center()
                     .gap_2()
                     .child(Icon::new(IconName::Search).size(px(14.)))
-                    .child("Search commands..."),
+                    .child("Search commands"),
             )
             .when_some(shortcut, |this, kbd| this.child(kbd))
     }

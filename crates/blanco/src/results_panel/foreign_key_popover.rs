@@ -109,7 +109,7 @@ impl Render for ForeignKeyPopover {
                     v_flex().items_center().justify_center().p_4().child(
                         div()
                             .text_color(cx.theme().muted_foreground)
-                            .child("Loading..."),
+                            .child("Loading…"),
                     ),
                 )
             })

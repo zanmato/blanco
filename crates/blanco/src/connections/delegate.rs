@@ -752,15 +752,15 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                         let operations: Vec<(&str, TableOperation)> = match metadata.kind {
                             TreeItemKind::Table => vec![
                                 (
-                                    "Rename...",
+                                    "Rename…",
                                     TableOperation::Rename {
                                         new_name: String::new(),
                                     },
                                 ),
-                                ("Truncate...", TableOperation::Truncate),
-                                ("Drop...", TableOperation::Drop),
+                                ("Truncate…", TableOperation::Truncate),
+                                ("Drop…", TableOperation::Drop),
                             ],
-                            _ => vec![("Drop...", TableOperation::Drop)],
+                            _ => vec![("Drop…", TableOperation::Drop)],
                         };
                         menu = menu.separator();
                         for (label, operation) in operations {

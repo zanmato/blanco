@@ -32,7 +32,7 @@ pub struct SnippetEditor {
 
 impl SnippetEditor {
     pub fn new(kind: EditorKind, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let name_input = cx.new(|cx| InputState::new(window, cx).placeholder("Snippet name..."));
+        let name_input = cx.new(|cx| InputState::new(window, cx).placeholder("Snippet name"));
         let trigger_input = cx.new(|cx| InputState::new(window, cx).placeholder("Trigger word"));
         let editor = Self::build_editor(kind, window, cx);
 

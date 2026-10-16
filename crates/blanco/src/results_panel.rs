@@ -252,7 +252,7 @@ impl ResultsPanel {
 
         let chart_view = cx.new(|cx| ChartView::new(table_state.clone(), window, cx));
 
-        let filter_input = cx.new(|cx| InputState::new(window, cx).placeholder("Filter rows..."));
+        let filter_input = cx.new(|cx| InputState::new(window, cx).placeholder("Filter rows"));
         let filter_subscription = cx.subscribe_in(
             &filter_input,
             window,

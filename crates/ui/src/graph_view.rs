@@ -1060,7 +1060,7 @@ impl Render for GraphView {
                         .items_center()
                         .justify_center()
                         .text_color(muted)
-                        .child("Loading schema..."),
+                        .child("Loading schema…"),
                 )
             })
             .when_some(error, |el, err| {

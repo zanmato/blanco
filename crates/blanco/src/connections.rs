@@ -230,7 +230,7 @@ impl CreateNewQueryTabParams for TreeItemMetadata {
 
 impl ConnectionsPanel {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let filter_input = cx.new(|cx| InputState::new(window, cx).placeholder("Filter..."));
+        let filter_input = cx.new(|cx| InputState::new(window, cx).placeholder("Filter"));
         let filter_subscription =
             cx.subscribe(&filter_input, |this, _input, event: &InputEvent, cx| {
                 if let InputEvent::Change = event {

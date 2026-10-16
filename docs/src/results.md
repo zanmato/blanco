@@ -9,7 +9,7 @@ each gets its own tab. Pin a result tab to keep it when you run again.
   sort by it as well.
 - The **Columns** button hides, reorders and pins columns. The layout is
   remembered per table.
-- Type in **Filter rows...** to show only rows that contain some text. This
+- Type in **Filter rows** to show only rows that contain some text. This
   filters what is already loaded. To filter on the server, see
   [Filtering](filtering.md).
 - Settings can show row numbers, and choose how dates and time zones are

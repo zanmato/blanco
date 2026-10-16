@@ -53,8 +53,7 @@ pub struct HistoryPanel {
 
 impl HistoryPanel {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let search_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Search history..."));
+        let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("Search history"));
 
         let search_subscription =
             cx.subscribe(&search_input, |this, _input, event: &InputEvent, cx| {

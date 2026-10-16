@@ -198,7 +198,7 @@ impl CommandPalette {
         cx: &mut Context<Self>,
     ) -> Self {
         let query_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Type a command or search..."));
+            cx.new(|cx| InputState::new(window, cx).placeholder("Type a command or search"));
 
         let delegate = CommandPaletteDelegate::new(sidebar, editor_panel, cx);
         let list_state = cx.new(|cx| ListState::new(delegate, window, cx).searchable(false));
@@ -316,7 +316,7 @@ impl CommandPalette {
             ItemKind::Database(database) => {
                 let crumb: SharedString = database.database_name.clone().into();
                 let leaves = database_action_leaves(&database);
-                self.push_level(crumb, leaves, "Search actions...", window, cx);
+                self.push_level(crumb, leaves, "Search actions", window, cx);
             }
         }
     }
@@ -482,7 +482,7 @@ impl CommandPalette {
                                 .into_iter()
                                 .map(|name| database_item(&connection, name))
                                 .collect();
-                            this.push_level(crumb, items, "Search databases...", window, cx);
+                            this.push_level(crumb, items, "Search databases", window, cx);
                         }
                         None => {
                             // Schemaless backend: skip the database level entirely.
@@ -494,7 +494,7 @@ impl CommandPalette {
                                 database_name: connection.default_database.clone(),
                             };
                             let leaves = database_action_leaves(&database);
-                            this.push_level(crumb, leaves, "Search actions...", window, cx);
+                            this.push_level(crumb, leaves, "Search actions", window, cx);
                         }
                     }
                 }
@@ -519,7 +519,7 @@ impl CommandPalette {
         self.visible = true;
         self.query_input.update(cx, |input, cx| {
             input.set_value("", window, cx);
-            input.set_placeholder("Type a command or search...", window, cx);
+            input.set_placeholder("Type a command or search", window, cx);
         });
         self.list_state.update(cx, |state, cx| {
             state.delegate_mut().refresh_commands(cx);
@@ -1023,7 +1023,7 @@ impl CommandPaletteDelegate {
         self.stack
             .last()
             .map(|level| level.placeholder.clone())
-            .unwrap_or_else(|| SharedString::new_static("Type a command or search..."))
+            .unwrap_or_else(|| SharedString::new_static("Type a command or search"))
     }
 
     fn set_query(&mut self, query: &str, cx: &mut Context<ListState<Self>>) {

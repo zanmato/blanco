@@ -750,7 +750,7 @@ impl Render for NewConnectionModal {
                             .bg(cx.theme().blue.opacity(0.1))
                             .text_color(cx.theme().blue)
                             .child(Icon::new(IconName::LoaderCircle).size_4())
-                            .child(div().text_sm().child("Testing connection...")),
+                            .child(div().text_sm().child("Testing connection…")),
                     )
                 }),
         )
