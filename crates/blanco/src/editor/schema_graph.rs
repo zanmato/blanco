@@ -24,6 +24,12 @@ pub struct SchemaGraphTab {
 }
 
 impl SchemaGraphTab {
+    #[cfg(feature = "screenshots")]
+    pub(crate) fn show_all_edges(&mut self, cx: &mut Context<Self>) {
+        self.graph_view
+            .update(cx, |view, cx| view.set_show_all_edges(true, cx));
+    }
+
     pub fn new(context: ConnectionContext, _window: &mut Window, cx: &mut Context<Self>) -> Self {
         let graph_view = cx.new(|cx| {
             let mut view = GraphView::new(cx);

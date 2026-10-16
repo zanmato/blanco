@@ -1378,15 +1378,7 @@ impl ConnectionsPanel {
         };
 
         let modal_content = cx.new(|cx| ImportModal::new(context, table_name, window, cx));
-
-        window.open_dialog(cx, move |dialog, _window, _cx| {
-            dialog
-                .title("Import CSV")
-                .w(px(780.0))
-                .h(px(780.0))
-                .overlay_closable(false)
-                .child(modal_content.clone())
-        })
+        crate::import::modal::open_import_dialog(modal_content, window, cx);
     }
 
     /// Set loading state for a tree item by updating the tree entry directly

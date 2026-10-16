@@ -2,4 +2,5 @@
 .cargo
 .claude
 /_site
+/docs/book
 update-signing/

@@ -115,6 +115,18 @@ pub struct ImportModal {
     _mapping_subscriptions: Vec<Subscription>,
 }
 
+/// Opens the import dialog for `modal`.
+pub fn open_import_dialog(modal: Entity<ImportModal>, window: &mut Window, cx: &mut App) {
+    window.open_dialog(cx, move |dialog, _window, _cx| {
+        dialog
+            .title("Import CSV")
+            .w(px(780.0))
+            .h(px(780.0))
+            .overlay_closable(false)
+            .child(modal.clone())
+    })
+}
+
 impl ImportModal {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -427,6 +439,15 @@ impl ImportModal {
             Some(())
         })
         .detach();
+    }
+
+    /// Load `path` as if it had been picked with Browse.
+    #[cfg(feature = "screenshots")]
+    pub(crate) fn load_file(&mut self, path: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.file_input.update(cx, |input, cx| {
+            input.set_value(path.to_string(), window, cx);
+        });
+        self.redetect(window, cx);
     }
 
     fn redetect(&mut self, window: &mut Window, cx: &mut Context<Self>) {

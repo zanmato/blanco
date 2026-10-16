@@ -97,7 +97,7 @@ impl ResultsPanel {
         Some(bar)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "screenshots"))]
     pub fn active_filter_bar(&self) -> Option<Entity<FilterBar>> {
         self.result_tabs.get(self.active_tab)?.filter_bar.clone()
     }

@@ -1651,6 +1651,26 @@ impl EditorPanel {
         });
     }
 
+    /// The active tab when it is a schema graph.
+    #[cfg(feature = "screenshots")]
+    pub(crate) fn active_schema_graph_tab(
+        &self,
+    ) -> Option<Entity<self::schema_graph::SchemaGraphTab>> {
+        match self.tabs.get(self.active_tab_ix) {
+            Some(TabType::SchemaGraph(tab)) => Some(tab.clone()),
+            _ => None,
+        }
+    }
+
+    /// The active tab when it is a table's structure.
+    #[cfg(feature = "screenshots")]
+    pub(crate) fn active_structure_tab(&self) -> Option<Entity<TableStructureTab>> {
+        match self.tabs.get(self.active_tab_ix) {
+            Some(TabType::TableStructure(tab)) => Some(tab.clone()),
+            _ => None,
+        }
+    }
+
     pub fn toggle_sql_view_for_active_tab(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         if let Some(TabType::Query(query_tab)) = self.tabs.get_mut(self.active_tab_ix) {
             query_tab.sql_view_visible = !query_tab.sql_view_visible;

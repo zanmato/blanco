@@ -375,6 +375,28 @@ impl TableStructureTab {
         self.restage(window, cx);
     }
 
+    /// Stage a column change as its dialog would.
+    #[cfg(feature = "screenshots")]
+    pub(crate) fn stage_column(
+        &mut self,
+        operation: ColumnOperation,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.stage(StructureChange::Column(operation), window, cx);
+    }
+
+    /// Stage an index change as its dialog would.
+    #[cfg(feature = "screenshots")]
+    pub(crate) fn stage_index(
+        &mut self,
+        operation: IndexOperation,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.stage(StructureChange::Index(operation), window, cx);
+    }
+
     /// Drop one pending change. Later changes that depended on it (an index
     /// on a column it added) go with it.
     pub fn undo_change(&mut self, change_ix: usize, window: &mut Window, cx: &mut Context<Self>) {

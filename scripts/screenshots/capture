@@ -4,7 +4,9 @@
 #
 # Usage: scripts/screenshots/capture [scene...]
 #
-# Scenes: editor inline-edit terminal script snippets (default: all).
+# Scenes: editor inline-edit json-edit terminal script snippets structure
+# filter chart explain schema-graph history palette settings export import
+# (default: all).
 # Writes docs/images/screenshots/<scene>-<theme>.webp, and a lossless
 # <scene>-<theme>.png per capture into $PNG_DIR when that is set.
 #
@@ -25,7 +27,8 @@ out="$root/docs/images/screenshots"
 
 scenes=("$@")
 if [[ ${#scenes[@]} -eq 0 ]]; then
-  scenes=(editor inline-edit terminal script snippets)
+  scenes=(editor inline-edit json-edit terminal script snippets structure filter
+    chart explain schema-graph history palette settings export import)
 fi
 
 # The light and dark pair every scene gets, plus extra themes for the editor.

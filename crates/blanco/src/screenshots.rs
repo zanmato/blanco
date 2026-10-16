@@ -11,13 +11,20 @@ use std::time::Duration;
 use app_database::{
     AppDatabase, ConnectionData, EditorKind, QueryTabData, SnippetData, WindowGeometry,
 };
-use gpui::{App, AsyncWindowContext, Entity, Window};
+use blanco_core::ddl::{ColumnOperation, ColumnSpec, IndexOperation};
+use blanco_core::{ConnectionContext, DatabaseType};
+use gpui::{App, AppContext, AsyncWindowContext, Entity, Window};
 use tokio::runtime::Handle;
 
-use crate::app::{BlancoApp, ConnectToConnection, SidebarTab};
+use crate::app::{
+    BlancoApp, ConnectToConnection, OpenSchemaGraph, OpenSettings, OpenTableStructure,
+    ShowQueryInNewTab, SidebarTab, ToggleCommandPalette,
+};
 use crate::app_settings::AppSettings;
 use crate::editor::EditorPanel;
-use crate::results_panel::CellInput;
+use crate::export::modal::{ExportModal, open_export_dialog};
+use crate::import::modal::{ImportModal, open_import_dialog};
+use crate::results_panel::{CellInput, ChartKind, ResultViewMode, ResultsTableDelegate};
 
 // The visible frame is 1600x1000. On Linux the client-side frame adds a 20px
 // shadow inset on every side, which the capture script crops away.
@@ -84,6 +91,20 @@ console.log(`${restock.length} need restocking`);
 db.display(restock);
 "#;
 
+/// [`Scene::JsonEdit`] opens this in a tab of its own and expands the
+/// preferences of the row at [`JSON_EDIT_CELL`].
+const CUSTOMERS_QUERY: &str = "SELECT id, first_name, last_name, city, preferences FROM customers";
+const JSON_EDIT_CELL: (usize, usize) = (2, 4);
+
+/// The file [`Scene::Import`] loads into the albums table.
+const NEW_RELEASES_CSV: &str = "title,artist_id,genre_id,release_year,format,price,stock
+Night Ferry,4,2,2026,LP,27.99,40
+Night Ferry,4,2,2026,2LP,34.99,15
+Salt and Static,11,5,2026,LP,24.99,30
+Glass Orchard,7,1,2026,12\",14.99,60
+Low Country Hymns,19,3,2026,LP,26.99,25
+";
+
 const TOP_CUSTOMERS_SNIPPET: &str = r#"-- Customers by lifetime spend
 SELECT
   c.first_name || ' ' || c.last_name AS customer,
@@ -108,12 +129,35 @@ pub(crate) enum Scene {
     Editor,
     /// Result cells edited in place, one of them still open for editing.
     InlineEdit,
+    /// A JSON cell open in the expanded editor, formatted.
+    JsonEdit,
     /// The terminal pane docked under a query tab, running Claude Code.
     Terminal,
     /// A script that has run, with its log and the grid it displayed.
     Script,
     /// The snippets sidebar with a snippet open in the editor.
     Snippets,
+    /// The structure of the albums table with a column and an index on it
+    /// staged.
+    Structure,
+    /// The low stock result filtered on the server to LP records.
+    Filter,
+    /// The revenue statement's result drawn as a chart.
+    Chart,
+    /// The revenue statement's query plan.
+    Explain,
+    /// The ER diagram of the demo database.
+    SchemaGraph,
+    /// The history panel after a few runs.
+    History,
+    /// The command palette open over the editor.
+    Palette,
+    /// The settings tab.
+    Settings,
+    /// The export dialog for the albums table.
+    Export,
+    /// The import dialog with a CSV of new releases loaded.
+    Import,
     /// Not a screenshot: a grid of 1 MB text values, scrolled and then
     /// redrawn in place, after which the app quits. Run with
     /// `ZED_MEASUREMENTS=1` to time each frame (scripts/measure-frames).
@@ -130,9 +174,20 @@ impl Scene {
         match scene.as_str() {
             "editor" => Some(Self::Editor),
             "inline-edit" => Some(Self::InlineEdit),
+            "json-edit" => Some(Self::JsonEdit),
             "terminal" => Some(Self::Terminal),
             "script" => Some(Self::Script),
             "snippets" => Some(Self::Snippets),
+            "structure" => Some(Self::Structure),
+            "filter" => Some(Self::Filter),
+            "chart" => Some(Self::Chart),
+            "explain" => Some(Self::Explain),
+            "schema-graph" => Some(Self::SchemaGraph),
+            "history" => Some(Self::History),
+            "palette" => Some(Self::Palette),
+            "settings" => Some(Self::Settings),
+            "export" => Some(Self::Export),
+            "import" => Some(Self::Import),
             "large-values" => Some(Self::LargeValues),
             "large-query" => Some(Self::LargeQuery),
             _ => {
@@ -145,8 +200,21 @@ impl Scene {
     /// The editor tab the scene brings to the front, in seeding order.
     fn tab_index(self) -> usize {
         match self {
-            Self::Editor | Self::Terminal | Self::Snippets | Self::LargeQuery => 0,
-            Self::InlineEdit | Self::LargeValues => 1,
+            Self::Editor
+            | Self::Terminal
+            | Self::Snippets
+            | Self::LargeQuery
+            | Self::Structure
+            | Self::Chart
+            | Self::Explain
+            | Self::SchemaGraph
+            | Self::History
+            | Self::Palette
+            | Self::Settings
+            | Self::Export
+            | Self::Import
+            | Self::JsonEdit => 0,
+            Self::InlineEdit | Self::LargeValues | Self::Filter => 1,
             Self::Script => 2,
         }
     }
@@ -343,6 +411,45 @@ async fn stage_scene(
                 })?;
             }
         }
+        Scene::JsonEdit => {
+            cx.update(|window, cx| {
+                window.dispatch_action(
+                    Box::new(ShowQueryInNewTab {
+                        connection_id: 1,
+                        database_name: "main".to_string(),
+                        schema_name: None,
+                        title: "customers".to_string(),
+                        sql: CUSTOMERS_QUERY.to_string(),
+                    }),
+                    cx,
+                );
+            })?;
+            settle(cx, 300).await;
+            hide_sql_log(&editor_panel, cx)?;
+            editor_panel.update_in(cx, |panel, window, cx| {
+                panel.set_pane_heights(gpui::px(120.), gpui::px(120.), window, cx);
+            })?;
+            wait_for_run(&editor_panel, cx).await?;
+            let results_panel = editor_panel
+                .read_with(cx, |panel, _| panel.active_results_panel())
+                .ok_or_else(|| anyhow::anyhow!("no results panel"))?;
+            let (row, column) = JSON_EDIT_CELL;
+            results_panel.update_in(cx, |panel, window, cx| {
+                panel.start_cell_edit(row, column, window, cx);
+            })?;
+            settle(cx, 200).await;
+            let table_state = results_panel.read_with(cx, |panel, _| panel.table_state().clone());
+            table_state.update_in(cx, |state, window, cx| {
+                ResultsTableDelegate::handle_maximize(state, row, column, false, window, cx);
+                // Drag the grip down and to the left, so the whole document
+                // shows.
+                let size = &mut state.delegate_mut().edit_state.expanded_size;
+                size.start_drag();
+                size.drag_to(gpui::point(gpui::px(0.), gpui::px(0.)));
+                size.drag_to(gpui::point(gpui::px(-180.), gpui::px(180.)));
+                cx.notify();
+            })?;
+        }
         Scene::Terminal => {
             hide_sql_log(&editor_panel, cx)?;
             run_active_tab(&editor_panel, cx).await?;
@@ -391,6 +498,162 @@ async fn stage_scene(
             // The first snippet after its group.
             editor_panel.update_in(cx, |panel, window, cx| {
                 panel.open_snippet_tab(2, window, cx);
+            })?;
+        }
+        Scene::Structure => {
+            cx.update(|window, cx| {
+                window.dispatch_action(
+                    Box::new(OpenTableStructure {
+                        context: demo_context(),
+                        table_name: "albums".to_string(),
+                    }),
+                    cx,
+                );
+            })?;
+            settle(cx, 1500).await;
+            let structure = editor_panel
+                .read_with(cx, |panel, _| panel.active_structure_tab())
+                .ok_or_else(|| anyhow::anyhow!("no structure tab"))?;
+            structure.update_in(cx, |tab, window, cx| {
+                tab.stage_column(
+                    ColumnOperation::Add(ColumnSpec {
+                        name: "label".to_string(),
+                        data_type: "TEXT".to_string(),
+                        nullable: true,
+                        default: None,
+                    }),
+                    window,
+                    cx,
+                );
+                tab.stage_index(
+                    IndexOperation::Create {
+                        name: "albums_label_idx".to_string(),
+                        columns: vec!["label".to_string()],
+                        unique: false,
+                    },
+                    window,
+                    cx,
+                );
+            })?;
+        }
+        Scene::Filter => {
+            hide_sql_log(&editor_panel, cx)?;
+            editor_panel.update_in(cx, |panel, window, cx| {
+                panel.set_pane_heights(gpui::px(160.), gpui::px(120.), window, cx);
+            })?;
+            run_active_tab(&editor_panel, cx).await?;
+            let results_panel = editor_panel
+                .read_with(cx, |panel, _| panel.active_results_panel())
+                .ok_or_else(|| anyhow::anyhow!("no results panel"))?;
+            results_panel.update_in(cx, |panel, window, cx| {
+                panel.toggle_filter_bar(window, cx);
+            })?;
+            settle(cx, 300).await;
+            let filter_bar = results_panel
+                .read_with(cx, |panel, _| panel.active_filter_bar())
+                .ok_or_else(|| anyhow::anyhow!("no filter bar"))?;
+            filter_bar.update_in(cx, |bar, window, cx| {
+                bar.filter_by_value("format", Some("LP"), window, cx);
+            })?;
+            for _ in 0..100 {
+                settle(cx, 50).await;
+                if !filter_bar.read_with(cx, |bar, _| bar.is_running()) {
+                    break;
+                }
+            }
+        }
+        Scene::Chart => {
+            hide_sql_log(&editor_panel, cx)?;
+            place_caret_in_revenue_statement(&editor_panel, cx)?;
+            run_active_tab(&editor_panel, cx).await?;
+            let results_panel = editor_panel
+                .read_with(cx, |panel, _| panel.active_results_panel())
+                .ok_or_else(|| anyhow::anyhow!("no results panel"))?;
+            results_panel.update_in(cx, |panel, _, cx| {
+                panel.set_view_mode(ResultViewMode::Chart, cx);
+            })?;
+            let chart = results_panel
+                .read_with(cx, |panel, _| panel.active_chart_view())
+                .ok_or_else(|| anyhow::anyhow!("no chart view"))?;
+            chart.update_in(cx, |chart, window, cx| {
+                chart.show(ChartKind::Bar, "genre", "revenue", window, cx);
+            })?;
+        }
+        Scene::Explain => {
+            hide_sql_log(&editor_panel, cx)?;
+            place_caret_in_revenue_statement(&editor_panel, cx)?;
+            editor_panel.update_in(cx, |panel, window, cx| {
+                panel.on_explain_query(window, cx);
+            })?;
+            wait_for_run(&editor_panel, cx).await?;
+        }
+        Scene::SchemaGraph => {
+            cx.update(|window, cx| {
+                window.dispatch_action(
+                    Box::new(OpenSchemaGraph {
+                        context: demo_context(),
+                    }),
+                    cx,
+                );
+            })?;
+            settle(cx, 1500).await;
+            let graph = editor_panel
+                .read_with(cx, |panel, _| panel.active_schema_graph_tab())
+                .ok_or_else(|| anyhow::anyhow!("no schema graph tab"))?;
+            graph.update(cx, |graph, cx| graph.show_all_edges(cx));
+        }
+        Scene::History => {
+            hide_sql_log(&editor_panel, cx)?;
+            editor_panel.update_in(cx, |panel, window, cx| {
+                panel.activate_tab(1, window, cx);
+            })?;
+            run_active_tab(&editor_panel, cx).await?;
+            editor_panel.update_in(cx, |panel, window, cx| {
+                panel.activate_tab(0, window, cx);
+            })?;
+            settle(cx, 300).await;
+            place_caret_in_revenue_statement(&editor_panel, cx)?;
+            run_active_tab(&editor_panel, cx).await?;
+            app.update_in(cx, |app, _, cx| {
+                app.select_sidebar_tab(SidebarTab::History, cx);
+            })?;
+        }
+        Scene::Palette => {
+            hide_sql_log(&editor_panel, cx)?;
+            place_caret_in_revenue_statement(&editor_panel, cx)?;
+            run_active_tab(&editor_panel, cx).await?;
+            cx.update(|window, cx| {
+                window.dispatch_action(Box::new(ToggleCommandPalette), cx);
+            })?;
+        }
+        Scene::Settings => {
+            cx.update(|window, cx| {
+                window.dispatch_action(Box::new(OpenSettings), cx);
+            })?;
+        }
+        Scene::Export => {
+            hide_sql_log(&editor_panel, cx)?;
+            cx.update(|window, cx| {
+                let modal =
+                    cx.new(|cx| ExportModal::new(demo_context(), "albums".to_string(), window, cx));
+                open_export_dialog(modal, window, cx);
+            })?;
+        }
+        Scene::Import => {
+            hide_sql_log(&editor_panel, cx)?;
+            // Under the temporary folder rather than the run's own, so the
+            // dialog shows a short path.
+            let csv_path = std::env::temp_dir().join("new-releases.csv");
+            std::fs::write(&csv_path, NEW_RELEASES_CSV)?;
+            let csv_path = csv_path
+                .to_str()
+                .ok_or_else(|| anyhow::anyhow!("the CSV path is not UTF-8"))?
+                .to_string();
+            cx.update(|window, cx| {
+                let modal =
+                    cx.new(|cx| ImportModal::new(demo_context(), "albums".to_string(), window, cx));
+                modal.update(cx, |modal, cx| modal.load_file(&csv_path, window, cx));
+                open_import_dialog(modal, window, cx);
             })?;
         }
         Scene::LargeValues => {
@@ -535,12 +798,32 @@ fn hide_sql_log(
     })
 }
 
+/// The demo connection the seed created, on SQLite's main database.
+fn demo_context() -> ConnectionContext {
+    ConnectionContext {
+        connection_id: 1,
+        connection_name: "Groove Records".to_string(),
+        db_type: DatabaseType::SQLite,
+        database_name: "main".to_string(),
+        schema_name: None,
+        environment_type: None,
+    }
+}
+
 /// Run the active tab and wait for it to finish.
 async fn run_active_tab(
     editor_panel: &Entity<EditorPanel>,
     cx: &mut AsyncWindowContext,
 ) -> anyhow::Result<()> {
     editor_panel.update_in(cx, |panel, window, cx| panel.on_run_query(window, cx))?;
+    wait_for_run(editor_panel, cx).await
+}
+
+/// Wait for the run the active tab started to finish.
+async fn wait_for_run(
+    editor_panel: &Entity<EditorPanel>,
+    cx: &mut AsyncWindowContext,
+) -> anyhow::Result<()> {
     for _ in 0..200 {
         settle(cx, 50).await;
         if !editor_panel.read_with(cx, |panel, _| panel.is_loading()) {

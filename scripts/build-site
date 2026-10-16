@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# Builds the GitHub Pages site from site/ into _site/.
+# Builds the GitHub Pages site from site/ into _site/, with the mdBook in docs/
+# under _site/docs/.
 #
 # Usage: scripts/build-site [version]
 # The version defaults to the workspace version in Cargo.toml. Preview with
 # `python3 -m http.server -d _site`. The screenshots come from
-# docs/images/screenshots, see scripts/screenshots/capture.
+# docs/images/screenshots, see scripts/screenshots/capture. Needs mdbook on
+# PATH, or its path in MDBOOK.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -63,5 +65,8 @@ awk -v version="$version" -v date="$release_date" '
   /__CHANGELOG__/ { printf "%s", notes; next }
   { gsub(/__VERSION__/, version); gsub(/__RELEASE_DATE__/, date); print }
 ' "$notes" site/index.html > "$out/index.html"
+
+# mdBook resolves a relative destination against the book, not the caller.
+"${MDBOOK:-mdbook}" build docs --dest-dir "$(realpath "$out")/docs"
 
 echo "Built $out for v$version"

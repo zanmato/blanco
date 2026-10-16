@@ -1,0 +1,26 @@
+[book]
+title = "Blanco"
+description = "How to use Blanco, a cross platform SQL editor."
+language = "en"
+src = "src"
+
+[build]
+build-dir = "book"
+create-missing = false
+
+[output.html]
+site-url = "/blanco/docs/"
+git-repository-url = "https://github.com/zanmato/blanco"
+edit-url-template = "https://github.com/zanmato/blanco/edit/main/docs/{path}"
+default-theme = "light"
+preferred-dark-theme = "navy"
+additional-css = ["theme/blanco.css"]
+additional-js = ["theme/blanco.js"]
+no-section-label = true
+
+[output.html.fold]
+enable = true
+level = 1
+
+[output.html.search]
+limit-results = 20

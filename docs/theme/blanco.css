@@ -1,0 +1,174 @@
+/* Gives mdBook's themes the landing page's Catppuccin palette and fonts. The
+   theme picker is hidden: like the landing page, the docs follow the system
+   appearance, so mdBook's light themes all get Latte and its dark ones Mocha. */
+
+@import url("https://fonts.googleapis.com/css2?family=Red+Hat+Display:wght@500..900&family=Figtree:ital,wght@0,400..700;1,400..700&family=JetBrains+Mono:wght@400;500;700&display=swap");
+
+:root {
+  --mono-font: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  --code-font-size: 0.875em;
+  --content-max-width: 760px;
+}
+
+html.light,
+html.rust,
+html:not(.js) {
+  --bg: #eff1f5;
+  --fg: #1e1e2e;
+  --sidebar-bg: #e6e9ef;
+  --sidebar-fg: #4c4f69;
+  --sidebar-non-existant: #9ca0b0;
+  --sidebar-active: #8839ef;
+  --sidebar-spacer: #ccd0da;
+  --sidebar-header-border-color: #8839ef;
+  --scrollbar: #9ca0b0;
+  --icons: #6c6f85;
+  --icons-hover: #1e1e2e;
+  --links: #8839ef;
+  --inline-code-color: #4c4f69;
+  --theme-popup-bg: #e6e9ef;
+  --theme-popup-border: #ccd0da;
+  --theme-hover: #dce0e8;
+  --quote-bg: #e6e9ef;
+  --quote-border: #ccd0da;
+  --warning-border: #fe640b;
+  --table-border-color: #ccd0da;
+  --table-header-bg: #dce0e8;
+  --table-alternate-bg: #e6e9ef;
+  --searchbar-border-color: #ccd0da;
+  --searchbar-bg: #ffffff;
+  --searchbar-fg: #1e1e2e;
+  --searchbar-shadow-color: #ccd0da;
+  --searchresults-header-fg: #5c5f77;
+  --searchresults-border-color: #ccd0da;
+  --searchresults-li-bg: #ece2fd;
+  --search-mark-bg: #ece2fd;
+  --footnote-highlight: #8839ef;
+  --blockquote-note-color: #1e66f5;
+  --blockquote-tip-color: #40a02b;
+  --blockquote-important-color: #8839ef;
+  --blockquote-warning-color: #df8e1d;
+  --blockquote-caution-color: #d20f39;
+  --code-bg: #e6e9ef;
+}
+
+html.navy,
+html.coal,
+html.ayu {
+  --bg: #1e1e2e;
+  --fg: #cdd6f4;
+  --sidebar-bg: #181825;
+  --sidebar-fg: #bac2de;
+  --sidebar-non-existant: #6c7086;
+  --sidebar-active: #cba6f7;
+  --sidebar-spacer: #313244;
+  --sidebar-header-border-color: #cba6f7;
+  --scrollbar: #6c7086;
+  --icons: #a6adc8;
+  --icons-hover: #cdd6f4;
+  --links: #cba6f7;
+  --inline-code-color: #cdd6f4;
+  --theme-popup-bg: #181825;
+  --theme-popup-border: #313244;
+  --theme-hover: #313244;
+  --quote-bg: #181825;
+  --quote-border: #313244;
+  --warning-border: #fab387;
+  --table-border-color: #313244;
+  --table-header-bg: #313244;
+  --table-alternate-bg: #181825;
+  --searchbar-border-color: #313244;
+  --searchbar-bg: #181825;
+  --searchbar-fg: #cdd6f4;
+  --searchbar-shadow-color: #11111b;
+  --searchresults-header-fg: #a6adc8;
+  --searchresults-border-color: #313244;
+  --searchresults-li-bg: #2f2a45;
+  --search-mark-bg: #2f2a45;
+  --footnote-highlight: #cba6f7;
+  --blockquote-note-color: #89b4fa;
+  --blockquote-tip-color: #a6e3a1;
+  --blockquote-important-color: #cba6f7;
+  --blockquote-warning-color: #f9e2af;
+  --blockquote-caution-color: #f38ba8;
+  --code-bg: #181825;
+}
+
+html {
+  font-family: "Figtree", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+/* mdBook sets the root font size to 62.5%, so 1rem is 10px here. 1.7rem is
+   the landing page's 17px. */
+body {
+  font-size: 1.7rem;
+  line-height: 1.6;
+}
+
+.sidebar {
+  font-size: 1.5rem;
+}
+
+.content h1,
+.content h2,
+.content h3,
+.menu-title {
+  font-family: "Red Hat Display", ui-sans-serif, system-ui, sans-serif;
+  font-weight: 700;
+}
+
+.menu-title a {
+  color: inherit;
+  text-decoration: none;
+}
+
+#mdbook-theme-toggle {
+  display: none;
+}
+
+.content :not(pre) > code {
+  background: var(--code-bg);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+}
+
+.content pre > code.hljs {
+  background: var(--code-bg);
+}
+
+kbd {
+  font-family: var(--mono-font);
+  font-size: 0.85em;
+  padding: 0.1em 0.4em;
+  border: 1px solid var(--table-border-color);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--code-bg);
+  color: var(--fg);
+}
+
+/* Screenshots come in a Latte and a Mocha capture. Pages include both and
+   the theme decides which one shows. */
+.content img {
+  border-radius: 8px;
+  max-width: 100%;
+}
+
+html.light .screenshot-dark,
+html.rust .screenshot-dark,
+html:not(.js) .screenshot-dark,
+html.navy .screenshot-light,
+html.coal .screenshot-light,
+html.ayu .screenshot-light {
+  display: none;
+}
+
+figure.screenshot {
+  margin: 1.5em 0;
+}
+
+figure.screenshot figcaption {
+  color: var(--icons);
+  font-size: 0.9em;
+  margin-top: 0.5em;
+}

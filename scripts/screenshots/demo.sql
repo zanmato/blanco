@@ -35,7 +35,9 @@ CREATE TABLE customers (
     last_name TEXT NOT NULL,
     email TEXT NOT NULL UNIQUE,
     city TEXT NOT NULL,
-    joined_at TEXT NOT NULL
+    joined_at TEXT NOT NULL,
+    -- A JSON document, which the grid opens in its JSON editor.
+    preferences TEXT
 );
 
 CREATE TABLE orders (
@@ -144,14 +146,28 @@ SELECT
 FROM seq;
 
 WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM seq WHERE n < 6000)
-INSERT INTO customers (id, first_name, last_name, email, city, joined_at)
+INSERT INTO customers (id, first_name, last_name, email, city, joined_at, preferences)
 SELECT
     n,
     f.word,
     l.word,
     lower(f.word) || '.' || lower(l.word) || n || '@example.com',
     (SELECT word FROM words WHERE list = 'city' AND ix = (n * 7) % 16),
-    date('2019-01-01', '+' || ((n * 97) % 2400) || ' days')
+    date('2019-01-01', '+' || ((n * 97) % 2400) || ' days'),
+    json_object(
+        'newsletter', json(CASE WHEN n % 3 = 0 THEN 'false' ELSE 'true' END),
+        'formats', json(CASE n % 4
+            WHEN 0 THEN '["LP"]'
+            WHEN 1 THEN '["LP","2LP"]'
+            WHEN 2 THEN '["7\"","12\""]'
+            ELSE '["LP","12\""]' END),
+        'genres', json_array(
+            (SELECT name FROM genres WHERE id = 1 + n % 12),
+            (SELECT name FROM genres WHERE id = 1 + (n * 5 + 3) % 12)),
+        'shipping', json_object(
+            'method', CASE n % 3 WHEN 0 THEN 'pickup' WHEN 1 THEN 'tracked' ELSE 'standard' END,
+            'signature', json(CASE WHEN n % 4 = 0 THEN 'true' ELSE 'false' END),
+            'gift_wrap', json(CASE WHEN n % 7 = 0 THEN 'true' ELSE 'false' END)))
 FROM seq
 JOIN words f ON f.list = 'first' AND f.ix = (n * 7) % 25
 JOIN words l ON l.list = 'last' AND l.ix = (n * 11) % 20;

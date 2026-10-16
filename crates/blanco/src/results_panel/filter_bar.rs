@@ -425,7 +425,7 @@ impl FilterBar {
         self.apply(window, cx);
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "screenshots"))]
     pub fn is_running(&self) -> bool {
         self.running
     }
