@@ -419,6 +419,11 @@ impl ResultsTableDelegate {
                     .bordered(false)
                     .flex_1()
                     .text_size(px(12.))
+                    // The input sets 1.25rem, the static cell keeps GPUI's
+                    // default. Their boxes snap to whole pixels but the text
+                    // is placed by the unsnapped half leading, so with
+                    // different line heights the text moves a pixel.
+                    .line_height(gpui::phi())
                     .pl_0()
                     .suffix(
                         div()
