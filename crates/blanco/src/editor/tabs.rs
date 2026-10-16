@@ -15,6 +15,7 @@ use crate::sql::{SqlCompletionProvider, SqruffService};
 use blanco_core::ConnectionContext;
 
 use super::object_ddl::ObjectDdlTab;
+use super::parameter_form::ParameterValue;
 use super::snippet_editor::SnippetEditor;
 use super::table_structure::TableStructureTab;
 
@@ -116,7 +117,7 @@ pub struct QueryTab {
     /// this tab, keyed by parameter label (e.g. "$1" or ":user_id"). Used
     /// to prefill the parameter modal on subsequent runs within the same
     /// session.
-    pub last_parameter_values: HashMap<String, String>,
+    pub last_parameter_values: HashMap<String, ParameterValue>,
     /// Frame the editor draws around the statement the cursor sits in. Absent
     /// for backends whose commands are single lines rather than `;`-delimited
     /// statements (Redis), which have nothing to outline.

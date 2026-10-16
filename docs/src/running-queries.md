@@ -22,7 +22,11 @@ Every run is saved to the [query history](history.md), errors included.
 
 If a statement has placeholders, Blanco asks for their values before it runs.
 A name that appears more than once is asked for once. Values are inserted as
-you type them, so put quotes around strings yourself.
+you type them, so put quotes around strings yourself. An empty field is sent as
+`NULL`, or as an empty string `''` when its **Empty string** box is ticked.
+
+The values you enter are remembered for the tab's next run. **Clear** empties
+every field and forgets them.
 
 Which placeholders are recognised depends on the database:
 

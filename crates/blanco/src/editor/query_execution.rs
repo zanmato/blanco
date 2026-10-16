@@ -863,6 +863,22 @@ impl EditorPanel {
                 .child(param_form.clone())
                 .footer(
                     DialogFooter::new()
+                        .child(Button::new("clear").label("Clear").ghost().on_click({
+                            let param_form = param_form.clone();
+                            let weak_editor_panel = weak_editor_panel.clone();
+                            move |_, window, cx| {
+                                param_form.update(cx, |form, cx| form.clear(window, cx));
+                                weak_editor_panel
+                                    .update(cx, |editor_panel, _| {
+                                        if let Some(TabType::Query(query_tab)) =
+                                            editor_panel.tabs.get_mut(tab_index)
+                                        {
+                                            query_tab.last_parameter_values.clear();
+                                        }
+                                    })
+                                    .log_err();
+                            }
+                        }))
                         .child(
                             DialogClose::new()
                                 .child(Button::new("cancel").label("Cancel").outline()),

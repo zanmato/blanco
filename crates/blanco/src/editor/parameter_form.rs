@@ -1,15 +1,40 @@
 use gpui::{
     App, AppContext, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement, Render,
-    Styled, Window, div,
+    Styled, Subscription, Window, div,
 };
 use gpui_component::{
-    ActiveTheme, h_flex,
-    input::{Input, InputState},
+    ActiveTheme, Disableable as _,
+    checkbox::Checkbox,
+    h_flex,
+    input::{Input, InputEvent, InputState},
     v_flex,
 };
 use std::collections::HashMap;
 
 use sql_parser::statement_parser::{ParameterStyle, QueryParameter};
+
+/// What was entered for one parameter. An empty field binds `NULL` unless
+/// `empty_string` asks for `''`, and the flag is remembered with the text so a
+/// deliberate empty string survives the next run.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ParameterValue {
+    pub text: String,
+    pub empty_string: bool,
+}
+
+impl ParameterValue {
+    fn sql(&self) -> String {
+        match (self.text.is_empty(), self.empty_string) {
+            (false, _) => self.text.clone(),
+            (true, true) => "''".to_string(),
+            (true, false) => "NULL".to_string(),
+        }
+    }
+}
+
+fn empty_placeholder(empty_string: bool) -> &'static str {
+    if empty_string { "''" } else { "NULL" }
+}
 
 #[derive(Clone, Debug)]
 pub struct ParameterInput {
@@ -17,19 +42,30 @@ pub struct ParameterInput {
     pub byte_offsets: Vec<usize>, // All byte offsets where this parameter appears (sorted descending for replacement)
     pub byte_length: usize,       // Length in bytes of the parameter text
     pub input: Entity<InputState>,
+    pub empty_string: bool,
+}
+
+impl ParameterInput {
+    fn value(&self, cx: &App) -> ParameterValue {
+        ParameterValue {
+            text: self.input.read(cx).value().to_string(),
+            empty_string: self.empty_string,
+        }
+    }
 }
 
 pub struct ParameterForm {
     focus_handle: FocusHandle,
     original_query: String,
     parameters: Vec<ParameterInput>,
+    _subscriptions: Vec<Subscription>,
 }
 
 impl ParameterForm {
     pub fn new(
         original_query: String,
         parameters: Vec<QueryParameter>,
-        initial_values: &HashMap<String, String>,
+        initial_values: &HashMap<String, ParameterValue>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -56,14 +92,11 @@ impl ParameterForm {
             } else {
                 // Create new parameter input, prefilling with the last value
                 // entered for this label in the current session, if any.
-                let initial = initial_values.get(&label).cloned();
+                let initial = initial_values.get(&label).cloned().unwrap_or_default();
                 let input = cx.new(|cx| {
-                    let mut state =
-                        InputState::new(window, cx).placeholder(format!("Value for {}", label));
-                    if let Some(value) = initial {
-                        state = state.default_value(value);
-                    }
-                    state
+                    InputState::new(window, cx)
+                        .placeholder(empty_placeholder(initial.empty_string))
+                        .default_value(initial.text)
                 });
 
                 param_map.insert(
@@ -73,6 +106,7 @@ impl ParameterForm {
                         byte_offsets: vec![byte_offset],
                         byte_length,
                         input,
+                        empty_string: initial.empty_string,
                     },
                 );
             }
@@ -82,18 +116,62 @@ impl ParameterForm {
         let mut param_inputs: Vec<ParameterInput> = param_map.into_values().collect();
         param_inputs.sort_by_key(|p| p.byte_offsets[0]);
 
+        // The empty string toggle only applies to an empty field, so it is
+        // enabled or disabled as the text changes.
+        let subscriptions = param_inputs
+            .iter()
+            .map(|param| {
+                cx.subscribe(&param.input, |_, _, event: &InputEvent, cx| {
+                    if matches!(event, InputEvent::Change) {
+                        cx.notify();
+                    }
+                })
+            })
+            .collect();
+
         Self {
             focus_handle,
             original_query,
             parameters: param_inputs,
+            _subscriptions: subscriptions,
         }
+    }
+
+    fn set_empty_string(
+        &mut self,
+        index: usize,
+        empty_string: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(param) = self.parameters.get_mut(index) else {
+            return;
+        };
+        param.empty_string = empty_string;
+        param.input.update(cx, |input, cx| {
+            input.set_placeholder(empty_placeholder(empty_string), window, cx);
+        });
+        cx.notify();
+    }
+
+    /// Empties every field and turns the empty string toggles off, so each
+    /// parameter binds `NULL` until something is typed.
+    pub fn clear(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        for param in &mut self.parameters {
+            param.empty_string = false;
+            param.input.update(cx, |input, cx| {
+                input.set_value("", window, cx);
+                input.set_placeholder(empty_placeholder(false), window, cx);
+            });
+        }
+        cx.notify();
     }
 
     pub fn get_substituted_query(&self, cx: &App) -> String {
         // Collect all replacements with their original offsets
         let mut replacements: Vec<(usize, usize, String)> = Vec::new();
         for param_input in &self.parameters {
-            let value = param_input.input.read(cx).value().to_string();
+            let value = param_input.value(cx).sql();
             for &byte_offset in &param_input.byte_offsets {
                 replacements.push((byte_offset, param_input.byte_length, value.clone()));
             }
@@ -138,10 +216,10 @@ impl ParameterForm {
 
     /// Returns a map of parameter label to the value currently entered in
     /// the form. Used to persist the last entered values on the owning tab.
-    pub fn current_values(&self, cx: &App) -> HashMap<String, String> {
+    pub fn current_values(&self, cx: &App) -> HashMap<String, ParameterValue> {
         self.parameters
             .iter()
-            .map(|p| (p.label.clone(), p.input.read(cx).value().to_string()))
+            .map(|p| (p.label.clone(), p.value(cx)))
             .collect()
     }
 }
@@ -156,12 +234,31 @@ impl Render for ParameterForm {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
             .gap_4()
-            .children(self.parameters.iter().map(|param| {
+            .children(self.parameters.iter().enumerate().map(|(index, param)| {
+                let has_text = !param.input.read(cx).value().is_empty();
                 h_flex()
                     .gap_4()
-                    .font_family(cx.theme().mono_font_family.clone())
-                    .child(div().text_sm().child(param.label.clone()))
-                    .child(Input::new(&param.input))
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_family(cx.theme().mono_font_family.clone())
+                            .child(param.label.clone()),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .font_family(cx.theme().mono_font_family.clone())
+                            .child(Input::new(&param.input)),
+                    )
+                    .child(
+                        Checkbox::new(("parameter-empty-string", index))
+                            .label("Empty string")
+                            .checked(param.empty_string)
+                            .disabled(has_text)
+                            .on_click(cx.listener(move |this, checked: &bool, window, cx| {
+                                this.set_empty_string(index, *checked, window, cx);
+                            })),
+                    )
                     .into_any_element()
             }))
     }

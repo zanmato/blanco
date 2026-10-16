@@ -276,8 +276,8 @@ async fn test_parameter_form_substitutes_named_params(cx: &mut TestAppContext) {
         },
     ];
     let initial = HashMap::from([
-        (":uid".to_string(), "42".to_string()),
-        (":st".to_string(), "active".to_string()),
+        (":uid".to_string(), typed("42")),
+        (":st".to_string(), typed("active")),
     ]);
 
     let form = harness
@@ -293,8 +293,8 @@ async fn test_parameter_form_substitutes_named_params(cx: &mut TestAppContext) {
     );
 
     let values = form.read_with(&cx, |f, cx| f.current_values(cx));
-    assert_eq!(values.get(":uid").map(String::as_str), Some("42"));
-    assert_eq!(values.get(":st").map(String::as_str), Some("active"));
+    assert_eq!(values.get(":uid"), Some(&typed("42")));
+    assert_eq!(values.get(":st"), Some(&typed("active")));
 }
 
 /// Same parameter appearing twice in a query must be substituted at both
@@ -321,7 +321,7 @@ async fn test_parameter_form_substitutes_repeated_param(cx: &mut TestAppContext)
     }
     assert_eq!(params.len(), 3, "test setup: expected three :x occurrences");
 
-    let initial = HashMap::from([(":x".to_string(), "7".to_string())]);
+    let initial = HashMap::from([(":x".to_string(), typed("7"))]);
     let form = harness
         .editor_panel
         .update_in(&mut cx, |_panel, window, cx| {
@@ -356,8 +356,8 @@ async fn test_parameter_form_substitutes_positional_params(cx: &mut TestAppConte
         },
     ];
     let initial = HashMap::from([
-        ("$1".to_string(), "'alice'".to_string()),
-        ("$2".to_string(), "100".to_string()),
+        ("$1".to_string(), typed("'alice'")),
+        ("$2".to_string(), typed("100")),
     ]);
 
     let form = harness
@@ -368,6 +368,70 @@ async fn test_parameter_form_substitutes_positional_params(cx: &mut TestAppConte
 
     let substituted = form.read_with(&cx, |f, cx| f.get_substituted_query(cx));
     assert_eq!(substituted, "SELECT 'alice', 100");
+}
+
+fn typed(text: &str) -> crate::editor::parameter_form::ParameterValue {
+    crate::editor::parameter_form::ParameterValue {
+        text: text.to_string(),
+        empty_string: false,
+    }
+}
+
+/// An empty field binds NULL unless its toggle asks for an empty string, and
+/// Clear empties every field and turns the toggles off again.
+#[gpui::test]
+async fn test_parameter_form_binds_null_or_empty_string_and_clears(cx: &mut TestAppContext) {
+    use crate::editor::parameter_form::{ParameterForm, ParameterValue};
+    use sql_parser::statement_parser::{ParameterStyle, QueryParameter};
+
+    let harness = TestHarness::new(cx);
+    let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+
+    let query = "SELECT $1, $2, $3";
+    let params = (1..=3)
+        .map(|n| {
+            let raw_text = format!("${n}");
+            QueryParameter {
+                style: ParameterStyle::Positional(n),
+                byte_offset: query.find(&raw_text).unwrap(),
+                raw_text,
+            }
+        })
+        .collect();
+    let deliberate_empty = ParameterValue {
+        text: String::new(),
+        empty_string: true,
+    };
+    let initial = HashMap::from([
+        ("$1".to_string(), typed("1")),
+        ("$2".to_string(), deliberate_empty.clone()),
+    ]);
+
+    let form = harness
+        .editor_panel
+        .update_in(&mut cx, |_panel, window, cx| {
+            cx.new(|cx| ParameterForm::new(query.to_string(), params, &initial, window, cx))
+        });
+
+    let substituted = form.read_with(&cx, |f, cx| f.get_substituted_query(cx));
+    assert_eq!(substituted, "SELECT 1, '', NULL");
+    let values = form.read_with(&cx, |f, cx| f.current_values(cx));
+    assert_eq!(
+        values.get("$2"),
+        Some(&deliberate_empty),
+        "the empty string toggle is remembered with the value"
+    );
+    assert_eq!(values.get("$3"), Some(&ParameterValue::default()));
+
+    form.update_in(&mut cx, |f, window, cx| f.clear(window, cx));
+    let substituted = form.read_with(&cx, |f, cx| f.get_substituted_query(cx));
+    assert_eq!(substituted, "SELECT NULL, NULL, NULL");
+    let values = form.read_with(&cx, |f, cx| f.current_values(cx));
+    assert!(
+        values
+            .values()
+            .all(|value| *value == ParameterValue::default())
+    );
 }
 
 /// Poll the persisted query history until it reaches the expected length. The
