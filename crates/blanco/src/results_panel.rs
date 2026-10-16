@@ -63,6 +63,8 @@ mod temporal;
 
 // Re-exports
 pub use cell_edit_state::{CellInput, ChangeType, TableChange};
+#[cfg(feature = "screenshots")]
+pub use chart_view::ChartKind;
 pub use chart_view::{ChartView, ResultViewMode};
 pub use column_layout::ColumnLayouts;
 pub use results_table_delegate::{ColumnLayout, ResultsTableDelegate};
@@ -308,6 +310,11 @@ impl ResultsPanel {
             chart_view.update(cx, |view, cx| view.rebuild_column_selects(window, cx));
             cx.notify();
         }
+    }
+
+    #[cfg(any(test, feature = "screenshots"))]
+    pub(crate) fn active_chart_view(&self) -> Option<Entity<ChartView>> {
+        Some(self.result_tabs.get(self.active_tab)?.chart_view.clone())
     }
 
     pub fn set_view_mode(&mut self, mode: ResultViewMode, cx: &mut Context<Self>) {

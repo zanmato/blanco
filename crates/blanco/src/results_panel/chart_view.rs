@@ -12,7 +12,7 @@ use gpui_component::{
     h_flex,
     plot::{
         AxisText, Grid, IntoPlot, Plot, PlotAxis, axis_gutter,
-        label::TEXT_SIZE,
+        label::{TEXT_GAP, TEXT_SIZE, measure_text_width},
         scale::{Scale, ScaleBand, ScaleLinear},
         shape::{Bar, Stack},
     },
@@ -90,6 +90,37 @@ fn assign_display_labels(labels: &[String]) -> Vec<(SharedString, SharedString)>
 
 /// Pick a tick margin so a band/point axis shows at most ~40 labels, avoiding
 /// overlapping text when there are many data points.
+/// How many value ticks the stacked bar chart draws, baseline included.
+const STACKED_VALUE_TICKS: usize = 5;
+
+/// A value axis label: whole numbers bare, the rest to one decimal, as the
+/// built in charts write theirs.
+fn format_value_tick(value: f64) -> SharedString {
+    if (value - value.round()).abs() < 0.001 {
+        format!("{value:.0}").into()
+    } else {
+        format!("{value:.1}").into()
+    }
+}
+
+/// The top of a value axis that starts at zero and is split into
+/// `STACKED_VALUE_TICKS - 1` steps of a round size (1, 1.5, 2, 2.5, 3, 4, 5,
+/// 6 or 8 times a power of ten), the smallest that reaches `max`.
+fn nice_axis_max(max: f64) -> f64 {
+    let steps = (STACKED_VALUE_TICKS - 1) as f64;
+    if max <= 0. || !max.is_finite() {
+        return steps;
+    }
+    let raw_step = max / steps;
+    let magnitude = 10f64.powf(raw_step.log10().floor());
+    let step = [1., 1.5, 2., 2.5, 3., 4., 5., 6., 8., 10.]
+        .into_iter()
+        .map(|factor| factor * magnitude)
+        .find(|step| *step >= raw_step)
+        .unwrap_or(10. * magnitude);
+    step * steps
+}
+
 fn tick_margin_for(count: usize) -> usize {
     const MAX_LABELS: usize = 40;
     (count / MAX_LABELS).max(1)
@@ -236,18 +267,41 @@ impl Plot for StackedBar {
         let width = bounds.size.width.as_f32();
         let height = bounds.size.height.as_f32() - axis_gutter(px(TEXT_SIZE));
 
-        let x = ScaleBand::new(self.x_labels.clone(), [0., width])
-            .padding_inner(0.4)
-            .padding_outer(0.2);
-        let band_width = x.band_width();
-
         let max = self
             .series
             .iter()
             .flat_map(|s| s.points.iter().map(|p| p.y1))
             .fold(0., f32::max) as f64;
-
+        let max = nice_axis_max(max);
         let y = ScaleLinear::new([0., max], [height, 10.]);
+
+        // The value labels sit in a gutter left of the bars, as wide as the
+        // widest of them.
+        let ticks: Vec<(f64, SharedString)> = (0..STACKED_VALUE_TICKS)
+            .map(|i| {
+                let value = max * i as f64 / (STACKED_VALUE_TICKS - 1) as f64;
+                (value, format_value_tick(value))
+            })
+            .collect();
+        let gutter = ticks
+            .iter()
+            .map(|(_, label)| measure_text_width(label, px(TEXT_SIZE), window) + TEXT_GAP * 2.)
+            .fold(0., f32::max);
+
+        let x = ScaleBand::new(self.x_labels.clone(), [gutter, width])
+            .padding_inner(0.4)
+            .padding_outer(0.2);
+        let band_width = x.band_width();
+        let tick_ys: Vec<f32> = ticks
+            .iter()
+            .filter_map(|(value, _)| y.tick(value))
+            .collect();
+        let y_label = ticks.iter().filter_map(|(value, label)| {
+            y.tick(value).map(|tick| {
+                AxisText::new(label.clone(), tick, cx.theme().muted_foreground)
+                    .align(gpui::TextAlign::Right)
+            })
+        });
 
         let tick_margin = tick_margin_for(self.x_labels.len());
         let x_label = self
@@ -268,14 +322,20 @@ impl Plot for StackedBar {
         PlotAxis::new()
             .x(height)
             .x_label(x_label)
+            .y(gutter)
+            .y_label(y_label)
             .stroke(cx.theme().border)
             .paint(&bounds, window, cx);
 
+        let plot_bounds = gpui::Bounds {
+            origin: bounds.origin + gpui::point(px(gutter), px(0.)),
+            size: gpui::Size::new(bounds.size.width - px(gutter), bounds.size.height),
+        };
         Grid::new()
-            .y((0..=3).map(|i| height * i as f32 / 4.0))
+            .y(tick_ys)
             .stroke(cx.theme().border)
             .dash_array(&[gpui::px(4.), gpui::px(2.)])
-            .paint(&bounds, window);
+            .paint(&plot_bounds, window);
 
         for (si, series) in self.series.iter().enumerate() {
             let x = x.clone();
@@ -364,6 +424,44 @@ impl ChartView {
         this
     }
 
+    /// Draw `value` against `axis` as `kind`, as picking them in the selects
+    /// would.
+    #[cfg(feature = "screenshots")]
+    pub(crate) fn show(
+        &mut self,
+        kind: ChartKind,
+        axis: &str,
+        value: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.kind = kind;
+        let kind_ix = ChartKind::all().iter().position(|k| *k == kind);
+        let column_ix = |name: &str, cx: &App| {
+            self.table_state.read_with(cx, |state, _| {
+                state
+                    .delegate()
+                    .columns
+                    .iter()
+                    .position(|column| column.name.as_ref() == name)
+            })
+        };
+        let axis_ix = column_ix(axis, cx)
+            .and_then(|ix| self.axis_column_indices.iter().position(|i| *i == ix));
+        let value_ix = column_ix(value, cx)
+            .and_then(|ix| self.value_column_indices.iter().position(|i| *i == ix));
+        for (select, ix) in [
+            (&self.kind_select, kind_ix),
+            (&self.axis_select, axis_ix),
+            (&self.value_select, value_ix),
+        ] {
+            select.update(cx, |state, cx| {
+                state.set_selected_index(ix.map(IndexPath::new), window, cx);
+            });
+        }
+        cx.notify();
+    }
+
     pub fn rebuild_column_selects(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let (axis_items, axis_indices, value_items, value_indices, all_items, all_indices) =
             self.table_state.read_with(cx, |state, _| {
@@ -372,8 +470,7 @@ impl ChartView {
                     .columns
                     .iter()
                     .enumerate()
-                    .skip(1)
-                    .map(|(i, c)| (i - 1, SharedString::from(c.name.to_string())))
+                    .map(|(i, c)| (i, SharedString::from(c.name.to_string())))
                     .collect();
 
                 let numeric_pairs: Vec<(usize, SharedString)> = pairs
@@ -482,13 +579,10 @@ impl ChartView {
         if col == usize::MAX { None } else { Some(col) }
     }
 
-    fn extract_raw(&self, cx: &App) -> Option<(usize, usize, Vec<(String, f64, Option<String>)>)> {
+    fn extract_raw(&self, cx: &App) -> Option<Vec<(String, f64, Option<String>)>> {
         let axis_col = self.selected_axis_column(cx)?;
         let value_col = self.selected_value_column(cx)?;
         let series_col = self.selected_series_column(cx);
-        let axis_row_idx = axis_col + 1;
-        let value_row_idx = value_col + 1;
-        let series_row_idx = series_col.map(|c| c + 1);
 
         let (mut rows, axis_numeric) = self.table_state.read_with(cx, |state, _| {
             let delegate = state.delegate();
@@ -496,10 +590,10 @@ impl ChartView {
                 .rows
                 .iter()
                 .filter_map(|row| {
-                    let axis = row.get(axis_row_idx)?.as_ref()?;
-                    let value = row.get(value_row_idx)?.as_ref()?;
+                    let axis = row.get(axis_col)?.as_ref()?;
+                    let value = row.get(value_col)?.as_ref()?;
                     let value: f64 = value.parse().ok()?;
-                    let series = series_row_idx.and_then(|si| row.get(si).and_then(|v| v.clone()));
+                    let series = series_col.and_then(|si| row.get(si).and_then(|v| v.clone()));
                     Some((axis.clone(), value, series))
                 })
                 .collect::<Vec<_>>();
@@ -527,11 +621,11 @@ impl ChartView {
             }
         }
 
-        Some((axis_row_idx, value_row_idx, rows))
+        Some(rows)
     }
 
     fn extract_points(&self, cx: &App) -> Option<Vec<ChartPoint>> {
-        let (_, _, raw) = self.extract_raw(cx)?;
+        let raw = self.extract_raw(cx)?;
         let aggregate = self.selected_aggregate(cx);
 
         // Build the (label, value) list. When aggregating, identical labels are
@@ -582,7 +676,7 @@ impl ChartView {
     }
 
     fn extract_grouped(&self, cx: &App) -> Option<GroupedData> {
-        let (_, _, raw) = self.extract_raw(cx)?;
+        let raw = self.extract_raw(cx)?;
         let aggregate = self.selected_aggregate(cx);
 
         let mut series_set: Vec<String> = Vec::new();
@@ -805,6 +899,7 @@ impl ChartView {
                         let mut line = LineChart::new(points)
                             .x(|p: &ChartPoint| p.display_label.clone())
                             .y(|p: &ChartPoint| p.value)
+                            .y_axis(true)
                             .tick_margin(tick_margin);
                         if self.config.line_stepped {
                             line = line.step_after();
@@ -818,6 +913,7 @@ impl ChartView {
                         let bar = BarChart::new(points)
                             .band(|p: &ChartPoint| p.display_label.clone())
                             .value(|p: &ChartPoint| p.value)
+                            .value_axis(true)
                             .tick_margin(tick_margin)
                             .fill(|p: &ChartPoint, _, _, _| p.color);
                         chart_inner.child(bar)
@@ -901,6 +997,7 @@ impl ChartView {
                 // indistinguishable. Give each series its own color, lightly
                 // filled so overlapping areas stay readable.
                 let mut chart = AreaChart::new(grouped.rows.clone())
+                    .y_axis(true)
                     .tick_margin(tick_margin)
                     .x(|r: &PivotedRow| r.x_label.clone())
                     .y(|r: &PivotedRow| r.values[0])
@@ -1074,3 +1171,7 @@ impl Render for ChartView {
             .child(self.render_chart_canvas(window, cx))
     }
 }
+
+#[cfg(test)]
+#[path = "chart_view_test.rs"]
+mod chart_view_test;
