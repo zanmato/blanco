@@ -39,25 +39,42 @@ LEFT JOIN (
 ) pk ON pk.table_schema = c.TABLE_SCHEMA
     AND pk.table_name = c.TABLE_NAME
     AND pk.column_name = c.COLUMN_NAME
+-- One row per column: a column in several foreign keys keeps one, a single
+-- column key ahead of a composite one, so the column is not listed (and keyed
+-- on) more than once. `sys.foreign_key_columns` pairs each column with the one
+-- it references, which the INFORMATION_SCHEMA views cannot.
 LEFT JOIN (
     SELECT
-        kc.column_name,
-        cc.table_schema,
-        cc.table_name,
-        ccu.table_schema AS foreign_schema,
-        ccu.table_name AS foreign_table,
-        ccu.column_name AS foreign_column,
-        cc.constraint_name
-    FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE kc
-    JOIN INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS rc
-        ON rc.constraint_name = kc.constraint_name
-    JOIN INFORMATION_SCHEMA.CONSTRAINT_COLUMN_USAGE cc
-        ON cc.constraint_name = rc.constraint_name
-    JOIN INFORMATION_SCHEMA.CONSTRAINT_COLUMN_USAGE ccu
-        ON ccu.constraint_name = rc.unique_constraint_name
+        keyed.column_name,
+        keyed.table_schema,
+        keyed.table_name,
+        keyed.foreign_table,
+        keyed.foreign_column,
+        keyed.constraint_name,
+        ROW_NUMBER() OVER (
+            PARTITION BY keyed.table_schema, keyed.table_name, keyed.column_name
+            ORDER BY keyed.key_count, keyed.constraint_name
+        ) AS key_rank
+    FROM (
+        SELECT
+            pc.name AS column_name,
+            SCHEMA_NAME(pt.schema_id) AS table_schema,
+            pt.name AS table_name,
+            rt.name AS foreign_table,
+            rc.name AS foreign_column,
+            fk.name AS constraint_name,
+            COUNT(*) OVER (PARTITION BY fkc.constraint_object_id) AS key_count
+        FROM sys.foreign_keys fk
+        JOIN sys.foreign_key_columns fkc ON fkc.constraint_object_id = fk.object_id
+        JOIN sys.tables pt ON pt.object_id = fkc.parent_object_id
+        JOIN sys.columns pc ON pc.object_id = fkc.parent_object_id AND pc.column_id = fkc.parent_column_id
+        JOIN sys.tables rt ON rt.object_id = fkc.referenced_object_id
+        JOIN sys.columns rc ON rc.object_id = fkc.referenced_object_id AND rc.column_id = fkc.referenced_column_id
+    ) keyed
 ) fk ON fk.table_schema = c.TABLE_SCHEMA
     AND fk.table_name = c.TABLE_NAME
     AND fk.column_name = c.COLUMN_NAME
+    AND fk.key_rank = 1
 WHERE c.TABLE_NAME = '{table}'
 {schema_filter}
 ORDER BY c.ORDINAL_POSITION

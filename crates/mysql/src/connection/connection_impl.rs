@@ -792,17 +792,42 @@ impl Connection for MysqlConnection {
                 CAST(c.NUMERIC_PRECISION AS SIGNED) AS numeric_precision,
                 CAST(c.NUMERIC_SCALE AS SIGNED) AS numeric_scale
             FROM INFORMATION_SCHEMA.COLUMNS c
-            LEFT JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE fk
-                ON fk.TABLE_SCHEMA = c.TABLE_SCHEMA
-                AND fk.TABLE_NAME = c.TABLE_NAME
-                AND fk.COLUMN_NAME = c.COLUMN_NAME
-                AND fk.REFERENCED_TABLE_NAME IS NOT NULL
+            -- One row per column: a column in several foreign keys keeps
+            -- one, a single column key ahead of a composite one, so the
+            -- column is not listed (and keyed on) more than once.
+            LEFT JOIN (
+                SELECT
+                    keyed.COLUMN_NAME,
+                    keyed.REFERENCED_TABLE_NAME,
+                    keyed.REFERENCED_COLUMN_NAME,
+                    keyed.CONSTRAINT_NAME,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY keyed.COLUMN_NAME
+                        ORDER BY keyed.key_count, keyed.CONSTRAINT_NAME
+                    ) AS key_rank
+                FROM (
+                    SELECT
+                        k.COLUMN_NAME,
+                        k.REFERENCED_TABLE_NAME,
+                        k.REFERENCED_COLUMN_NAME,
+                        k.CONSTRAINT_NAME,
+                        COUNT(*) OVER (PARTITION BY k.CONSTRAINT_NAME) AS key_count
+                    FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE k
+                    WHERE k.TABLE_SCHEMA = ?
+                        AND k.TABLE_NAME = ?
+                        AND k.REFERENCED_TABLE_NAME IS NOT NULL
+                ) keyed
+            ) fk
+                ON fk.COLUMN_NAME = c.COLUMN_NAME
+                AND fk.key_rank = 1
             WHERE c.TABLE_SCHEMA = ?
                 AND c.TABLE_NAME = ?
             ORDER BY c.ORDINAL_POSITION
         ";
 
         let rows = sqlx::query(query)
+            .bind(database)
+            .bind(table_name)
             .bind(database)
             .bind(table_name)
             .fetch_all(&pool)

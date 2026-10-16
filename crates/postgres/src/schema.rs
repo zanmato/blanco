@@ -176,8 +176,10 @@ impl PostgresConnection {
 
         let query = format!(
             r#"
+            -- One row per column, as a column in several foreign keys would
+            -- otherwise be listed once per key.
             WITH fk_columns AS (
-                SELECT
+                SELECT DISTINCT ON (n.nspname, cls.relname, a.attname)
                     n.nspname        AS table_schema,
                     cls.relname      AS table_name,
                     a.attname        AS column_name,
@@ -194,6 +196,7 @@ impl PostgresConnection {
                 JOIN pg_attribute a     ON a.attrelid = con.conrelid AND a.attnum = k.conkey
                 JOIN pg_attribute af    ON af.attrelid = con.confrelid AND af.attnum = k.confkey
                 WHERE con.contype = 'f'
+                ORDER BY n.nspname, cls.relname, a.attname, cardinality(con.conkey), con.conname
             )
             SELECT
                 json_build_object(

@@ -800,6 +800,7 @@ impl Connection for PostgresConnection {
                     conname,
                     conrelid,
                     confrelid,
+                    cardinality(conkey) AS key_count,
                     unnest(conkey)  AS conkey,
                     unnest(confkey) AS confkey
                 FROM pg_constraint
@@ -836,8 +837,11 @@ impl Connection for PostgresConnection {
                 WHERE  i.indrelid = to_regclass(quote_ident($2) || '.' || quote_ident($1))
                 AND    i.indisprimary
             ) pk ON pk.column_name = c.column_name
+            -- One row per column: a column in several foreign keys keeps
+            -- one, a single column key ahead of a composite one, so the
+            -- column is not listed (and keyed on) more than once.
             LEFT JOIN (
-                SELECT
+                SELECT DISTINCT ON (a.attname)
                     a.attname AS column_name,
                     fk.confrelid::regclass  AS foreign_table_name,
                     af.attname AS foreign_column_name,
@@ -845,6 +849,7 @@ impl Connection for PostgresConnection {
                 FROM foreign_keys fk
                 JOIN pg_attribute af ON af.attnum = fk.confkey AND af.attrelid = fk.confrelid
                 JOIN pg_attribute a ON a.attnum = conkey AND a.attrelid = fk.conrelid
+                ORDER BY a.attname, fk.key_count, fk.conname
             ) fk ON fk.column_name = c.column_name
             WHERE c.table_name = $1 AND c.table_schema = $2
             ORDER BY c.ordinal_position

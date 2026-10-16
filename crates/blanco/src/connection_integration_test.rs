@@ -1953,6 +1953,147 @@ fn test_describe_query_columns_on_empty_result() {
     }
 }
 
+/// A column in several foreign keys came back once per key, and the grid
+/// then compared a primary key column twice in the WHERE of its edits.
+#[test]
+fn test_column_in_several_foreign_keys_is_listed_once() {
+    use database::ConnectionConfig;
+
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let file = |name: &str| temp_dir.path().join(name).to_string_lossy().to_string();
+
+    struct ForeignKeyCase {
+        label: &'static str,
+        config: ConnectionConfig,
+        database: String,
+        schema: Option<&'static str>,
+    }
+
+    let server = |case: &DriverCase, id: i64| {
+        ConnectionConfig::new(
+            id,
+            case.name.to_string(),
+            case.db_type,
+            case.host.clone(),
+            case.port.parse().expect("port"),
+            case.database.clone(),
+            case.username.clone(),
+            Some(case.password.clone()),
+        )
+    };
+    let postgres = postgres_case();
+    let mysql = mysql_case();
+    let mssql = mssql_case();
+    let cases = vec![
+        ForeignKeyCase {
+            label: "SQLite",
+            config: ConnectionConfig::new_sqlite(9201, "fk-sqlite".to_string(), file("fk.db")),
+            database: "main".to_string(),
+            schema: None,
+        },
+        ForeignKeyCase {
+            label: "DuckDB",
+            config: ConnectionConfig::new_duckdb(9202, "fk-duckdb".to_string(), file("fk.duckdb")),
+            database: String::new(),
+            schema: Some("main"),
+        },
+        ForeignKeyCase {
+            label: postgres.label,
+            config: server(&postgres, 9203),
+            database: postgres.database.clone(),
+            schema: Some("public"),
+        },
+        ForeignKeyCase {
+            label: mysql.label,
+            config: server(&mysql, 9204),
+            database: mysql.database.clone(),
+            schema: None,
+        },
+        ForeignKeyCase {
+            label: mssql.label,
+            config: server(&mssql, 9205).with_trust_server_certificate(true),
+            database: mssql.database.clone(),
+            schema: Some("dbo"),
+        },
+    ];
+    let drop_tables = [
+        "DROP TABLE IF EXISTS blanco_fk_themes",
+        "DROP TABLE IF EXISTS blanco_fk_groups",
+        "DROP TABLE IF EXISTS blanco_fk_tenants",
+    ];
+    let create_tables = [
+        "CREATE TABLE blanco_fk_tenants (id integer PRIMARY KEY)",
+        "CREATE TABLE blanco_fk_groups (tenant_id integer NOT NULL, id integer NOT NULL, \
+         PRIMARY KEY (tenant_id, id))",
+        "CREATE TABLE blanco_fk_themes (tenant_id integer NOT NULL, id integer NOT NULL, \
+         group_id integer NOT NULL, PRIMARY KEY (tenant_id, id), \
+         CONSTRAINT blanco_fk_themes_group FOREIGN KEY (tenant_id, group_id) \
+         REFERENCES blanco_fk_groups (tenant_id, id), \
+         CONSTRAINT blanco_fk_themes_tenant FOREIGN KEY (tenant_id) \
+         REFERENCES blanco_fk_tenants (id))",
+    ];
+
+    let service = DatabaseService::new(runtime.handle().clone());
+
+    for case in cases {
+        let label = case.label;
+        let database = Some(case.database.as_str());
+        let connection = runtime.block_on(async {
+            service.add_connection_config(case.config.clone()).await;
+            let connection = service
+                .get_or_create_connection(case.config.id, database)
+                .await?;
+            connection.ping().await?;
+            anyhow::Ok(connection)
+        });
+        let connection = match connection {
+            Ok(connection) => connection,
+            Err(error) if strict() => panic!("{label}: server unreachable: {error:#}"),
+            Err(error) => {
+                eprintln!(
+                    "skip {label}: server unreachable ({error:#}). Set BLANCO_RUN_DB_TESTS=1 to require."
+                );
+                continue;
+            }
+        };
+        let execute = |statement: &str| {
+            runtime
+                .block_on(connection.execute_write(statement, database, &[]))
+                .unwrap_or_else(|error| panic!("{label}: {statement}: {error:#}"));
+        };
+
+        drop_tables.iter().for_each(|statement| execute(statement));
+        create_tables
+            .iter()
+            .for_each(|statement| execute(statement));
+
+        let columns = runtime
+            .block_on(connection.get_columns_for_table("blanco_fk_themes", case.schema))
+            .unwrap_or_else(|error| panic!("{label}: columns: {error:#}"));
+        let names: Vec<&str> = columns.iter().map(|column| column.name.as_str()).collect();
+        assert_eq!(names, ["tenant_id", "id", "group_id"], "{label}: columns");
+        let primary_key: Vec<&str> = columns
+            .iter()
+            .filter(|column| column.is_primary_key)
+            .map(|column| column.name.as_str())
+            .collect();
+        assert_eq!(primary_key, ["tenant_id", "id"], "{label}: primary key");
+        let group = columns
+            .iter()
+            .find(|column| column.name == "group_id")
+            .and_then(|column| column.foreign_key.as_ref())
+            .unwrap_or_else(|| panic!("{label}: group_id has a foreign key"));
+        assert!(
+            group.foreign_table_name.ends_with("blanco_fk_groups")
+                && group.foreign_column_name == "id",
+            "{label}: group_id references blanco_fk_groups(id), got {group:?}"
+        );
+
+        drop_tables.iter().for_each(|statement| execute(statement));
+    }
+}
+
 /// The sidebar reads table parents through `DatabaseService`, whose
 /// connections wrap the driver in `TokioConnection`; a method the wrapper does
 /// not forward silently falls back to the trait's empty default.
