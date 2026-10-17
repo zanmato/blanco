@@ -1430,6 +1430,12 @@ impl BlancoApp {
             .justify_between()
             .gap_8()
             .h(px(26.))
+            // The title bar centers this above its bottom border, but the
+            // themes paint that border in the background colour and the cards
+            // start 1px below it, so the band it visibly sits in reaches 2px
+            // further down. Half of that recenters it.
+            .relative()
+            .top(px(1.))
             .w(px(420.))
             .px_3()
             .rounded_md()
