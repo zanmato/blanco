@@ -6,7 +6,7 @@ mod types;
 pub use types::{PgConnectionKey, PgServerKey, PostgresSshConfig, QueryParam};
 
 use anyhow::Result;
-use blanco_core::Connection;
+use blanco_core::{Connection, DatabaseType};
 use smol::lock::RwLock;
 use sqlx::postgres::PgPoolOptions;
 use std::collections::HashMap;
@@ -15,6 +15,9 @@ use std::sync::Arc;
 /// PostgreSQL connection implementation of the Connection trait
 /// This uses SQLX directly to provide a unified interface with database-specific connection pools
 pub struct PostgresConnection {
+    /// PostgreSQL, or a server speaking its protocol (CockroachDB), whose
+    /// catalog differs in places.
+    database_type: DatabaseType,
     pools: Arc<RwLock<HashMap<String, sqlx::PgPool>>>, // database_name -> connection pool
     server_key: PgServerKey,                           // Server-level connection key (no database)
     display_name: String,
@@ -29,9 +32,11 @@ impl PostgresConnection {
     pub fn from_connection_string(connection_string: &str) -> Result<Self> {
         let connection_key = PgConnectionKey::from_connection_string(connection_string)?;
         let server_key = connection_key.to_server_key();
-        let display_name = Self::generate_server_display_name(&server_key);
+        let display_name =
+            Self::generate_server_display_name(DatabaseType::PostgreSQL, &server_key);
 
         Ok(Self {
+            database_type: DatabaseType::PostgreSQL,
             pools: Arc::new(RwLock::new(HashMap::new())),
             server_key,
             display_name,
@@ -44,9 +49,11 @@ impl PostgresConnection {
 
     /// Create a new server-level PostgreSQL connection (preferred method for multi-database support)
     pub fn from_server_key(server_key: PgServerKey) -> Self {
-        let display_name = Self::generate_server_display_name(&server_key);
+        let display_name =
+            Self::generate_server_display_name(DatabaseType::PostgreSQL, &server_key);
 
         Self {
+            database_type: DatabaseType::PostgreSQL,
             pools: Arc::new(RwLock::new(HashMap::new())),
             server_key,
             display_name,
@@ -63,9 +70,14 @@ impl PostgresConnection {
         ssh_config: PostgresSshConfig,
     ) -> Self {
         let server_key = connection_key.to_server_key();
-        let display_name = Self::generate_server_display_name_with_ssh(&server_key, &ssh_config);
+        let display_name = Self::generate_server_display_name_with_ssh(
+            DatabaseType::PostgreSQL,
+            &server_key,
+            &ssh_config,
+        );
 
         Self {
+            database_type: DatabaseType::PostgreSQL,
             pools: Arc::new(RwLock::new(HashMap::new())),
             server_key,
             display_name,
@@ -81,9 +93,14 @@ impl PostgresConnection {
         server_key: PgServerKey,
         ssh_config: PostgresSshConfig,
     ) -> Self {
-        let display_name = Self::generate_server_display_name_with_ssh(&server_key, &ssh_config);
+        let display_name = Self::generate_server_display_name_with_ssh(
+            DatabaseType::PostgreSQL,
+            &server_key,
+            &ssh_config,
+        );
 
         Self {
+            database_type: DatabaseType::PostgreSQL,
             pools: Arc::new(RwLock::new(HashMap::new())),
             server_key,
             display_name,
@@ -94,21 +111,49 @@ impl PostgresConnection {
         }
     }
 
+    /// Talk to `database_type`, a server speaking PostgreSQL's protocol, in
+    /// place of PostgreSQL itself.
+    pub fn with_database_type(mut self, database_type: DatabaseType) -> Self {
+        self.database_type = database_type;
+        self.display_name = match &self.ssh_config {
+            Some(ssh_config) => Self::generate_server_display_name_with_ssh(
+                database_type,
+                &self.server_key,
+                ssh_config,
+            ),
+            None => Self::generate_server_display_name(database_type, &self.server_key),
+        };
+        self
+    }
+
+    /// The backend's name for messages.
+    pub(crate) fn backend_name(&self) -> &'static str {
+        self.database_type.as_str()
+    }
+
     /// Generate a human-readable display name for server-level connections
-    fn generate_server_display_name(server_key: &PgServerKey) -> String {
+    fn generate_server_display_name(
+        database_type: DatabaseType,
+        server_key: &PgServerKey,
+    ) -> String {
         format!(
-            "PostgreSQL - {}@{}:{}",
-            server_key.username, server_key.host, server_key.port
+            "{} - {}@{}:{}",
+            database_type.as_str(),
+            server_key.username,
+            server_key.host,
+            server_key.port
         )
     }
 
     /// Generate a human-readable display name for SSH connections
     fn generate_server_display_name_with_ssh(
+        database_type: DatabaseType,
         server_key: &PgServerKey,
         ssh_config: &PostgresSshConfig,
     ) -> String {
         format!(
-            "PostgreSQL (via SSH) - {}@{}:{} → {}@{}:{}",
+            "{} (via SSH) - {}@{}:{} → {}@{}:{}",
+            database_type.as_str(),
             ssh_config.ssh_user,
             ssh_config.ssh_host,
             ssh_config.ssh_port,

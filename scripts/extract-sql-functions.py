@@ -6,6 +6,8 @@ standard library plus the client each container already ships:
 
     postgres    psql (host binary) against postgrestestdb_ssl on 127.0.0.1:5488
                 pg_catalog.pg_proc, filtered down to user-facing functions
+    cockroachdb psql (host binary) against cockroachtestdb on 127.0.0.1:26258:
+                the same pg_catalog.pg_proc query
     mysql       `docker exec` into the mariadb container: mysql.help_topic
                 (the `HELP` tables, which carry a Syntax block per function)
     clickhouse  HTTP interface on 127.0.0.1:8124: system.functions
@@ -235,6 +237,102 @@ def postgres(args):
             "documentation": documentation,
         })
     emit("postgres", entries, f"pg_catalog.pg_proc on PostgreSQL {version}")
+
+
+# ---------------------------------------------------------------------------
+# CockroachDB
+
+# CockroachDB lists an overload per concrete type where PostgreSQL has one
+# polymorphic signature (`lag` has 69). A group of more overloads than this,
+# alike in all but their types, is folded into one signature.
+CRDB_FOLD_OVERLOADS_OVER = 6
+
+
+def fold_overloads(entries):
+    """Fold large groups of overloads that differ only in types into one,
+    spelling a position whose type varies the way PostgreSQL would."""
+    def split(parameter):
+        return parameter.rsplit(" ", 1) if " " in parameter else ["", parameter]
+
+    def generalized(types):
+        # Overloads on an enum type report no result.
+        types = [t for t in types if t] or [""]
+        if len(set(types)) == 1:
+            return types[0]
+        return "anyarray" if all(t.endswith("[]") for t in types) else "anyelement"
+
+    groups = {}
+    for entry in entries:
+        key = (entry["name"], len(entry["parameters"]), entry["documentation"])
+        groups.setdefault(key, []).append(entry)
+    folded = []
+    for group in groups.values():
+        if len(group) <= CRDB_FOLD_OVERLOADS_OVER:
+            folded.extend(group)
+            continue
+        parameters = []
+        for position in range(len(group[0]["parameters"])):
+            parts = [split(entry["parameters"][position]) for entry in group]
+            name = parts[0][0]
+            type_name = generalized([part[1] for part in parts])
+            parameters.append(f"{name} {type_name}".strip())
+        folded.append({
+            **group[0],
+            "parameters": parameters,
+            "return_type": generalized([entry["return_type"] for entry in group]),
+        })
+    return folded
+
+
+def cockroachdb(args):
+    """CockroachDB answers PostgreSQL's catalog query. Its argument lists
+    carry no names, a result may be missing, and an array result is spelled
+    with PostgreSQL's internal leading underscore (`_bool`)."""
+    env = dict(os.environ, PGPASSWORD=args.crdb_password)
+    url = f"postgresql://{args.crdb_user}@{args.crdb_host}:{args.crdb_port}/blanco?sslmode=require"
+    query = """
+        SELECT p.proname,
+               pg_get_function_arguments(p.oid),
+               coalesce(pg_get_function_result(p.oid), ''),
+               coalesce(obj_description(p.oid, 'pg_proc'), ''),
+               p.prokind
+        FROM pg_proc p
+        JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname = 'pg_catalog' AND p.prokind IN ('f', 'a', 'w')
+        ORDER BY 1, 2
+    """
+    result = subprocess.run(
+        ["psql", url, "-At", "-F", "\x01", "-R", "\x02", "-c", query],
+        env=env, check=True, capture_output=True, text=True,
+    )
+    version = subprocess.run(
+        ["psql", url, "-At", "-c", "SELECT version()"],
+        env=env, check=True, capture_output=True, text=True,
+    ).stdout.strip().split(" (")[0]
+
+    def array_spelling(type_name):
+        return f"{type_name[1:]}[]" if type_name.startswith("_") else type_name
+
+    entries = []
+    for record in result.stdout.split("\x02"):
+        record = record.strip("\n")
+        if not record:
+            continue
+        name, arguments, return_type, doc, kind = record.split("\x01")
+        # Names with a leading underscore are PostGIS internals.
+        if name.startswith("_"):
+            continue
+        kind_note = {"a": "Aggregate function", "w": "Window function"}.get(kind)
+        documentation = doc[:1].upper() + doc[1:] if doc else ""
+        if kind_note:
+            documentation = f"{documentation}\n\n*{kind_note}*" if documentation else f"*{kind_note}*"
+        entries.append({
+            "name": name,
+            "parameters": [array_spelling(p) for p in split_top_level(arguments)],
+            "return_type": array_spelling(return_type),
+            "documentation": documentation,
+        })
+    emit("cockroachdb", fold_overloads(entries), f"pg_catalog.pg_proc on {version}")
 
 
 # ---------------------------------------------------------------------------
@@ -476,12 +574,19 @@ def sqlite(args):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("dialect", choices=["postgres", "mysql", "clickhouse", "duckdb", "sqlite", "all"])
+    parser.add_argument(
+        "dialect",
+        choices=["postgres", "cockroachdb", "mysql", "clickhouse", "duckdb", "sqlite", "all"],
+    )
     parser.add_argument("--pg-host", default="127.0.0.1")
     parser.add_argument("--pg-port", default=5488, type=int)
     parser.add_argument("--pg-user", default="blanco")
     parser.add_argument("--pg-password", default="blanco")
     parser.add_argument("--pg-database", default="blanco")
+    parser.add_argument("--crdb-host", default="127.0.0.1")
+    parser.add_argument("--crdb-port", default=26258, type=int)
+    parser.add_argument("--crdb-user", default="blanco")
+    parser.add_argument("--crdb-password", default="blanco")
     parser.add_argument("--mysql-container", default="blanco-mysqltestdb-1")
     parser.add_argument("--mysql-user", default="root")
     parser.add_argument("--mysql-password", default="blanco")
@@ -493,6 +598,7 @@ def main():
 
     steps = {
         "postgres": postgres,
+        "cockroachdb": cockroachdb,
         "mysql": mysql,
         "clickhouse": clickhouse,
         "duckdb": duckdb,

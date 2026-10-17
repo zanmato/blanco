@@ -89,8 +89,8 @@ fn column_name(driver: DatabaseType, name: &str) -> String {
         .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
         && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
         && !is_sql_keyword(name);
-    // PostgreSQL folds bare names to lower case, so a capital needs quotes.
-    let folds = driver == DatabaseType::PostgreSQL && name.chars().any(|c| c.is_ascii_uppercase());
+    let folds = driver.dialect().folds_unquoted_identifiers()
+        && name.chars().any(|c| c.is_ascii_uppercase());
     if plain && !folds {
         name.to_string()
     } else {

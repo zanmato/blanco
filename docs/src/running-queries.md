@@ -34,7 +34,7 @@ Which placeholders are recognised depends on the database:
 
 | Database | Placeholders |
 | --- | --- |
-| PostgreSQL | `$1` |
+| PostgreSQL, CockroachDB | `$1` |
 | MySQL, MariaDB | `?` |
 | SQLite | `?`, `?1`, `:name`, `@name`, `$name` |
 | DuckDB | `?`, `$1` |
@@ -50,8 +50,8 @@ runs the statement and shows the rows and time each step actually took. A
 statement that changes data is really changed, so Blanco asks first. SQLite
 and ClickHouse only estimate, so they have no Explain Analyze.
 
-For PostgreSQL, SQLite and MySQL (but not MariaDB) the plan is shown as a
-tree. After Explain
+For PostgreSQL, CockroachDB, SQLite and MySQL (but not MariaDB) the plan is
+shown as a tree. After Explain
 Analyze, bars show where the time went.
 
 ## Timing

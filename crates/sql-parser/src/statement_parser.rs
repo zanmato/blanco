@@ -48,6 +48,7 @@ pub fn language(grammar: SqlGrammar) -> Language {
         SqlGrammar::TSql => polyglot::LANGUAGE_TSQL.into(),
         SqlGrammar::ClickHouse => polyglot::LANGUAGE_CLICKHOUSE.into(),
         SqlGrammar::DuckDb => polyglot::LANGUAGE_DUCKDB.into(),
+        SqlGrammar::CockroachDb => polyglot::LANGUAGE_COCKROACHDB.into(),
     }
 }
 
@@ -63,6 +64,7 @@ pub fn highlights_query(grammar: SqlGrammar) -> &'static str {
         SqlGrammar::TSql => polyglot::HIGHLIGHTS_QUERY_TSQL,
         SqlGrammar::ClickHouse => polyglot::HIGHLIGHTS_QUERY_CLICKHOUSE,
         SqlGrammar::DuckDb => polyglot::HIGHLIGHTS_QUERY_DUCKDB,
+        SqlGrammar::CockroachDb => polyglot::HIGHLIGHTS_QUERY_COCKROACHDB,
     }
 }
 

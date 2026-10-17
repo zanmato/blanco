@@ -58,7 +58,7 @@ mod row_ops;
 mod server_filter;
 #[cfg(test)]
 mod server_filter_test;
-mod table_operations;
+pub(crate) mod table_operations;
 mod temporal;
 
 // Re-exports
@@ -1549,7 +1549,11 @@ impl ResultsPanel {
                             .text_size(px(11.))
                             .text_color(muted)
                             .child(div().w(px(16.0 * depth as f32 + 24.0)).flex_shrink_0())
-                            .child(format!("{key}: {value}"))
+                            .child(if key.is_empty() {
+                                value
+                            } else {
+                                format!("{key}: {value}")
+                            })
                     }))
                     .into_any_element(),
             );

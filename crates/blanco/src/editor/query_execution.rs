@@ -555,9 +555,10 @@ impl EditorPanel {
                 };
 
                 // A plain read of one table can leave its large values on the
-                // server. Looking the table up costs a catalog query, so it
-                // is only done for a query that could qualify.
-                let deferred_read = if defer_threshold > 0
+                // server, or need its hidden key named. Looking the table up
+                // costs a catalog query, so it is only done for a query that
+                // could qualify.
+                let deferred_read = if db_type.dialect().rewrites_full_reads(defer_threshold)
                     && db_type.dialect().reads_one_table_in_full(&query_clone)
                     && let Ok(connection) = db_service
                         .get_or_create_connection_by_id(

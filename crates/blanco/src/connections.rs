@@ -1573,6 +1573,7 @@ fn connection_type_icon(db_type: database::DatabaseType) -> IconName {
         database::DatabaseType::SQLite => IconName::Sqlite,
         database::DatabaseType::DuckDb => IconName::Duckdb,
         database::DatabaseType::PostgreSQL => IconName::Postgresql,
+        database::DatabaseType::CockroachDb => IconName::Cockroachdb,
         database::DatabaseType::MySQL => IconName::Mysql,
         database::DatabaseType::ClickHouse => IconName::Clickhouse,
         database::DatabaseType::MsSql => IconName::MsSql,

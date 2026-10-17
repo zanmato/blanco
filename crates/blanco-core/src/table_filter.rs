@@ -249,7 +249,9 @@ impl Dialect {
             FilterOperator::Contains | FilterOperator::NotContains => {
                 let (literal, _) = literal(value)?;
                 let position = match self.database_type() {
-                    DatabaseType::PostgreSQL => format!("POSITION({literal} IN {column})"),
+                    DatabaseType::PostgreSQL | DatabaseType::CockroachDb => {
+                        format!("POSITION({literal} IN {column})")
+                    }
                     DatabaseType::MySQL => format!("LOCATE({literal}, {column})"),
                     DatabaseType::MsSql => format!("CHARINDEX({literal}, {column})"),
                     _ => format!("INSTR({column}, {literal})"),
@@ -347,14 +349,17 @@ impl Dialect {
             .replace('_', "\\_");
         let pattern = self.string_literal(&format!("{prefix}{escaped}{suffix}"));
         let text = match self.database_type() {
-            DatabaseType::PostgreSQL | DatabaseType::SQLite | DatabaseType::DuckDb => {
+            DatabaseType::PostgreSQL
+            | DatabaseType::CockroachDb
+            | DatabaseType::SQLite
+            | DatabaseType::DuckDb => {
                 format!("CAST({column} AS TEXT)")
             }
             DatabaseType::MySQL => format!("CAST({column} AS CHAR)"),
             DatabaseType::MsSql => format!("CAST({column} AS NVARCHAR(MAX))"),
             DatabaseType::ClickHouse | DatabaseType::Redis => format!("toString({column})"),
         };
-        // PostgreSQL, MySQL and ClickHouse escape with a backslash by
+        // PostgreSQL, CockroachDB, MySQL and ClickHouse escape with a backslash by
         // default; SQLite, DuckDB and SQL Server have no default escape
         // character.
         let escape = match self.database_type() {

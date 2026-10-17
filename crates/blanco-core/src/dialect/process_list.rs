@@ -60,6 +60,16 @@ impl Dialect {
                  WHERE backend_type = 'client backend' AND pid <> pg_backend_pid() \
                  ORDER BY 5 DESC NULLS LAST"
             }
+            // pg_stat_activity is empty on CockroachDB. Its sessions carry no
+            // database.
+            DatabaseType::CockroachDb => {
+                "SELECT session_id, user_name, NULL::STRING, lower(status), \
+                 EXTRACT(EPOCH FROM now() - COALESCE(active_query_start, session_start))::FLOAT8, \
+                 COALESCE(NULLIF(active_queries, ''), last_active_query) \
+                 FROM [SHOW CLUSTER SESSIONS] \
+                 WHERE session_id <> current_setting('session_id') \
+                 ORDER BY 5 DESC NULLS LAST"
+            }
             // TIME rather than MariaDB's TIME_MS, which MySQL lacks.
             DatabaseType::MySQL => {
                 "SELECT CAST(ID AS CHAR), USER, DB, \
@@ -102,6 +112,11 @@ impl Dialect {
     pub fn cancel_query_statement(&self, id: &str) -> Option<String> {
         match self.0 {
             DatabaseType::PostgreSQL => Some(format!("SELECT pg_cancel_backend({})", numeric(id)?)),
+            // Queries have ids of their own, so the session's are looked up.
+            DatabaseType::CockroachDb => Some(format!(
+                "CANCEL QUERIES (SELECT query_id FROM [SHOW CLUSTER QUERIES] WHERE session_id = '{}')",
+                cockroach_session(id)?
+            )),
             DatabaseType::MySQL => Some(format!("KILL QUERY {}", numeric(id)?)),
             DatabaseType::ClickHouse => Some(format!(
                 "KILL QUERY WHERE query_id = {}",
@@ -123,6 +138,9 @@ impl Dialect {
             DatabaseType::PostgreSQL => {
                 Some(format!("SELECT pg_terminate_backend({})", numeric(id)?))
             }
+            DatabaseType::CockroachDb => {
+                Some(format!("CANCEL SESSION '{}'", cockroach_session(id)?))
+            }
             DatabaseType::MySQL | DatabaseType::MsSql => Some(format!("KILL {}", numeric(id)?)),
             DatabaseType::ClickHouse
             | DatabaseType::SQLite
@@ -132,11 +150,20 @@ impl Dialect {
     }
 
     pub fn can_cancel_queries(&self) -> bool {
-        self.cancel_query_statement("1").is_some()
+        self.cancel_query_statement(self.sample_session_id())
+            .is_some()
     }
 
     pub fn can_kill_sessions(&self) -> bool {
-        self.kill_session_statement("1").is_some()
+        self.kill_session_statement(self.sample_session_id())
+            .is_some()
+    }
+
+    fn sample_session_id(&self) -> &'static str {
+        match self.0 {
+            DatabaseType::CockroachDb => "18df65de578f1ac10000000000000001",
+            _ => "1",
+        }
     }
 }
 
@@ -145,6 +172,13 @@ impl Dialect {
 fn numeric(id: &str) -> Option<&str> {
     let id = id.trim();
     (!id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit())).then_some(id)
+}
+
+/// `id` when it is a CockroachDB session id, 128 bits written as 32 hex
+/// digits.
+fn cockroach_session(id: &str) -> Option<&str> {
+    let id = id.trim();
+    (id.len() == 32 && id.bytes().all(|byte| byte.is_ascii_hexdigit())).then_some(id)
 }
 
 #[cfg(test)]
@@ -186,6 +220,25 @@ mod tests {
             Some("KILL QUERY WHERE query_id = 'a''b'")
         );
         assert_eq!(clickhouse.kill_session_statement("abc"), None);
+
+        let cockroach = DatabaseType::CockroachDb.dialect();
+        let session = "18df65de578f1ac10000000000000001";
+        assert_eq!(
+            cockroach.cancel_query_statement(session).as_deref(),
+            Some(
+                "CANCEL QUERIES (SELECT query_id FROM [SHOW CLUSTER QUERIES] WHERE session_id = '18df65de578f1ac10000000000000001')"
+            )
+        );
+        assert_eq!(
+            cockroach.kill_session_statement(session).as_deref(),
+            Some("CANCEL SESSION '18df65de578f1ac10000000000000001'")
+        );
+        assert_eq!(cockroach.kill_session_statement("123"), None);
+        assert_eq!(
+            cockroach.kill_session_statement("18df65de578f1ac1000000000000000'"),
+            None
+        );
+        assert!(cockroach.can_cancel_queries() && cockroach.can_kill_sessions());
 
         for db_type in [
             DatabaseType::SQLite,

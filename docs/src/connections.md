@@ -21,8 +21,8 @@ own files.
 - Check **Ask on connect** to be asked for the password each time instead.
   Blanco keeps it until you disconnect.
 - If the server turns a password down, Blanco asks for it again.
-- A PostgreSQL connection without a password reads the password file, the
-  same way `psql` does (`PGPASSFILE`, else `~/.pgpass`).
+- A PostgreSQL or CockroachDB connection without a password reads the
+  password file, the same way `psql` does (`PGPASSFILE`, else `~/.pgpass`).
 
 ## SSH tunnels
 
@@ -34,8 +34,9 @@ connect.
 
 ## TLS
 
-PostgreSQL and MySQL connections take an SSL mode and optional CA certificate,
-client certificate and key files.
+PostgreSQL, CockroachDB and MySQL connections take an SSL mode and optional CA
+certificate, client certificate and key files. CockroachDB Cloud needs
+`verify-full` with the cluster's CA certificate.
 
 ## Environments
 

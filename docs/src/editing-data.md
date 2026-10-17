@@ -1,7 +1,9 @@
 # Editing data
 
 A result can be edited in place when it comes from one table with a primary
-key. A lock icon marks results that can't be edited.
+key. A lock icon marks results that can't be edited. CockroachDB gives a table
+declared without a primary key a hidden `rowid` key, and `SELECT *` on such a
+table shows it as a column so the rows can be edited.
 
 <figure class="screenshot">
 <img class="screenshot-light" src="images/inline-edit-latte.webp" alt="A results grid with two edited cells highlighted and a third open for editing">

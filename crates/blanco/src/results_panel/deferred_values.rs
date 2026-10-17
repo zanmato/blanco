@@ -68,7 +68,7 @@ impl DeferredRead {
         query: &str,
         threshold: u64,
     ) -> Option<Self> {
-        if threshold == 0 || !db_type.dialect().rows_editable() {
+        if !db_type.dialect().rewrites_full_reads(threshold) {
             return None;
         }
         let table = connection

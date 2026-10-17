@@ -112,6 +112,10 @@ impl DatabaseService {
                 DatabaseType::PostgreSQL,
                 Arc::new(PostgresConnectionFactory::new()),
             ),
+            (
+                DatabaseType::CockroachDb,
+                Arc::new(PostgresConnectionFactory::cockroachdb()),
+            ),
             (DatabaseType::MySQL, Arc::new(MysqlConnectionFactory::new())),
             (
                 DatabaseType::ClickHouse,
@@ -156,18 +160,21 @@ impl DatabaseService {
         self.password_file = Some(path.into());
     }
 
-    /// For a PostgreSQL connection without a password, take one from the
+    /// For a PostgreSQL or CockroachDB connection without a password, take
+    /// one from the
     /// password file, matched against the configured host and port rather
     /// than an SSH tunnel's local end, and the database being opened. This
     /// is the only lookup: the driver's own is switched off, since it
     /// matches the tunnel's end and reads `~/.pgpass` whatever
     /// `PGPASSFILE` says.
     fn apply_password_file(&self, config: &mut ConnectionConfig, database: Option<&str>) {
-        if config.db_type != DatabaseType::PostgreSQL
-            || config
-                .password
-                .as_deref()
-                .is_some_and(|password| !password.is_empty())
+        if !matches!(
+            config.db_type,
+            DatabaseType::PostgreSQL | DatabaseType::CockroachDb
+        ) || config
+            .password
+            .as_deref()
+            .is_some_and(|password| !password.is_empty())
         {
             return;
         }

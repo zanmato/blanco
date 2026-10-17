@@ -7,7 +7,7 @@ mod types;
 
 use file_form::FileForm;
 use mssql::MssqlForm;
-use server_form::{CLICKHOUSE_SPEC, MYSQL_SPEC, POSTGRES_SPEC, ServerForm};
+use server_form::{CLICKHOUSE_SPEC, COCKROACHDB_SPEC, MYSQL_SPEC, POSTGRES_SPEC, ServerForm};
 use types::ConnectorType;
 
 use gpui::{
@@ -46,6 +46,7 @@ pub struct NewConnectionModal {
     sqlite_form: FileForm,
     duckdb_form: FileForm,
     postgres_form: ServerForm,
+    cockroach_form: ServerForm,
     mysql_form: ServerForm,
     clickhouse_form: ServerForm,
     mssql_form: MssqlForm,
@@ -145,6 +146,7 @@ impl NewConnectionModal {
         let sqlite_form = FileForm::new(blanco_core::DatabaseType::SQLite, window, cx, conn_ref);
         let duckdb_form = FileForm::new(blanco_core::DatabaseType::DuckDb, window, cx, conn_ref);
         let postgres_form = ServerForm::new(&POSTGRES_SPEC, window, cx, conn_ref);
+        let cockroach_form = ServerForm::new(&COCKROACHDB_SPEC, window, cx, conn_ref);
         let mysql_form = ServerForm::new(&MYSQL_SPEC, window, cx, conn_ref);
         let clickhouse_form = ServerForm::new(&CLICKHOUSE_SPEC, window, cx, conn_ref);
         let mssql_form = MssqlForm::new(window, cx, conn_ref);
@@ -164,6 +166,7 @@ impl NewConnectionModal {
             sqlite_form,
             duckdb_form,
             postgres_form,
+            cockroach_form,
             mysql_form,
             clickhouse_form,
             mssql_form,
@@ -202,6 +205,7 @@ impl NewConnectionModal {
             ConnectorType::SQLite => self.sqlite_form.validate(cx),
             ConnectorType::DuckDb => self.duckdb_form.validate(cx),
             ConnectorType::PostgreSQL => self.postgres_form.validate(cx),
+            ConnectorType::CockroachDb => self.cockroach_form.validate(cx),
             ConnectorType::MySQL => self.mysql_form.validate(cx),
             ConnectorType::ClickHouse => self.clickhouse_form.validate(cx),
             ConnectorType::MsSql => self.mssql_form.validate(cx),
@@ -227,6 +231,10 @@ impl NewConnectionModal {
             }
             ConnectorType::PostgreSQL => {
                 self.postgres_form
+                    .get_connection_data(name, environment_type, cx)
+            }
+            ConnectorType::CockroachDb => {
+                self.cockroach_form
                     .get_connection_data(name, environment_type, cx)
             }
             ConnectorType::MySQL => self
@@ -399,7 +407,12 @@ impl NewConnectionModal {
     }
 
     fn secret_inputs(&self, kind: SecretKind) -> Vec<Entity<InputState>> {
-        let servers = [&self.postgres_form, &self.mysql_form, &self.clickhouse_form];
+        let servers = [
+            &self.postgres_form,
+            &self.cockroach_form,
+            &self.mysql_form,
+            &self.clickhouse_form,
+        ];
         match kind {
             SecretKind::Password => servers
                 .iter()
@@ -498,6 +511,13 @@ impl NewConnectionModal {
                 &self.postgres_form.username_input,
                 &self.postgres_form.password_input,
             ),
+            ConnectorType::CockroachDb => (
+                &self.cockroach_form.host_input,
+                &self.cockroach_form.port_input,
+                &self.cockroach_form.database_input,
+                &self.cockroach_form.username_input,
+                &self.cockroach_form.password_input,
+            ),
             ConnectorType::MySQL => (
                 &self.mysql_form.host_input,
                 &self.mysql_form.port_input,
@@ -566,6 +586,15 @@ impl NewConnectionModal {
                     &self.postgres_form.ssh_port_input,
                     &self.postgres_form.ssh_user_input,
                     &self.postgres_form.ssh_password_input,
+                )
+            }
+            ConnectorType::CockroachDb => {
+                self.cockroach_form.ssh_enabled = true;
+                (
+                    &self.cockroach_form.ssh_host_input,
+                    &self.cockroach_form.ssh_port_input,
+                    &self.cockroach_form.ssh_user_input,
+                    &self.cockroach_form.ssh_password_input,
                 )
             }
             ConnectorType::MySQL => {
@@ -689,6 +718,12 @@ impl Render for NewConnectionModal {
                     ConnectorType::PostgreSQL => server_form::render(
                         |modal| &mut modal.postgres_form,
                         &self.postgres_form,
+                        &self.ask_secrets,
+                        cx,
+                    ),
+                    ConnectorType::CockroachDb => server_form::render(
+                        |modal| &mut modal.cockroach_form,
+                        &self.cockroach_form,
                         &self.ask_secrets,
                         cx,
                     ),

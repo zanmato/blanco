@@ -13,7 +13,7 @@ use super::{PgConnectionKey, PostgresConnection, QueryParam};
 #[async_trait]
 impl Connection for PostgresConnection {
     fn database_type(&self) -> blanco_core::DatabaseType {
-        blanco_core::DatabaseType::PostgreSQL
+        self.database_type
     }
 
     fn get_display_name(&self) -> String {
@@ -27,7 +27,8 @@ impl Connection for PostgresConnection {
         self.server_connection_string = connection_string.to_string();
 
         // Update display name
-        self.display_name = Self::generate_server_display_name(&self.server_key);
+        self.display_name =
+            Self::generate_server_display_name(self.database_type, &self.server_key);
 
         // Clear any existing pools (they will be recreated on demand)
         let mut pools = self.pools.write().await;
@@ -52,15 +53,18 @@ impl Connection for PostgresConnection {
         // driven by the global async-io reactor, so it works even though this
         // runs on the tokio runtime.
         let options = Self::connect_options(&connection_string)?;
+        let backend = self.backend_name();
         let connect = async {
             sqlx::postgres::PgConnection::connect_with(&options)
                 .await
-                .map_err(|e| blanco_core::tag_sqlx(e).context("Failed to connect to PostgreSQL"))
+                .map_err(|e| {
+                    blanco_core::tag_sqlx(e).context(format!("Failed to connect to {backend}"))
+                })
         };
         let deadline = async {
             smol::Timer::after(timeout).await;
             Err(anyhow::anyhow!(
-                "PostgreSQL connection timed out after {}s",
+                "{backend} connection timed out after {}s",
                 timeout.as_secs()
             ))
         };
@@ -70,7 +74,9 @@ impl Connection for PostgresConnection {
         let result = sqlx::query("SELECT 1")
             .execute(&mut conn)
             .await
-            .map_err(|e| blanco_core::tag_sqlx(e).context("PostgreSQL connection check failed"));
+            .map_err(|e| {
+                blanco_core::tag_sqlx(e).context(format!("{backend} connection check failed"))
+            });
 
         // Close best-effort; the validation result is what matters.
         let _ = conn.close().await;
@@ -107,7 +113,8 @@ impl Connection for PostgresConnection {
             // Preserve the underlying `sqlx::Error` so a dropped connection is
             // tagged for the service rather than flattened into a string.
             .map_err(|e| {
-                blanco_core::tag_sqlx_error(e).context("PostgreSQL query execution failed")
+                blanco_core::tag_sqlx_error(e)
+                    .context(format!("{} query execution failed", self.backend_name()))
             })?;
 
         Ok(result)
@@ -126,7 +133,8 @@ impl Connection for PostgresConnection {
                 format!("Failed to get connection pool for database '{database_name}'")
             })?;
         self.execute_script_inner(&pool, query).await.map_err(|e| {
-            blanco_core::tag_sqlx_error(e).context("PostgreSQL script execution failed")
+            blanco_core::tag_sqlx_error(e)
+                .context(format!("{} script execution failed", self.backend_name()))
         })
     }
 
@@ -142,10 +150,9 @@ impl Connection for PostgresConnection {
             .with_context(|| {
                 format!("Failed to get connection pool for database '{database_name}'")
             })?;
-        let description = pool
-            .describe(query)
-            .await
-            .map_err(|e| blanco_core::tag_sqlx(e).context("PostgreSQL describe failed"))?;
+        let description = pool.describe(query).await.map_err(|e| {
+            blanco_core::tag_sqlx(e).context(format!("{} describe failed", self.backend_name()))
+        })?;
         let (columns, column_types) = description
             .columns()
             .iter()
@@ -180,10 +187,9 @@ impl Connection for PostgresConnection {
                 None => q.bind(Option::<String>::None),
             };
         }
-        let result = q
-            .execute(&pool)
-            .await
-            .map_err(|e| blanco_core::tag_sqlx(e).context("PostgreSQL write failed"))?;
+        let result = q.execute(&pool).await.map_err(|e| {
+            blanco_core::tag_sqlx(e).context(format!("{} write failed", self.backend_name()))
+        })?;
         Ok(result.rows_affected())
     }
 
@@ -244,6 +250,8 @@ impl Connection for PostgresConnection {
             SELECT table_name
             FROM information_schema.views
             WHERE table_schema = $1
+            -- CockroachDB lists its materialized views here too.
+            AND table_name NOT IN (SELECT matviewname FROM pg_matviews WHERE schemaname = $1)
             ORDER BY table_name
         ";
 
@@ -439,6 +447,11 @@ impl Connection for PostgresConnection {
     }
 
     async fn get_database_sizes(&self) -> Result<std::collections::HashMap<String, u64>> {
+        // CockroachDB answers 0 for every database, and its real figures sit
+        // behind crdb_internal, which is closed by default.
+        if self.database_type == blanco_core::DatabaseType::CockroachDb {
+            return Ok(std::collections::HashMap::new());
+        }
         // pg_database_size raises an error for a database the user may not
         // CONNECT to, which would fail the whole listing, so those get NULL.
         let query = "
@@ -733,6 +746,7 @@ impl Connection for PostgresConnection {
                 SELECT table_name, 'VIEW' as entity_type
                 FROM information_schema.views
                 WHERE table_schema = $1
+                AND table_name NOT IN (SELECT matviewname FROM pg_matviews WHERE schemaname = $1)
                 UNION ALL
                 SELECT matviewname, 'MATERIALIZED_VIEW' as entity_type
                 FROM pg_matviews
@@ -1219,6 +1233,7 @@ impl Connection for PostgresConnection {
 impl Clone for PostgresConnection {
     fn clone(&self) -> Self {
         Self {
+            database_type: self.database_type,
             pools: Arc::clone(&self.pools),
             server_key: self.server_key.clone(),
             display_name: self.display_name.clone(),

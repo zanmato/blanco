@@ -10,10 +10,13 @@ Refresh the list by hand or on an interval. Right click a session to:
 - **Kill Session**: end the session
 
 Both ask first, warn on a PROD connection and are refused on a read only one.
+CockroachDB lists the sessions of every node in the cluster, without a
+database.
 
 | Database | Cancel Query | Kill Session |
 | --- | --- | --- |
 | PostgreSQL | yes | yes |
+| CockroachDB | yes | yes |
 | MySQL, MariaDB | yes | yes |
 | SQL Server | no | yes |
 | ClickHouse | yes | no |

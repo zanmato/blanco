@@ -14,6 +14,7 @@ const KEYWORDS: &[&str] = &[
     "FROM",
     "WHERE",
     "INSERT",
+    "UPSERT",
     "INTO",
     "VALUES",
     "UPDATE",
@@ -440,8 +441,12 @@ impl KeywordPosition {
                 "BY" if previous.is_some_and(|token| token.is("ORDER")) => "ORDER BY",
                 "LIMIT" => "LIMIT",
                 "OFFSET" => "OFFSET",
-                "INSERT" => "INSERT",
-                "INTO" if previous.is_some_and(|token| token.is("INSERT")) => "INTO",
+                "INSERT" | "UPSERT" => "INSERT",
+                "INTO"
+                    if previous.is_some_and(|token| token.is("INSERT") || token.is("UPSERT")) =>
+                {
+                    "INTO"
+                }
                 "VALUES" => "VALUES",
                 "UPDATE" => "UPDATE",
                 "SET" => "SET",
@@ -472,7 +477,7 @@ impl KeywordPosition {
         let tokens = &self.frame.tokens;
         let Some(last) = tokens.last() else {
             return if self.top_level {
-                vec!["SELECT", "INSERT", "UPDATE", "DELETE", "WITH"]
+                vec!["SELECT", "INSERT", "UPSERT", "UPDATE", "DELETE", "WITH"]
             } else if self
                 .frame
                 .opener
@@ -491,7 +496,7 @@ impl KeywordPosition {
 
         if !last.ends_item() {
             return match last.word() {
-                Some("INSERT") => vec!["INTO"],
+                Some("INSERT" | "UPSERT") => vec!["INTO"],
                 Some("DELETE") => vec!["FROM"],
                 Some("GROUP" | "ORDER") => vec!["BY"],
                 Some("INNER" | "CROSS") => vec!["JOIN"],
@@ -759,6 +764,18 @@ mod tests {
         assert!(expected_on(DatabaseType::ClickHouse, sql).contains(&"FINAL"));
         assert!(expected_on(DatabaseType::ClickHouse, sql).contains(&"SETTINGS"));
         assert!(!expected_on(DatabaseType::MySQL, sql).contains(&"FINAL"));
+
+        // CockroachDB's UPSERT starts a statement and takes INTO, as INSERT does.
+        assert!(expected_on(DatabaseType::CockroachDb, "|").contains(&"UPSERT"));
+        assert!(!expected_on(DatabaseType::PostgreSQL, "|").contains(&"UPSERT"));
+        assert_eq!(
+            expected_on(DatabaseType::CockroachDb, "UPSERT |").first(),
+            Some(&"INTO")
+        );
+        assert_eq!(
+            expected_on(DatabaseType::CockroachDb, "UPSERT INTO users (id) |").first(),
+            Some(&"VALUES")
+        );
 
         let insert = "INSERT INTO users (id) |";
         assert_eq!(

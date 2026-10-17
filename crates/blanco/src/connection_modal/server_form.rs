@@ -62,6 +62,25 @@ pub(super) const POSTGRES_SPEC: ServerFormSpec = ServerFormSpec {
     ],
 };
 
+pub(super) const COCKROACHDB_SPEC: ServerFormSpec = ServerFormSpec {
+    db_type: database::DatabaseType::CockroachDb,
+    id_prefix: "cockroachdb",
+    host_label: "Host",
+    default_port: 26257,
+    port_for_host: |_| 26257,
+    port_optional_when_in_host: false,
+    database_placeholder: "defaultdb",
+    username_placeholder: "root",
+    ssl_modes: &[
+        "preferred",
+        "required",
+        "disabled",
+        "allow",
+        "verify-ca",
+        "verify-full",
+    ],
+};
+
 pub(super) const MYSQL_SPEC: ServerFormSpec = ServerFormSpec {
     db_type: database::DatabaseType::MySQL,
     id_prefix: "mysql",

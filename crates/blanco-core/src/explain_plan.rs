@@ -1,7 +1,7 @@
 //! A backend independent query plan tree, parsed from the result of a
 //! dialect's EXPLAIN statement. PostgreSQL (`FORMAT JSON`), SQLite
-//! (`EXPLAIN QUERY PLAN`) and MySQL (`FORMAT=TREE`) are supported; other
-//! backends fall back to the raw tabular output.
+//! (`EXPLAIN QUERY PLAN`), MySQL (`FORMAT=TREE`) and CockroachDB (its text
+//! tree) are supported; other backends fall back to the raw tabular output.
 
 use crate::{DatabaseType, QueryResult};
 
@@ -296,6 +296,142 @@ fn mysql_node(body: &str) -> PlanNode {
     }
 }
 
+/// CockroachDB's `EXPLAIN` and `EXPLAIN ANALYZE` print one row per line: a
+/// header of `key: value` lines, then the tree, where each node is a line
+/// with `• name` and nesting follows the column of the bullet. The lines
+/// after a node, drawn inside its branch, are its properties.
+pub(crate) fn parse_cockroachdb(result: &QueryResult) -> Option<PlanTree> {
+    let text = single_cell(result)?;
+    let mut tree = PlanTree::default();
+    // Each node with the time spent in it alone: ANALYZE reports an
+    // operator's own time, not its children's.
+    let mut stack: Vec<(usize, PlanNode, Option<f64>)> = Vec::new();
+    let mut roots: Vec<PlanNode> = Vec::new();
+
+    fn pop_into_parent(stack: &mut Vec<(usize, PlanNode, Option<f64>)>, roots: &mut Vec<PlanNode>) {
+        let Some((_, mut node, own_time)) = stack.pop() else {
+            return;
+        };
+        let children: Vec<f64> = node
+            .children
+            .iter()
+            .filter_map(|child| child.actual_time_ms)
+            .collect();
+        if own_time.is_some() || !children.is_empty() {
+            node.actual_time_ms = Some(own_time.unwrap_or(0.0) + children.iter().sum::<f64>());
+        }
+        match stack.last_mut() {
+            Some((_, parent, _)) => parent.children.push(node),
+            None => roots.push(node),
+        }
+    }
+
+    for line in text.lines() {
+        if let Some((bullet, _)) = line.char_indices().find(|(_, c)| *c == '•') {
+            let depth = line[..bullet].chars().count();
+            while stack.last().is_some_and(|(open, _, _)| *open >= depth) {
+                pop_into_parent(&mut stack, &mut roots);
+            }
+            let label = line[bullet + '•'.len_utf8()..].trim().to_string();
+            stack.push((
+                depth,
+                PlanNode {
+                    label,
+                    ..PlanNode::default()
+                },
+                None,
+            ));
+            continue;
+        }
+        let property = line
+            .trim_start_matches(|c: char| c.is_whitespace() || matches!(c, '│' | '├' | '└' | '─'))
+            .trim_end();
+        let Some((_, node, own_time)) = stack.last_mut() else {
+            match property.split_once(": ") {
+                Some(("planning time", value)) => tree.planning_time_ms = duration_ms(value),
+                Some(("execution time", value)) => tree.execution_time_ms = duration_ms(value),
+                _ => {}
+            }
+            continue;
+        };
+        // A blank line closes the tree; index recommendations may follow.
+        if line.trim().is_empty() {
+            break;
+        }
+        if property.is_empty() {
+            continue;
+        }
+        match property.split_once(": ") {
+            Some(("estimated row count", value)) => node.estimated_rows = count(value),
+            Some(("actual row count", value)) => node.actual_rows = count(value),
+            Some(("execution time", value)) => *own_time = duration_ms(value),
+            // Scans report the time spent reading from the storage layer.
+            Some(("KV time", value)) => {
+                if own_time.is_none() {
+                    *own_time = duration_ms(value);
+                }
+                node.details
+                    .push(("KV time".to_string(), value.to_string()));
+            }
+            Some(("table", value)) => {
+                node.label.push(' ');
+                node.label.push_str(value);
+            }
+            Some((key, value)) => node.details.push((key.to_string(), value.to_string())),
+            None => node.details.push((String::new(), property.to_string())),
+        }
+    }
+    while !stack.is_empty() {
+        pop_into_parent(&mut stack, &mut roots);
+    }
+    if roots.is_empty() {
+        return None;
+    }
+    tree.roots = roots;
+    Some(tree)
+}
+
+/// The leading number of `1,742` or `5,001 (100% of the table; ...)`.
+fn count(value: &str) -> Option<f64> {
+    value
+        .split_whitespace()
+        .next()?
+        .replace(',', "")
+        .parse()
+        .ok()
+}
+
+/// A Go duration as CockroachDB prints it (`821µs`, `4ms`, `1.2s`, `1m3s`)
+/// in milliseconds.
+fn duration_ms(value: &str) -> Option<f64> {
+    let mut total = 0.0;
+    let mut rest = value.trim();
+    if rest.is_empty() {
+        return None;
+    }
+    while !rest.is_empty() {
+        let number_end = rest
+            .find(|c: char| !(c.is_ascii_digit() || c == '.'))
+            .unwrap_or(rest.len());
+        let number: f64 = rest[..number_end].parse().ok()?;
+        rest = &rest[number_end..];
+        let unit_end = rest
+            .find(|c: char| c.is_ascii_digit() || c == '.')
+            .unwrap_or(rest.len());
+        total += match &rest[..unit_end] {
+            "ns" => number / 1e6,
+            "µs" | "us" => number / 1e3,
+            "ms" => number,
+            "s" => number * 1e3,
+            "m" => number * 60e3,
+            "h" => number * 3600e3,
+            _ => return None,
+        };
+        rest = &rest[unit_end..];
+    }
+    Some(total)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -395,6 +531,103 @@ mod tests {
         assert_eq!(root.actual_rows, Some(4.0));
         assert_eq!(root.actual_time_ms, Some(0.2));
         assert_eq!(root.children[1].actual_time_ms, Some(0.04));
+    }
+
+    #[test]
+    fn cockroachdb_text_tree() {
+        let lines = [
+            "planning time: 821µs",
+            "execution time: 4ms",
+            "distribution: local",
+            "",
+            "• top-k",
+            "│ execution time: 22µs",
+            "│ actual row count: 5",
+            "│ estimated row count: 5",
+            "│ order: -count_rows",
+            "│",
+            "└── • hash join",
+            "    │ execution time: 248µs",
+            "    │ actual row count: 4,728",
+            "    │ estimated row count: 4,762",
+            "    │ equality: (artist_id) = (id)",
+            "    │ right cols are key",
+            "    │",
+            "    ├── • scan",
+            "    │     KV time: 2ms",
+            "    │     actual row count: 5,001",
+            "    │     estimated row count: 5,001 (100% of the table; stats collected 1 second ago)",
+            "    │     table: albums@albums_pkey",
+            "    │     spans: FULL SCAN",
+            "    │",
+            "    └── • scan",
+            "          KV time: 651µs",
+            "          table: artists@artists_pkey",
+            "",
+            "index recommendations: 1",
+            "1. type: index creation",
+        ];
+        let tree = parse_plan(
+            DatabaseType::CockroachDb,
+            &result(&["info"], lines.iter().map(|line| vec![*line]).collect()),
+        )
+        .expect("plan");
+        assert_eq!(tree.planning_time_ms, Some(0.821));
+        assert_eq!(tree.execution_time_ms, Some(4.0));
+        assert_eq!(tree.roots.len(), 1);
+        let root = &tree.roots[0];
+        assert_eq!(root.label, "top-k");
+        assert_eq!(root.details, vec![("order".into(), "-count_rows".into())]);
+        let join = &root.children[0];
+        assert_eq!(join.label, "hash join");
+        assert_eq!(join.actual_rows, Some(4728.0));
+        assert_eq!(join.estimated_rows, Some(4762.0));
+        assert_eq!(
+            join.details[1],
+            (String::new(), "right cols are key".into())
+        );
+        assert_eq!(join.children.len(), 2);
+        let scan = &join.children[0];
+        assert_eq!(scan.label, "scan albums@albums_pkey");
+        assert_eq!(scan.estimated_rows, Some(5001.0));
+        assert_eq!(scan.actual_time_ms, Some(2.0));
+        assert!(scan.details.contains(&("spans".into(), "FULL SCAN".into())));
+        // Own times add up to inclusive ones, as PostgreSQL reports them.
+        assert!((join.actual_time_ms.unwrap() - 2.899).abs() < 1e-9);
+        assert!((root.actual_time_ms.unwrap() - 2.921).abs() < 1e-9);
+        assert!((join.self_time_ms().unwrap() - 0.248).abs() < 1e-9);
+    }
+
+    /// Without ANALYZE there are estimates and no times.
+    #[test]
+    fn cockroachdb_estimated_plan_has_no_timings() {
+        let lines = [
+            "distribution: local",
+            "",
+            "• scan",
+            "  missing stats",
+            "  table: albums@albums_pkey",
+            "  spans: FULL SCAN",
+        ];
+        let tree = parse_plan(
+            DatabaseType::CockroachDb,
+            &result(&["info"], lines.iter().map(|line| vec![*line]).collect()),
+        )
+        .expect("plan");
+        assert_eq!(tree.roots[0].label, "scan albums@albums_pkey");
+        assert_eq!(
+            tree.roots[0].details[0],
+            (String::new(), "missing stats".into())
+        );
+        assert!(!tree.has_timings());
+    }
+
+    #[test]
+    fn go_durations() {
+        assert_eq!(duration_ms("4ms"), Some(4.0));
+        assert_eq!(duration_ms("1m3s"), Some(63_000.0));
+        assert_eq!(duration_ms("821µs"), Some(0.821));
+        assert_eq!(duration_ms("soon"), None);
     }
 
     #[test]

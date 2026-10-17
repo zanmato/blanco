@@ -123,17 +123,25 @@ enum LargeKind {
 }
 
 impl Dialect {
+    /// Whether a plain read of one table may be rewritten for the grid, so
+    /// its table is worth looking up first: to defer values over
+    /// `threshold` bytes (0 when that is off), or to name a hidden key.
+    pub fn rewrites_full_reads(&self, threshold: u64) -> bool {
+        self.rows_editable() && (threshold > 0 || self.hidden_row_key().is_some())
+    }
+
     /// The read to run in place of `query` so values over `threshold` bytes
-    /// arrive as previews. `None` when the query is anything but a plain
-    /// `SELECT *` on one table, the table has no primary key to fetch a
-    /// value by later, or none of its columns can hold a large value.
+    /// arrive as previews, and a [hidden key](Self::hidden_row_key) arrives
+    /// at all. `None` when the query is anything but a plain `SELECT *` on
+    /// one table, the table has no primary key to fetch a value by later, or
+    /// there is neither a large value nor a hidden key to read.
     pub fn deferred_read(
         &self,
         query: &str,
         table_columns: &[ColumnInfo],
         threshold: u64,
     ) -> Option<DeferredPlan> {
-        if threshold == 0 || !self.rows_editable() {
+        if !self.rewrites_full_reads(threshold) {
             return None;
         }
         if !table_columns.iter().any(|column| column.is_primary_key) {
@@ -142,12 +150,18 @@ impl Dialect {
         let large: Vec<Option<LargeKind>> = table_columns
             .iter()
             .map(|column| {
-                (!column.is_primary_key)
+                (threshold > 0 && !column.is_primary_key)
                     .then(|| self.large_kind(column, threshold))
                     .flatten()
             })
             .collect();
-        if large.iter().all(Option::is_none) {
+        // The select list names every column, so a key `*` hides is read too.
+        let hidden_key = self.hidden_row_key().is_some_and(|key| {
+            table_columns
+                .iter()
+                .any(|column| column.is_primary_key && column.name == key)
+        });
+        if large.iter().all(Option::is_none) && !hidden_key {
             return None;
         }
 
@@ -271,7 +285,7 @@ impl Dialect {
                 .is_none_or(|length| length <= 0 || u64::from(length.unsigned_abs()) > threshold);
         let fits = |kind: LargeKind| unbounded.then_some(kind);
         match self.database_type() {
-            DatabaseType::PostgreSQL => match base {
+            DatabaseType::PostgreSQL | DatabaseType::CockroachDb => match base {
                 "text" => Some(LargeKind::Text),
                 "bytea" => Some(LargeKind::Binary),
                 "character varying" | "varchar" => fits(LargeKind::Text),
@@ -315,7 +329,9 @@ impl Dialect {
     /// The size of `column` in bytes.
     fn byte_length_sql(&self, column: &str, kind: LargeKind) -> String {
         match (self.database_type(), kind) {
-            (DatabaseType::PostgreSQL, _) => format!("OCTET_LENGTH({column})"),
+            (DatabaseType::PostgreSQL | DatabaseType::CockroachDb, _) => {
+                format!("OCTET_LENGTH({column})")
+            }
             (DatabaseType::MsSql, _) => format!("DATALENGTH({column})"),
             // LENGTH counts characters of text in SQLite, bytes of a blob.
             (DatabaseType::SQLite, _) => format!("LENGTH(CAST({column} AS BLOB))"),
@@ -331,7 +347,10 @@ impl Dialect {
     fn preview_sql(&self, column: &str, kind: LargeKind) -> String {
         match (self.database_type(), kind) {
             (DatabaseType::MsSql, _) => format!("SUBSTRING({column}, 1, {PREVIEW_LENGTH})"),
-            (DatabaseType::PostgreSQL | DatabaseType::MySQL, LargeKind::Text) => {
+            (
+                DatabaseType::PostgreSQL | DatabaseType::CockroachDb | DatabaseType::MySQL,
+                LargeKind::Text,
+            ) => {
                 format!("LEFT({column}, {PREVIEW_LENGTH})")
             }
             // SUBSTR takes no BLOB in DuckDB, so the bytes go through hex.
@@ -369,6 +388,36 @@ mod tests {
             column("body", "bytea", false),
             column("size", "integer", false),
         ]
+    }
+
+    /// A CockroachDB table declared without a primary key is keyed by a
+    /// hidden `rowid`, which the read names so its rows can be edited, with
+    /// deferring off and nothing large to defer.
+    #[test]
+    fn hidden_row_key_is_read_by_name() {
+        let columns = vec![
+            column("a", "bigint", false),
+            column("rowid", "bigint", true),
+        ];
+        let cockroach = DatabaseType::CockroachDb.dialect();
+        let plan = cockroach
+            .deferred_read("SELECT * FROM nopk", &columns, 0)
+            .expect("the hidden key is named");
+        assert_eq!(plan.query, r#"SELECT "a", "rowid" FROM nopk"#);
+        assert!(plan.previewed.is_empty());
+        // A visible key needs no rewrite, and PostgreSQL hides none.
+        let keyed = vec![column("id", "bigint", true), column("a", "bigint", false)];
+        assert!(
+            cockroach
+                .deferred_read("SELECT * FROM t", &keyed, 0)
+                .is_none()
+        );
+        assert!(
+            DatabaseType::PostgreSQL
+                .dialect()
+                .deferred_read("SELECT * FROM nopk", &columns, 0)
+                .is_none()
+        );
     }
 
     #[test]

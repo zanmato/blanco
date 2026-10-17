@@ -12,6 +12,7 @@ use lsp_types::{Documentation, MarkupContent, MarkupKind, ParameterInformation, 
 use std::sync::OnceLock;
 
 mod clickhouse;
+mod cockroachdb;
 mod duckdb;
 mod mssql;
 mod mysql;
@@ -94,6 +95,7 @@ impl FunctionSignature {
 pub fn builtin_functions(dialect: DatabaseType) -> &'static [FunctionSignature] {
     match dialect {
         DatabaseType::PostgreSQL => postgres::FUNCTIONS,
+        DatabaseType::CockroachDb => cockroachdb::FUNCTIONS,
         DatabaseType::MySQL => mysql::FUNCTIONS,
         DatabaseType::SQLite => sqlite::FUNCTIONS,
         DatabaseType::DuckDb => duckdb::FUNCTIONS,

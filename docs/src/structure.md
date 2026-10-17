@@ -31,7 +31,7 @@ row to edit, rename or drop it. Changes are not run straight away:
 - Undo a change from its row. Changes that depend on it are undone with it.
 - **Apply Changes** shows every statement in order. **Confirm** runs them,
   in one transaction where the database supports that. The preview says when
-  it doesn't, as on MySQL and ClickHouse.
+  it doesn't, as on MySQL, CockroachDB and ClickHouse.
 - **Discard Changes** drops them all.
 
 A change the database can't make is refused when you add it. SQLite, for

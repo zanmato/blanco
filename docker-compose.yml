@@ -37,6 +37,21 @@ services:
     ports:
       - "5488:5432"
 
+  # CockroachDB, a single secure node keeping its data in memory. The image
+  # makes its own certificates and the blanco user, and runs the scripts in
+  # docker/cockroach once the node is up.
+  cockroachtestdb:
+    image: cockroachdb/cockroach:v26.3.2
+    environment:
+      COCKROACH_USER: blanco
+      COCKROACH_PASSWORD: blanco
+      COCKROACH_DATABASE: blanco
+    command: start-single-node --store=type=mem,size=1GiB
+    volumes:
+      - ./docker/cockroach:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "26258:26257"
+
   # ClickHouse for testing
   clickhousetestdb:
     image: clickhouse/clickhouse-server:latest

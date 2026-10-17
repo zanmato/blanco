@@ -82,6 +82,24 @@ fn postgres_case() -> DriverCase {
     }
 }
 
+fn cockroach_case() -> DriverCase {
+    DriverCase {
+        label: "CockroachDB",
+        db_type: DatabaseType::CockroachDb,
+        name: "it-cockroachdb",
+        host: env_or("COCKROACH", "HOST", "localhost"),
+        port: env_or("COCKROACH", "PORT", "26258"),
+        database: env_or("COCKROACH", "DB", "blanco"),
+        username: env_or("COCKROACH", "USER", "blanco"),
+        password: env_or("COCKROACH", "PASSWORD", "blanco"),
+        schema_name: Some("public"),
+        auth_markers: &["password authentication failed", "no password supplied"],
+        query: "SELECT 1",
+        expected_cell: "1",
+        ssh: None,
+    }
+}
+
 fn mysql_case() -> DriverCase {
     DriverCase {
         label: "MySQL",
@@ -749,6 +767,14 @@ async fn test_postgres_connect_and_query(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+async fn test_cockroachdb_connect_and_query(cx: &mut TestAppContext) {
+    let harness = FullAppHarness::new(cx);
+    let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+    cx.run_until_parked();
+    run_driver_case(&harness, cockroach_case(), &mut cx).await;
+}
+
+#[gpui::test]
 async fn test_mysql_connect_and_query(cx: &mut TestAppContext) {
     let harness = FullAppHarness::new(cx);
     let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
@@ -955,6 +981,7 @@ fn test_statement_timing_against_every_backend() {
         )
     };
     let postgres = postgres_case();
+    let cockroach = cockroach_case();
     let mysql = mysql_case();
     let clickhouse = clickhouse_case();
     let mssql = mssql_case();
@@ -979,6 +1006,13 @@ fn test_statement_timing_against_every_backend() {
             server(&postgres, 9102),
             postgres.database.clone(),
             "CREATE TEMP TABLE blanco_timing (id integer); SELECT 1 AS n",
+            vec![false, true],
+        ),
+        (
+            cockroach.label,
+            server(&cockroach, 9107),
+            cockroach.database.clone(),
+            "CREATE TABLE IF NOT EXISTS blanco_timing (id integer); SELECT 1 AS n",
             vec![false, true],
         ),
         (
@@ -1302,6 +1336,11 @@ fn test_process_list_finds_cancels_and_kills_sessions() {
             "SELECT pg_sleep(30) AS {marker}".to_string(),
         ),
         (
+            cockroach_case(),
+            9205,
+            "SELECT pg_sleep(30) AS {marker}".to_string(),
+        ),
+        (
             mysql_case(),
             9202,
             "SELECT SLEEP(30) AS {marker}".to_string(),
@@ -1440,6 +1479,7 @@ fn test_explain_estimates_and_analyzes_per_backend() {
         .with_trust_server_certificate(case.db_type == DatabaseType::MsSql)
     };
     let postgres = postgres_case();
+    let cockroach = cockroach_case();
     let mysql = mysql_case();
     let clickhouse = clickhouse_case();
     let mssql = mssql_case();
@@ -1465,6 +1505,12 @@ fn test_explain_estimates_and_analyzes_per_backend() {
             postgres.label,
             server(&postgres, 9303),
             postgres.database.clone(),
+            true,
+        ),
+        (
+            cockroach.label,
+            server(&cockroach, 9307),
+            cockroach.database.clone(),
             true,
         ),
         (
@@ -1553,8 +1599,11 @@ fn test_explain_estimates_and_analyzes_per_backend() {
                 continue;
             };
             let results = run(&explain);
-            let parses = matches!(db_type, DatabaseType::PostgreSQL | DatabaseType::SQLite)
-                || (db_type == DatabaseType::MySQL && variant == ServerVariant::Standard);
+            let parses = matches!(
+                db_type,
+                DatabaseType::PostgreSQL | DatabaseType::CockroachDb | DatabaseType::SQLite
+            ) || (db_type == DatabaseType::MySQL
+                && variant == ServerVariant::Standard);
             if parses {
                 let plan = results
                     .iter()
@@ -1634,6 +1683,7 @@ fn test_column_and_index_ddl_round_trip() {
         )
     };
     let postgres = postgres_case();
+    let cockroach = cockroach_case();
     let mysql = mysql_case();
     let clickhouse = clickhouse_case();
     let mssql = mssql_case();
@@ -1660,6 +1710,15 @@ fn test_column_and_index_ddl_round_trip() {
             label: postgres.label,
             config: server(&postgres, 9002),
             database: postgres.database.clone(),
+            schema: Some("public"),
+            create_table: "CREATE TABLE blanco_ddl_test (id integer PRIMARY KEY)",
+            alter_supported: true,
+            add_default: Some("0"),
+        },
+        DdlCase {
+            label: cockroach.label,
+            config: server(&cockroach, 9007),
+            database: cockroach.database.clone(),
             schema: Some("public"),
             create_table: "CREATE TABLE blanco_ddl_test (id integer PRIMARY KEY)",
             alter_supported: true,
@@ -2035,6 +2094,7 @@ fn test_describe_query_columns_on_empty_result() {
         )
     };
     let postgres = postgres_case();
+    let cockroach = cockroach_case();
     let mysql = mysql_case();
     let mssql = mssql_case();
     let cases = vec![
@@ -2048,6 +2108,12 @@ fn test_describe_query_columns_on_empty_result() {
             label: postgres.label,
             config: server(&postgres, 9102),
             database: postgres.database.clone(),
+            create_table: "CREATE TABLE blanco_describe_test (id integer PRIMARY KEY, label text)",
+        },
+        DescribeCase {
+            label: cockroach.label,
+            config: server(&cockroach, 9105),
+            database: cockroach.database.clone(),
             create_table: "CREATE TABLE blanco_describe_test (id integer PRIMARY KEY, label text)",
         },
         DescribeCase {
@@ -2156,6 +2222,7 @@ fn test_column_in_several_foreign_keys_is_listed_once() {
         )
     };
     let postgres = postgres_case();
+    let cockroach = cockroach_case();
     let mysql = mysql_case();
     let mssql = mssql_case();
     let cases = vec![
@@ -2175,6 +2242,12 @@ fn test_column_in_several_foreign_keys_is_listed_once() {
             label: postgres.label,
             config: server(&postgres, 9203),
             database: postgres.database.clone(),
+            schema: Some("public"),
+        },
+        ForeignKeyCase {
+            label: cockroach.label,
+            config: server(&cockroach, 9206),
+            database: cockroach.database.clone(),
             schema: Some("public"),
         },
         ForeignKeyCase {
@@ -2523,6 +2596,7 @@ fn test_binary_values_round_trip() {
         )
     };
     let postgres = postgres_case();
+    let cockroach = cockroach_case();
     let mysql = mysql_case();
     let mssql = mssql_case();
     let cases = vec![
@@ -2536,6 +2610,12 @@ fn test_binary_values_round_trip() {
             postgres.label,
             server(&postgres, 9102),
             postgres.database.clone(),
+            "CREATE TABLE blanco_binary_test (id bytea PRIMARY KEY, body bytea)",
+        ),
+        (
+            cockroach.label,
+            server(&cockroach, 9105),
+            cockroach.database.clone(),
             "CREATE TABLE blanco_binary_test (id bytea PRIMARY KEY, body bytea)",
         ),
         (
@@ -2755,6 +2835,7 @@ fn test_deferred_read_round_trip() {
         )
     };
     let postgres = postgres_case();
+    let cockroach = cockroach_case();
     let mysql = mysql_case();
     let mssql = mssql_case();
     // The last field is how many bytes a character of the text column takes.
@@ -2770,6 +2851,13 @@ fn test_deferred_read_round_trip() {
             postgres.label,
             server(&postgres, 9202),
             postgres.database.clone(),
+            "CREATE TABLE blanco_deferred_test (id integer PRIMARY KEY, title varchar(50), body text, data bytea)",
+            1,
+        ),
+        (
+            cockroach.label,
+            server(&cockroach, 9205),
+            cockroach.database.clone(),
             "CREATE TABLE blanco_deferred_test (id integer PRIMARY KEY, title varchar(50), body text, data bytea)",
             1,
         ),
@@ -2995,4 +3083,135 @@ fn test_password_file_against_postgres() {
     let (outcome, asked) = connect(9302);
     assert!(outcome.is_err(), "the prompt was dismissed");
     assert_eq!(asked, 1, "a missing password is asked for");
+}
+
+/// Where CockroachDB's catalog differs from PostgreSQL's, against the compose
+/// node: materialized views are not listed as views too, databases report no
+/// size, and a table declared without a primary key is read with its hidden
+/// `rowid` so the grid can update a row by it.
+#[test]
+fn test_cockroachdb_catalog_differences() {
+    use crate::results_panel::deferred_values::DeferredRead;
+    use crate::results_panel::table_operations::{
+        ColumnChange, ColumnValue, OperationType, RowIdentifier, TableChangeOperation,
+    };
+    use database::ConnectionConfig;
+
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let case = cockroach_case();
+    let config = ConnectionConfig::new(
+        9401,
+        case.name.to_string(),
+        case.db_type,
+        case.host.clone(),
+        case.port.parse().expect("port"),
+        case.database.clone(),
+        case.username.clone(),
+        Some(case.password.clone()),
+    );
+    let database = Some(case.database.as_str());
+    let service = DatabaseService::new(runtime.handle().clone());
+    let connection = runtime.block_on(async {
+        service.add_connection_config(config.clone()).await;
+        let connection = service
+            .get_or_create_connection(config.id, database)
+            .await?;
+        connection.ping().await?;
+        anyhow::Ok(connection)
+    });
+    let connection = match connection {
+        Ok(connection) => connection,
+        Err(error) if strict() => panic!("CockroachDB: server unreachable: {error:#}"),
+        Err(error) => {
+            eprintln!(
+                "skip CockroachDB: server unreachable ({error:#}). Set BLANCO_RUN_DB_TESTS=1 to require."
+            );
+            return;
+        }
+    };
+    let run = |sql: &str| {
+        runtime
+            .block_on(connection.execute_script(sql, database))
+            .unwrap_or_else(|error| panic!("{sql}: {error:#}"))
+    };
+    run("DROP MATERIALIZED VIEW IF EXISTS blanco_crdb_counts; \
+         DROP VIEW IF EXISTS blanco_crdb_names; \
+         DROP TABLE IF EXISTS blanco_crdb_keyless");
+    run("CREATE TABLE blanco_crdb_keyless (label text, n integer)");
+    run("INSERT INTO blanco_crdb_keyless VALUES ('a', 1), ('b', 2)");
+    run("CREATE VIEW blanco_crdb_names AS SELECT label FROM blanco_crdb_keyless");
+    run("CREATE MATERIALIZED VIEW blanco_crdb_counts AS SELECT count(*) FROM blanco_crdb_keyless");
+
+    let views = runtime
+        .block_on(connection.get_views(Some("public")))
+        .expect("views");
+    assert!(views.contains(&"blanco_crdb_names".to_string()));
+    assert!(!views.contains(&"blanco_crdb_counts".to_string()));
+    let materialized = runtime
+        .block_on(connection.get_materialized_views(Some("public")))
+        .expect("materialized views");
+    assert!(materialized.contains(&"blanco_crdb_counts".to_string()));
+    assert!(
+        runtime
+            .block_on(connection.get_database_sizes())
+            .expect("sizes")
+            .is_empty()
+    );
+
+    let query = "SELECT * FROM blanco_crdb_keyless";
+    let table_columns = runtime
+        .block_on(connection.get_columns_for_table("blanco_crdb_keyless", Some("public")))
+        .expect("columns");
+    assert!(
+        table_columns
+            .iter()
+            .any(|column| column.name == "rowid" && column.is_primary_key),
+        "the hidden key is the primary key: {table_columns:?}"
+    );
+    let read = DeferredRead::plan(case.db_type, query, &table_columns, 0)
+        .expect("a keyless table is read with its rowid");
+    let mut result = runtime
+        .block_on(connection.execute_query(read.query(), database, None))
+        .expect("rewritten read");
+    read.finish(&mut result);
+    let rowid = result
+        .columns
+        .iter()
+        .position(|column| column == "rowid")
+        .expect("the result carries rowid");
+    let label = result
+        .columns
+        .iter()
+        .position(|column| column == "label")
+        .expect("label column");
+    let row = result
+        .rows
+        .iter()
+        .find(|row| row[label].as_deref() == Some("a"))
+        .expect("row a");
+
+    let update = TableChangeOperation {
+        operation_type: OperationType::Update,
+        table_name: "blanco_crdb_keyless".to_string(),
+        row_identifier: RowIdentifier::PrimaryKey {
+            columns: vec![(
+                "rowid".to_string(),
+                ColumnValue::Literal(row[rowid].clone().expect("rowid value")),
+            )],
+        },
+        changes: vec![ColumnChange {
+            column_name: "n".to_string(),
+            value: ColumnValue::Literal("10".to_string()),
+        }],
+    };
+    let affected = runtime
+        .block_on(connection.execute_write(&update.to_sql_query(case.db_type), database, &[]))
+        .expect("update by rowid");
+    assert_eq!(affected, 1);
+    let updated = run("SELECT n FROM blanco_crdb_keyless WHERE label = 'a'");
+    assert_eq!(updated[0].rows[0][0].as_deref(), Some("10"));
+
+    run("DROP MATERIALIZED VIEW blanco_crdb_counts; \
+         DROP VIEW blanco_crdb_names; \
+         DROP TABLE blanco_crdb_keyless");
 }

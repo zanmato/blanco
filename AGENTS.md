@@ -6,7 +6,7 @@ Blanco is a cross-platform SQL editor built with GPUI and gpui-component. It pro
 
 ## Getting Started
 
-The SQL grammars come from `tree-sitter-sql-polyglot`, a git dependency on the `blanco-dialect-coverage` branch of our fork `zanmato/Tree-sitter-sql-polyglot` (upstream `relativelyunknown/Tree-sitter-sql-polyglot`). It holds an ANSI base grammar and one grammar per dialect built on it. Blanco enables the `postgres`, `mariadb`, `sqlite`, `tsql`, `clickhouse` and `duckdb` features. `Dialect::sql_grammar()` picks a backend's `SqlGrammar`: MySQL connections use MariaDB's grammar, a superset of MySQL's, and SQL that belongs to no backend (snippets, the import preview) uses the ANSI base. The fork commits its parsers compressed (`parser.c.br`) and its build script inflates them, so building Blanco never runs `tree-sitter generate`.
+The SQL grammars come from `tree-sitter-sql-polyglot`, a git dependency on the `blanco-dialect-coverage` branch of our fork `zanmato/Tree-sitter-sql-polyglot` (upstream `relativelyunknown/Tree-sitter-sql-polyglot`). It holds an ANSI base grammar and one grammar per dialect built on it. Blanco enables the `postgres`, `mariadb`, `sqlite`, `tsql`, `clickhouse`, `duckdb` and `cockroachdb` features. `Dialect::sql_grammar()` picks a backend's `SqlGrammar`: MySQL connections use MariaDB's grammar, a superset of MySQL's, and SQL that belongs to no backend (snippets, the import preview) uses the ANSI base. The fork commits its parsers compressed (`parser.c.br`) and its build script inflates them, so building Blanco never runs `tree-sitter generate`.
 
 Grammar fixes go to the fork with a corpus test in each dialect they touch, then Blanco's lockfile is bumped (`cargo update -p tree-sitter-sql-polyglot`). In the fork, generate one grammar at a time and compress the parsers before pushing. Never run `npm run generate:all`, which generates every dialect at once: ClickHouse alone peaks at about 31 GB of memory.
 
@@ -151,6 +151,34 @@ the extension does not matter. File, New creates either kind and opens it the
 same way; `Dialect::new_file_statement` makes SQLite write its header at once.
 The `.deb` ships `blanco-duckdb.xml`, since shared-mime-info has no DuckDB
 type for the desktop entry to claim.
+
+## CockroachDB
+
+CockroachDB speaks PostgreSQL's protocol, so it is its own `DatabaseType` on
+the PostgreSQL driver: `PostgresConnectionFactory::cockroachdb()` makes a
+`PostgresConnection` `with_database_type(CockroachDb)`, which names the
+backend in messages and switches the few catalog reads that differ (views
+leave out materialized views, which CockroachDB's `information_schema.views`
+lists too, and databases report no size, since `pg_database_size` answers 0
+and the real figures sit behind the closed `crdb_internal`). Everything else
+is a `Dialect` arm, mostly shared with PostgreSQL. The differences:
+`EXPLAIN` has no JSON format, so `explain_plan::parse_cockroachdb` reads the
+text tree and adds each operator's own time up to inclusive times. The
+process list reads `SHOW CLUSTER SESSIONS` and cancels with `CANCEL QUERIES`
+and `CANCEL SESSION`, taking only 32 hex digit session ids.
+`autocommit_before_ddl` commits the open transaction before each DDL
+statement, so `rolls_back_ddl` is false. A table declared without a primary
+key gets a hidden `rowid` key (`Dialect::hidden_row_key`), which the
+catalog reports as the primary key but `SELECT *` leaves out, so the grid's
+read rewrite (`Dialect::deferred_read`) names every column whenever the key
+is that hidden one, with value deferral off too. `pg_dump` fails on its
+catalog, so there is no backup. The function catalog is generated with
+`python3 scripts/extract-sql-functions.py cockroachdb`, which folds the
+per-type overloads CockroachDB lists into polymorphic signatures. The compose
+`cockroachtestdb` is a secure single node (user and password `blanco`, port
+26258) whose `docker/cockroach/init.sql` grants the user `admin`, as the
+process list test needs. `test_cockroachdb_catalog_differences` covers the
+driver's differences.
 
 ## Rich clipboard
 

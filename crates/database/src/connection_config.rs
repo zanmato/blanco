@@ -396,7 +396,7 @@ impl ConnectionConfig {
                     database,
                 )
             }
-            DatabaseType::PostgreSQL => {
+            DatabaseType::PostgreSQL | DatabaseType::CockroachDb => {
                 // Through `url::Url`, so a user name, password, database or
                 // certificate path with `@`, `/`, `#`, `&`, `+` or spaces
                 // arrives as typed.

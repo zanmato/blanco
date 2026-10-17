@@ -81,10 +81,11 @@ pub enum SqlGrammar {
     TSql,
     ClickHouse,
     DuckDb,
+    CockroachDb,
 }
 
 impl SqlGrammar {
-    pub const ALL: [SqlGrammar; 7] = [
+    pub const ALL: [SqlGrammar; 8] = [
         SqlGrammar::Ansi,
         SqlGrammar::PostgreSql,
         SqlGrammar::MariaDb,
@@ -92,6 +93,7 @@ impl SqlGrammar {
         SqlGrammar::TSql,
         SqlGrammar::ClickHouse,
         SqlGrammar::DuckDb,
+        SqlGrammar::CockroachDb,
     ];
 
     /// The name the grammar is registered under for editor highlighting.
@@ -104,6 +106,7 @@ impl SqlGrammar {
             SqlGrammar::TSql => "sql_tsql",
             SqlGrammar::ClickHouse => "sql_clickhouse",
             SqlGrammar::DuckDb => "sql_duckdb",
+            SqlGrammar::CockroachDb => "sql_cockroachdb",
         }
     }
 
@@ -139,10 +142,11 @@ impl ClientTools {
 impl DatabaseType {
     /// Every supported backend, in the order the connection dialog lists
     /// them. Index into it with [`DatabaseType::index`].
-    pub const ALL: [DatabaseType; 7] = [
+    pub const ALL: [DatabaseType; 8] = [
         DatabaseType::SQLite,
         DatabaseType::DuckDb,
         DatabaseType::PostgreSQL,
+        DatabaseType::CockroachDb,
         DatabaseType::MySQL,
         DatabaseType::ClickHouse,
         DatabaseType::MsSql,
@@ -155,10 +159,11 @@ impl DatabaseType {
             DatabaseType::SQLite => 0,
             DatabaseType::DuckDb => 1,
             DatabaseType::PostgreSQL => 2,
-            DatabaseType::MySQL => 3,
-            DatabaseType::ClickHouse => 4,
-            DatabaseType::MsSql => 5,
-            DatabaseType::Redis => 6,
+            DatabaseType::CockroachDb => 3,
+            DatabaseType::MySQL => 4,
+            DatabaseType::ClickHouse => 5,
+            DatabaseType::MsSql => 6,
+            DatabaseType::Redis => 7,
         }
     }
 
@@ -183,6 +188,7 @@ impl Dialect {
             DatabaseType::SQLite
             | DatabaseType::DuckDb
             | DatabaseType::PostgreSQL
+            | DatabaseType::CockroachDb
             | DatabaseType::MySQL
             | DatabaseType::ClickHouse
             | DatabaseType::MsSql => true,
@@ -239,7 +245,10 @@ impl Dialect {
     /// schema level, which is what "only show the configured database" trims.
     /// The other backends show a single level that the driver already scopes.
     pub fn lists_server_databases(&self) -> bool {
-        matches!(self.0, DatabaseType::PostgreSQL | DatabaseType::MsSql)
+        matches!(
+            self.0,
+            DatabaseType::PostgreSQL | DatabaseType::CockroachDb | DatabaseType::MsSql
+        )
     }
 
     /// Whether a leaf object is inspected directly rather than queried. Key/
@@ -263,6 +272,16 @@ impl Dialect {
         self.supports_sql() && !matches!(self.0, DatabaseType::ClickHouse)
     }
 
+    /// The primary key a table declared without one gets behind the scenes,
+    /// which `SELECT *` leaves out: CockroachDB's `rowid`. A read for the
+    /// grid names it, so the rows of such a table can be edited.
+    pub fn hidden_row_key(&self) -> Option<&'static str> {
+        match self.0 {
+            DatabaseType::CockroachDb => Some("rowid"),
+            _ => None,
+        }
+    }
+
     /// Whether column and index DDL (ALTER TABLE) is offered from the structure
     /// tab.
     pub fn supports_column_ddl(&self) -> bool {
@@ -270,13 +289,15 @@ impl Dialect {
     }
 
     /// The native client tools that back up and restore this backend, `None`
-    /// where Blanco does not drive them.
+    /// where Blanco does not drive them. CockroachDB speaks PostgreSQL's
+    /// protocol, but `pg_dump` fails on its catalog.
     pub fn client_tools(&self) -> Option<ClientTools> {
         match self.0 {
             DatabaseType::PostgreSQL => Some(ClientTools::PostgreSql),
             DatabaseType::MySQL => Some(ClientTools::MySql),
             DatabaseType::SQLite
             | DatabaseType::DuckDb
+            | DatabaseType::CockroachDb
             | DatabaseType::ClickHouse
             | DatabaseType::MsSql
             | DatabaseType::Redis => None,
@@ -296,11 +317,16 @@ impl Dialect {
     }
 
     /// Whether a failed batch of DDL rolls back as a whole. MySQL and MariaDB
-    /// commit each DDL statement implicitly, and ClickHouse has no
-    /// transactions, so there a failure leaves the statements before it
-    /// applied.
+    /// commit each DDL statement implicitly, CockroachDB commits the open
+    /// transaction before each one (`autocommit_before_ddl`), and ClickHouse
+    /// has no transactions, so there a failure leaves the statements before
+    /// it applied.
     pub fn rolls_back_ddl(&self) -> bool {
-        self.supports_sql() && !matches!(self.0, DatabaseType::MySQL | DatabaseType::ClickHouse)
+        self.supports_sql()
+            && !matches!(
+                self.0,
+                DatabaseType::MySQL | DatabaseType::CockroachDb | DatabaseType::ClickHouse
+            )
     }
 
     // ----- sidebar / editor facts -----
@@ -335,12 +361,14 @@ impl Dialect {
         "FINAL",
         "SETTINGS",
         "ILIKE",
+        "UPSERT",
     ];
 
     /// The entries of [`Self::BACKEND_KEYWORDS`] this backend understands.
     pub fn backend_keywords(&self) -> &'static [&'static str] {
         match self.0 {
             DatabaseType::PostgreSQL | DatabaseType::DuckDb => &["LIMIT", "RETURNING", "ILIKE"],
+            DatabaseType::CockroachDb => &["LIMIT", "RETURNING", "ILIKE", "UPSERT"],
             DatabaseType::SQLite => &["LIMIT", "RETURNING"],
             DatabaseType::MySQL => &["LIMIT"],
             DatabaseType::ClickHouse => &["LIMIT", "FINAL", "SETTINGS", "ILIKE"],
@@ -360,6 +388,7 @@ impl Dialect {
     pub fn sql_grammar(&self) -> SqlGrammar {
         match self.0 {
             DatabaseType::PostgreSQL => SqlGrammar::PostgreSql,
+            DatabaseType::CockroachDb => SqlGrammar::CockroachDb,
             DatabaseType::MySQL => SqlGrammar::MariaDb,
             DatabaseType::SQLite => SqlGrammar::Sqlite,
             DatabaseType::MsSql => SqlGrammar::TSql,
@@ -382,7 +411,7 @@ impl Dialect {
         match self.0 {
             DatabaseType::SQLite => "sqlite",
             DatabaseType::DuckDb => "duckdb",
-            DatabaseType::PostgreSQL => "postgres",
+            DatabaseType::PostgreSQL | DatabaseType::CockroachDb => "postgres",
             DatabaseType::MySQL => "mysql",
             DatabaseType::ClickHouse => "ansi",
             DatabaseType::MsSql => "tsql",
@@ -395,7 +424,7 @@ impl Dialect {
     /// The sqlparser-rs dialect used for table extraction.
     pub fn sqlparser_dialect(&self) -> Box<dyn sqlparser::dialect::Dialect> {
         match self.0 {
-            DatabaseType::PostgreSQL => Box::new(PostgreSqlDialect {}),
+            DatabaseType::PostgreSQL | DatabaseType::CockroachDb => Box::new(PostgreSqlDialect {}),
             DatabaseType::MySQL => Box::new(MySqlDialect {}),
             DatabaseType::MsSql => Box::new(MsSqlDialect {}),
             DatabaseType::DuckDb => Box::new(DuckDbDialect {}),
@@ -413,7 +442,7 @@ impl Dialect {
     pub fn parameter_styles(&self) -> ParamStyles {
         match self.0 {
             DatabaseType::SQLite => ParamStyles::all(),
-            DatabaseType::PostgreSQL => ParamStyles {
+            DatabaseType::PostgreSQL | DatabaseType::CockroachDb => ParamStyles {
                 dollar_number: true,
                 ..ParamStyles::none()
             },
@@ -438,9 +467,30 @@ impl Dialect {
     /// generated statement.
     pub fn placeholder(&self, index: usize) -> String {
         match self.0 {
-            DatabaseType::PostgreSQL => format!("${}", index + 1),
+            DatabaseType::PostgreSQL | DatabaseType::CockroachDb => format!("${}", index + 1),
             _ => "?".to_string(),
         }
+    }
+
+    /// Whether a bind parameter must be cast to its column's type
+    /// (`$1::integer`), because the driver sends every value as text and
+    /// the server will not compare text with a number.
+    pub fn casts_bind_parameters(&self) -> bool {
+        matches!(self.0, DatabaseType::PostgreSQL | DatabaseType::CockroachDb)
+    }
+
+    /// Whether unquoted identifiers fold to lower case, so a name with a
+    /// capital letter is only found quoted.
+    pub fn folds_unquoted_identifiers(&self) -> bool {
+        matches!(self.0, DatabaseType::PostgreSQL | DatabaseType::CockroachDb)
+    }
+
+    /// Whether strings may be dollar quoted (`$$...$$`, `$tag$...$tag$`).
+    pub fn supports_dollar_quotes(&self) -> bool {
+        matches!(
+            self.0,
+            DatabaseType::PostgreSQL | DatabaseType::CockroachDb | DatabaseType::DuckDb
+        )
     }
 
     /// Schema that unqualified names resolve to when a tab has none:
@@ -448,7 +498,7 @@ impl Dialect {
     /// database return `None` and callers fall back to the database name.
     pub fn default_schema(&self) -> Option<&'static str> {
         match self.0 {
-            DatabaseType::PostgreSQL => Some("public"),
+            DatabaseType::PostgreSQL | DatabaseType::CockroachDb => Some("public"),
             DatabaseType::MsSql => Some("dbo"),
             DatabaseType::DuckDb => Some("main"),
             DatabaseType::MySQL
@@ -468,6 +518,10 @@ impl Dialect {
                     || schema.starts_with("pg_toast")
                     || schema.starts_with("pg_temp")
             }
+            DatabaseType::CockroachDb => matches!(
+                schema,
+                "information_schema" | "pg_catalog" | "pg_extension" | "crdb_internal"
+            ),
             DatabaseType::MsSql => schema == "sys" || schema == "INFORMATION_SCHEMA",
             DatabaseType::DuckDb => schema == "information_schema" || schema == "pg_catalog",
             DatabaseType::MySQL => matches!(
@@ -486,6 +540,7 @@ impl Dialect {
     pub fn default_port(&self) -> u16 {
         match self.0 {
             DatabaseType::PostgreSQL => 5432,
+            DatabaseType::CockroachDb => 26257,
             DatabaseType::MySQL => 3306,
             DatabaseType::ClickHouse => 8123,
             DatabaseType::MsSql => 1433,
@@ -524,6 +579,7 @@ impl Dialect {
             }
             DatabaseType::MsSql => format!("[{}]", identifier.replace(']', "]]")),
             DatabaseType::PostgreSQL
+            | DatabaseType::CockroachDb
             | DatabaseType::SQLite
             | DatabaseType::DuckDb
             | DatabaseType::Redis => format!("\"{}\"", identifier.replace('"', "\"\"")),
@@ -566,6 +622,7 @@ impl Dialect {
             DatabaseType::MySQL | DatabaseType::ClickHouse => ('`', '`'),
             DatabaseType::MsSql => ('[', ']'),
             DatabaseType::PostgreSQL
+            | DatabaseType::CockroachDb
             | DatabaseType::SQLite
             | DatabaseType::DuckDb
             | DatabaseType::Redis => ('"', '"'),
@@ -594,7 +651,7 @@ impl Dialect {
     /// backend's own spelling.
     pub fn binary_literal(&self, hex: &str) -> String {
         match self.0 {
-            DatabaseType::PostgreSQL => format!("'\\x{hex}'::bytea"),
+            DatabaseType::PostgreSQL | DatabaseType::CockroachDb => format!("'\\x{hex}'::bytea"),
             DatabaseType::MySQL | DatabaseType::SQLite => format!("X'{hex}'"),
             DatabaseType::MsSql => format!("0x{hex}"),
             DatabaseType::DuckDb => format!("from_hex('{hex}')"),
@@ -722,6 +779,7 @@ impl Dialect {
         matches!(
             self.0,
             DatabaseType::PostgreSQL
+                | DatabaseType::CockroachDb
                 | DatabaseType::MySQL
                 | DatabaseType::MsSql
                 | DatabaseType::DuckDb
@@ -743,6 +801,9 @@ impl Dialect {
                 format!("EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) {trimmed}")
             }
             DatabaseType::PostgreSQL => format!("EXPLAIN (FORMAT JSON) {trimmed}"),
+            // CockroachDB has no JSON plan, only its indented text tree.
+            DatabaseType::CockroachDb if analyze => format!("EXPLAIN ANALYZE {trimmed}"),
+            DatabaseType::CockroachDb => format!("EXPLAIN {trimmed}"),
             DatabaseType::MySQL => match (variant, analyze) {
                 (ServerVariant::MariaDb, true) => format!("ANALYZE {trimmed}"),
                 (ServerVariant::MariaDb, false) => format!("EXPLAIN {trimmed}"),
@@ -772,6 +833,7 @@ impl Dialect {
     pub fn parse_explain_plan(&self, result: &QueryResult) -> Option<explain_plan::PlanTree> {
         match self.0 {
             DatabaseType::PostgreSQL => explain_plan::parse_postgres(result),
+            DatabaseType::CockroachDb => explain_plan::parse_cockroachdb(result),
             DatabaseType::SQLite => explain_plan::parse_sqlite(result),
             DatabaseType::MySQL => explain_plan::parse_mysql_tree(result),
             DatabaseType::DuckDb

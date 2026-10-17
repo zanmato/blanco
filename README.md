@@ -4,8 +4,8 @@ Blanco is a cross platform SQL editor and database client built with
 [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui) and
 [gpui-kit](https://github.com/longbridge/gpui-kit).
 
-Supported backends: PostgreSQL, MySQL/MariaDB, SQLite, DuckDB, SQL Server, ClickHouse
-and Redis.
+Supported backends: PostgreSQL, CockroachDB, MySQL/MariaDB, SQLite, DuckDB, SQL Server,
+ClickHouse and Redis.
 
 ## Highlights
 

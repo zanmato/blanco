@@ -352,7 +352,7 @@ pub fn column_operation_sql(
             let renamed = name.trim() != spec.name.trim();
             let mut statements = Vec::new();
             match db_type {
-                DatabaseType::PostgreSQL => {
+                DatabaseType::PostgreSQL | DatabaseType::CockroachDb => {
                     if renamed {
                         statements
                             .push(rename_column_sql(db_type, schema, table, name, &spec.name));
@@ -548,7 +548,10 @@ pub fn index_operation_sql(
             let index_name = dialect.quote_identifier(name.trim());
             Ok(vec![match db_type {
                 // Indexes are schema-scoped objects here, not table-scoped.
-                DatabaseType::PostgreSQL | DatabaseType::SQLite | DatabaseType::DuckDb => {
+                DatabaseType::PostgreSQL
+                | DatabaseType::CockroachDb
+                | DatabaseType::SQLite
+                | DatabaseType::DuckDb => {
                     format!(
                         "DROP INDEX {}",
                         dialect.quote_qualified(schema, name.trim())

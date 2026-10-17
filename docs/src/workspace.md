@@ -7,8 +7,8 @@ The sidebar has three panels: **Connections**, **Snippets** and
 
 The connections tree lists each connection's databases, schemas, tables,
 views, materialized views, functions, procedures and triggers, loaded as you
-expand them. Tables show their size. Partitions of a PostgreSQL table are
-grouped under it.
+expand them. Tables show their size, except on CockroachDB, which does not
+report it. Partitions of a PostgreSQL table are grouped under it.
 
 Type in the filter field to narrow the tree. `^` matches the start of a
 name, `$` the end, and `|` separates alternatives, so `^order|item$` finds

@@ -38,6 +38,7 @@ tree-sitter-sql-polyglot = { git = "https://github.com/zanmato/Tree-sitter-sql-p
     "tsql",
     "clickhouse",
     "duckdb",
+    "cockroachdb",
 ] }
 
 # Core GPUI dependencies. gpui-component depends on the `gpui-pre` crates.io

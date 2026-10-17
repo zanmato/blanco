@@ -128,7 +128,7 @@ pub fn build_insert_sql(
     let dialect = db_type.dialect();
     let placeholder_for = |global_idx: usize, col_idx: usize| -> String {
         let ph = dialect.placeholder(global_idx);
-        if db_type == DatabaseType::PostgreSQL
+        if dialect.casts_bind_parameters()
             && let Some(dt) = data_types.get(col_idx)
         {
             let lower = dt.to_lowercase();
