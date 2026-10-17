@@ -6,13 +6,13 @@
     <title>Blanco</title>
     <meta
       name="description"
-      content="Blanco is a lightweight cross platform SQL editor and database client for PostgreSQL, CockroachDB, MySQL, SQLite, SQL Server, ClickHouse and Redis, on Linux, macOS and Windows."
+      content="Blanco is a lightweight cross platform SQL editor and database client for PostgreSQL, CockroachDB, MySQL, SQLite, DuckDB, SQL Server, ClickHouse and Redis, on Linux, macOS and Windows."
     />
     <meta property="og:type" content="website" />
     <meta property="og:title" content="Blanco" />
     <meta
       property="og:description"
-      content="A lightweight cross platform SQL editor for PostgreSQL, CockroachDB, MySQL, SQLite, SQL Server, ClickHouse and Redis."
+      content="A lightweight cross platform SQL editor for PostgreSQL, CockroachDB, MySQL, SQLite, DuckDB, SQL Server, ClickHouse and Redis."
     />
     <meta
       property="og:image"
@@ -772,6 +772,7 @@
           <li>MySQL</li>
           <li>MariaDB</li>
           <li>SQLite</li>
+          <li>DuckDB</li>
           <li>SQL Server</li>
           <li>ClickHouse</li>
           <li>Redis</li>
@@ -782,10 +783,13 @@
         <picture>
           <source
             media="(prefers-color-scheme: dark)"
-            srcset="images/editor-mocha.webp"
+            srcset="images/editor-mocha-1136.webp 1136w, images/editor-mocha.webp 1600w"
+            sizes="(min-width: 1216px) 1136px, 100vw"
           />
           <img
             src="images/editor-latte.webp"
+            srcset="images/editor-latte-1136.webp 1136w, images/editor-latte.webp 1600w"
+            sizes="(min-width: 1216px) 1136px, 100vw"
             width="1600"
             height="1000"
             alt="Blanco with the caret inside one of three SQL statements, that statement framed and its results below, and the sidebar listing tables with their sizes"
@@ -867,10 +871,13 @@
             <picture>
               <source
                 media="(prefers-color-scheme: dark)"
-                srcset="images/inline-edit-mocha.webp"
+                srcset="images/inline-edit-mocha-1136.webp 1136w, images/inline-edit-mocha.webp 1600w"
+                sizes="(min-width: 1216px) 1136px, 100vw"
               />
               <img
                 src="images/inline-edit-latte.webp"
+                srcset="images/inline-edit-latte-1136.webp 1136w, images/inline-edit-latte.webp 1600w"
+                sizes="(min-width: 1216px) 1136px, 100vw"
                 width="1600"
                 height="1000"
                 loading="lazy"
@@ -900,10 +907,13 @@
             <picture>
               <source
                 media="(prefers-color-scheme: dark)"
-                srcset="images/script-mocha.webp"
+                srcset="images/script-mocha-1136.webp 1136w, images/script-mocha.webp 1600w"
+                sizes="(min-width: 1216px) 1136px, 100vw"
               />
               <img
                 src="images/script-latte.webp"
+                srcset="images/script-latte-1136.webp 1136w, images/script-latte.webp 1600w"
+                sizes="(min-width: 1216px) 1136px, 100vw"
                 width="1600"
                 height="1000"
                 loading="lazy"
@@ -934,10 +944,13 @@
             <picture>
               <source
                 media="(prefers-color-scheme: dark)"
-                srcset="images/terminal-mocha.webp"
+                srcset="images/terminal-mocha-1136.webp 1136w, images/terminal-mocha.webp 1600w"
+                sizes="(min-width: 1216px) 1136px, 100vw"
               />
               <img
                 src="images/terminal-latte.webp"
+                srcset="images/terminal-latte-1136.webp 1136w, images/terminal-latte.webp 1600w"
+                sizes="(min-width: 1216px) 1136px, 100vw"
                 width="1600"
                 height="1000"
                 loading="lazy"
@@ -966,10 +979,13 @@
             <picture>
               <source
                 media="(prefers-color-scheme: dark)"
-                srcset="images/snippets-mocha.webp"
+                srcset="images/snippets-mocha-1136.webp 1136w, images/snippets-mocha.webp 1600w"
+                sizes="(min-width: 1216px) 1136px, 100vw"
               />
               <img
                 src="images/snippets-latte.webp"
+                srcset="images/snippets-latte-1136.webp 1136w, images/snippets-latte.webp 1600w"
+                sizes="(min-width: 1216px) 1136px, 100vw"
                 width="1600"
                 height="1000"
                 loading="lazy"
@@ -1057,6 +1073,8 @@
             <figure>
               <img
                 src="images/editor-latte.webp"
+                srcset="images/editor-latte-1136.webp 1136w, images/editor-latte.webp 1600w"
+                sizes="(min-width: 1216px) 360px, (min-width: 961px) 31vw, 100vw"
                 width="1600"
                 height="1000"
                 loading="lazy"
@@ -1069,6 +1087,8 @@
             <figure>
               <img
                 src="images/editor-macchiato.webp"
+                srcset="images/editor-macchiato-1136.webp 1136w, images/editor-macchiato.webp 1600w"
+                sizes="(min-width: 1216px) 360px, (min-width: 961px) 31vw, 100vw"
                 width="1600"
                 height="1000"
                 loading="lazy"
@@ -1081,6 +1101,8 @@
             <figure>
               <img
                 src="images/editor-mocha.webp"
+                srcset="images/editor-mocha-1136.webp 1136w, images/editor-mocha.webp 1600w"
+                sizes="(min-width: 1216px) 360px, (min-width: 961px) 31vw, 100vw"
                 width="1600"
                 height="1000"
                 loading="lazy"
@@ -1296,7 +1318,11 @@
           .forEach(function (image) {
             function open() {
               // currentSrc is the source the page shows, so the dark theme gets the dark screenshot.
-              zoomImage.src = image.currentSrc || image.src;
+              // It may be the copy at the size the page shows, so swap in the full capture.
+              zoomImage.src = (image.currentSrc || image.src).replace(
+                /-1136\.webp$/,
+                ".webp",
+              );
               zoomImage.alt = image.alt;
               zoom.showModal();
             }

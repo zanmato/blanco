@@ -7,7 +7,8 @@
 # Scenes: editor inline-edit json-edit terminal script snippets structure
 # filter chart explain schema-graph history palette settings export import
 # (default: all).
-# Writes docs/images/screenshots/<scene>-<theme>.webp, and a lossless
+# Writes docs/images/screenshots/<scene>-<theme>.webp, a <scene>-<theme>-1136.webp
+# beside it for the scenes the website shows, and a lossless
 # <scene>-<theme>.png per capture into $PNG_DIR when that is set.
 #
 # Needs Xvfb, ImageMagick, x11-utils, sqlite3, python3, dbus-run-session and Mesa's
@@ -24,6 +25,11 @@ root="$(pwd)"
 width=1640
 height=1040
 out="$root/docs/images/screenshots"
+# The website shows these scenes 1136px wide. Left to the browser, scaling
+# the full capture down to that blurs the text, so they get a copy at that
+# size too.
+site_scenes=(editor inline-edit script terminal snippets)
+site_size=1136x710
 
 scenes=("$@")
 if [[ ${#scenes[@]} -eq 0 ]]; then
@@ -262,6 +268,10 @@ EOF
     -gravity North -chop "0x${top}" -gravity South -chop "0x${bottom}" \
     +repage "$run/frame.png"
   magick "$run/frame.png" -define webp:lossless=false -quality 90 "$out/$scene-$slug.webp"
+  if [[ " ${site_scenes[*]} " == *" $scene "* ]]; then
+    magick "$run/frame.png" -resize "$site_size" -define webp:lossless=false -quality 90 \
+      "$out/$scene-$slug-${site_size%x*}.webp"
+  fi
   if [[ -n "${PNG_DIR:-}" ]]; then
     cp "$run/frame.png" "$PNG_DIR/$scene-$slug.png"
   fi
