@@ -462,6 +462,13 @@ impl SqlCompletionProvider {
         self.lookup(key, |cache| cache.functions_by_schema.get(schema))
     }
 
+    /// Cached user-defined functions for a schema, expired or not, without
+    /// starting a fetch or a refresh.
+    pub fn peek_cached_functions(&self, schema: &str) -> Option<Arc<Vec<FunctionSignatureInfo>>> {
+        let cache = self.cache.lock().ok()?;
+        Some(Arc::clone(&cache.functions_by_schema.get(schema)?.data))
+    }
+
     /// Get cached user-defined functions for a schema or fetch them if not
     /// cached
     pub async fn get_cached_functions(
@@ -1386,7 +1393,7 @@ impl CompletionProvider for SqlCompletionProvider {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use blanco_core::SqlGrammar;
     use sql_parser::statement_parser::TableAlias;
@@ -1428,7 +1435,7 @@ mod tests {
 
     /// A database service whose connections never arrive until the test lets
     /// them fail, standing in for a connection slower than the typing.
-    struct StalledService {
+    pub(crate) struct StalledService {
         attempts: std::sync::atomic::AtomicUsize,
         release: smol::channel::Receiver<()>,
     }
@@ -1443,7 +1450,7 @@ mod tests {
             (service, sender)
         }
 
-        fn attempts(&self) -> usize {
+        pub(crate) fn attempts(&self) -> usize {
             self.attempts.load(std::sync::atomic::Ordering::SeqCst)
         }
     }
@@ -1476,7 +1483,7 @@ mod tests {
         }
     }
 
-    fn stalled_provider(
+    pub(crate) fn stalled_provider(
         cx: &gpui::TestAppContext,
     ) -> (
         SqlCompletionProvider,

@@ -9,7 +9,7 @@ use gpui::{App, AppContext as _, Task, Window};
 use gpui_component::input::{Rope, SignatureHelpProvider};
 use lsp_types::{
     Documentation, MarkupContent, MarkupKind, ParameterInformation, ParameterLabel, SignatureHelp,
-    SignatureHelpContext, SignatureInformation,
+    SignatureHelpContext, SignatureHelpTriggerKind, SignatureInformation,
 };
 use sql_parser::statement_parser::{self, EnclosingCall};
 use std::sync::Arc;
@@ -142,7 +142,7 @@ impl SignatureHelpProvider for SqlSignatureHelpProvider {
         &self,
         text: &Rope,
         offset: usize,
-        _context: SignatureHelpContext,
+        context: SignatureHelpContext,
         _window: &mut Window,
         cx: &mut App,
     ) -> Task<Result<Option<SignatureHelp>>> {
@@ -150,9 +150,17 @@ impl SignatureHelpProvider for SqlSignatureHelpProvider {
         let driver = self.completion.driver;
         let schema = self.completion.current_schema.clone();
 
-        // The UDF cache is read without IO; a cold cache is warmed in the
-        // background so the next keystroke includes user functions.
-        let user_functions: Arc<Vec<FunctionSignatureInfo>> =
+        // The editor also asks on every caret move, and fetching then would
+        // connect a tab that was only clicked into. So only typing a call's
+        // opening paren or asking for help warms a cold or expired cache, in
+        // the background so the next keystroke includes user functions.
+        let typed = context.trigger_kind == SignatureHelpTriggerKind::TRIGGER_CHARACTER
+            || context.trigger_kind == SignatureHelpTriggerKind::INVOKED;
+        let user_functions: Arc<Vec<FunctionSignatureInfo>> = if !typed {
+            self.completion
+                .peek_cached_functions(&schema)
+                .unwrap_or_default()
+        } else {
             match self.completion.try_get_cached_functions(&schema) {
                 Some(cached) => cached,
                 None => {
@@ -170,7 +178,8 @@ impl SignatureHelpProvider for SqlSignatureHelpProvider {
                     .detach();
                     Arc::new(Vec::new())
                 }
-            };
+            }
+        };
 
         cx.background_spawn(async move {
             let offset = offset.min(rope.len());
@@ -212,6 +221,45 @@ mod tests {
     fn active_label(help: &SignatureHelp) -> (&str, Option<u32>) {
         let signature = &help.signatures[help.active_signature.unwrap_or(0) as usize];
         (signature.label.as_str(), signature.active_parameter)
+    }
+
+    /// Clicking into a tab moves the caret, and the editor asks for help on
+    /// every caret move. Only typing a call's paren may open the connection.
+    #[gpui::test]
+    fn only_typing_a_call_fetches_user_functions(cx: &mut gpui::TestAppContext) {
+        let (completion, service, _release) = crate::sql::completion::tests::stalled_provider(cx);
+        cx.update(|cx| {
+            cx.set_global(crate::app_settings::AppSettings::new(
+                crate::settings::Settings::default(),
+            ))
+        });
+        let provider = SqlSignatureHelpProvider::new(completion);
+        let rope = Rope::from_str("SELECT add1(");
+        let window = cx.add_empty_window();
+        let request = |trigger_kind, window: &mut gpui::VisualTestContext| {
+            window.update(|window, cx| {
+                provider.signature_help(
+                    &rope,
+                    rope.len(),
+                    SignatureHelpContext {
+                        trigger_kind,
+                        trigger_character: None,
+                        is_retrigger: false,
+                        active_signature_help: None,
+                    },
+                    window,
+                    cx,
+                )
+            })
+        };
+
+        let _caret_moved = request(SignatureHelpTriggerKind::CONTENT_CHANGE, window);
+        window.run_until_parked();
+        assert_eq!(service.attempts(), 0);
+
+        let _typed = request(SignatureHelpTriggerKind::TRIGGER_CHARACTER, window);
+        window.run_until_parked();
+        assert_eq!(service.attempts(), 1);
     }
 
     #[test]
