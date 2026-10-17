@@ -53,6 +53,20 @@ impl EnvironmentType {
         self.tag().name
     }
 
+    /// The tag with this name, ignoring case. STAGE was called STAGING until
+    /// it was shortened to fit the sidebar's badge, and connection exports
+    /// made before that still carry the old name.
+    pub fn named(name: &str) -> Option<Self> {
+        environment_tags()
+            .into_iter()
+            .find(|tag| tag.name.eq_ignore_ascii_case(name))
+            .map(|tag| tag.id)
+            .or_else(|| {
+                name.eq_ignore_ascii_case("STAGING")
+                    .then_some(Self::STAGING)
+            })
+    }
+
     /// Whether writes on connections with this tag are confirmed first, as
     /// PROD connections have always been.
     pub fn confirms_writes(self) -> bool {
@@ -95,7 +109,7 @@ fn built_in_tag(id: EnvironmentType) -> EnvironmentTag {
     let (name, color, confirms_writes) = match id {
         EnvironmentType::LOCAL => ("LOCAL", "gray", false),
         EnvironmentType::TEST => ("TEST", "green", false),
-        EnvironmentType::STAGING => ("STAGING", "yellow", false),
+        EnvironmentType::STAGING => ("STAGE", "yellow", false),
         EnvironmentType::PROD => ("PROD", "red", true),
         _ => ("DEV", "blue", false),
     };
@@ -212,5 +226,12 @@ mod tests {
         let gone = EnvironmentType::from_i32(EnvironmentType::FIRST_CUSTOM_ID + 7);
         assert_eq!(gone.display_name(), "DEV");
         assert!(!gone.confirms_writes());
+
+        assert_eq!(EnvironmentType::named("qa"), Some(qa));
+        assert_eq!(
+            EnvironmentType::named("staging"),
+            Some(EnvironmentType::STAGING)
+        );
+        assert_eq!(EnvironmentType::named("nowhere"), None);
     }
 }

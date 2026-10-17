@@ -40,7 +40,7 @@ certificate, client certificate and key files. CockroachDB Cloud needs
 
 ## Environments
 
-Each connection can carry an environment tag: LOCAL, DEV, TEST, STAGING or
+Each connection can carry an environment tag: LOCAL, DEV, TEST, STAGE or
 PROD, or one you add yourself. The tag colours the connection in the sidebar
 and its tabs. PROD asks before anything that writes. See
 [Environments and safety](safety.md).

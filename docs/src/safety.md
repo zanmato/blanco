@@ -6,7 +6,7 @@ Give each connection an environment in its form. The tag colours the
 connection in the sidebar and its tabs, so it's clear where a query is about
 to run.
 
-Blanco comes with LOCAL, DEV, TEST, STAGING and PROD. Add your own on the
+Blanco comes with LOCAL, DEV, TEST, STAGE and PROD. Add your own on the
 **Environments** page in Settings, with a colour and whether it confirms
 writes.
 

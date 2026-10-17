@@ -4,9 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::ConnectionData;
-#[cfg(test)]
-use crate::EnvironmentType;
+use crate::{ConnectionData, EnvironmentType};
 use database::{DatabaseType, SecretKind};
 
 /// Identifies the document format, so a wrong file is refused clearly.
@@ -111,11 +109,7 @@ impl ExportedConnection {
         })?;
         // A tag is exported by name. One this machine does not have falls
         // back to the default.
-        let environment_type = blanco_core::environment_tags()
-            .into_iter()
-            .find(|tag| tag.name.eq_ignore_ascii_case(&self.environment))
-            .map(|tag| tag.id)
-            .unwrap_or_default();
+        let environment_type = EnvironmentType::named(&self.environment).unwrap_or_default();
         let mut connection = ConnectionData::new_sqlite(self.name, String::new());
         connection.db_type = db_type;
         connection.host = self.host;
