@@ -13,7 +13,6 @@ use gpui_component::{
     h_flex,
     input::{Input, InputState},
     notification::NotificationType,
-    scroll::ScrollableElement,
     select::{Select, SelectEvent, SelectState},
     v_flex,
 };
@@ -639,7 +638,6 @@ impl Render for ExportModal {
         let format = self.get_selected_format(cx);
         v_flex()
             .gap_4()
-            .max_h(px(440.0))
             .p_4()
             .child(
                 v_flex()
@@ -699,7 +697,6 @@ impl Render for ExportModal {
                 _ => this,
             })
             .child(self.render_progress(cx))
-            .overflow_y_scrollbar()
     }
 }
 
