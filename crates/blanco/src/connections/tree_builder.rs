@@ -593,7 +593,7 @@ fn fold_namespace_level(
 
         // Namespace folders default to collapsed and are recorded in
         // `expanded_categories` only once opened. This matches the default
-        // assumed by `record_category_expansion` (only `:tables` ids default
+        // assumed by `record_expansion` (only `:tables` ids default
         // open), so a folder's state round-trips across tree rebuilds.
         let is_expanded = expanded_categories.contains(&folder_id);
         let mut folder_metadata = base_metadata.clone();

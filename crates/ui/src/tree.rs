@@ -1,10 +1,10 @@
 use std::{cell::RefCell, ops::Range, rc::Rc};
 
 use gpui::{
-    App, Context, ElementId, Entity, FocusHandle, InteractiveElement as _, IntoElement, KeyBinding,
-    ListSizingBehavior, MouseButton, ParentElement, Render, RenderOnce, SharedString,
-    StyleRefinement, Styled, UniformListScrollHandle, Window, div, prelude::FluentBuilder as _, px,
-    uniform_list,
+    App, Context, ElementId, Entity, EventEmitter, FocusHandle, InteractiveElement as _,
+    IntoElement, KeyBinding, ListSizingBehavior, MouseButton, ParentElement, Render, RenderOnce,
+    SharedString, StyleRefinement, Styled, UniformListScrollHandle, Window, div,
+    prelude::FluentBuilder as _, px, uniform_list,
 };
 
 use gpui_component::{
@@ -184,6 +184,20 @@ impl<M: Clone> TreeItem<M> {
     }
 }
 
+/// Emitted whenever the tree opens or closes a folder itself, from a click or a
+/// key, so the owner can keep its own record of what is open. Items passed to
+/// `set_items` carry the owner's state, so a toggle it never heard of would be
+/// undone by the next rebuild.
+pub enum TreeEvent<M> {
+    Toggled {
+        id: SharedString,
+        expanded: bool,
+        metadata: M,
+    },
+}
+
+impl<D: TreeDelegate> EventEmitter<TreeEvent<D::Metadata>> for TreeState<D> {}
+
 /// State for managing tree items.
 pub struct TreeState<D: TreeDelegate> {
     focus_handle: FocusHandle,
@@ -338,7 +352,7 @@ impl<D: TreeDelegate> TreeState<D> {
         }
     }
 
-    fn toggle_expand(&mut self, ix: usize) {
+    fn toggle_expand(&mut self, ix: usize, cx: &mut Context<Self>) {
         let Some(entry) = self.entries.get_mut(ix) else {
             return;
         };
@@ -346,9 +360,16 @@ impl<D: TreeDelegate> TreeState<D> {
             return;
         }
 
-        entry.item.state.borrow_mut().expanded = !entry.is_expanded();
+        let expanded = !entry.is_expanded();
+        entry.item.state.borrow_mut().expanded = expanded;
+        let event = TreeEvent::Toggled {
+            id: entry.item.id.clone(),
+            expanded,
+            metadata: entry.item.metadata.clone(),
+        };
         self.rebuild_entries();
         self.reselect();
+        cx.emit(event);
     }
 
     fn rebuild_entries(&mut self) {
@@ -369,7 +390,7 @@ impl<D: TreeDelegate> TreeState<D> {
             && let Some(entry) = self.entries.get(selected_ix)
             && entry.is_folder()
         {
-            self.toggle_expand(selected_ix);
+            self.toggle_expand(selected_ix, cx);
             cx.notify();
         }
     }
@@ -380,7 +401,7 @@ impl<D: TreeDelegate> TreeState<D> {
             && entry.is_folder()
             && entry.is_expanded()
         {
-            self.toggle_expand(selected_ix);
+            self.toggle_expand(selected_ix, cx);
             cx.notify();
         }
     }
@@ -391,7 +412,7 @@ impl<D: TreeDelegate> TreeState<D> {
             && entry.is_folder()
             && !entry.is_expanded()
         {
-            self.toggle_expand(selected_ix);
+            self.toggle_expand(selected_ix, cx);
             cx.notify();
         }
     }
@@ -427,7 +448,7 @@ impl<D: TreeDelegate> TreeState<D> {
 
     fn on_entry_click(&mut self, ix: usize, _: &mut Window, cx: &mut Context<Self>) {
         self.select(Some(ix));
-        self.toggle_expand(ix);
+        self.toggle_expand(ix, cx);
         cx.notify();
     }
 }
@@ -588,6 +609,37 @@ mod tests {
     }
 
     #[gpui::test]
+    fn toggles_are_reported_to_the_owner(cx: &mut TestAppContext) {
+        let tree = cx.new(|cx| TreeState::new(Plain, cx));
+        let toggles = Rc::new(RefCell::new(Vec::new()));
+        let _subscription = cx.update(|cx| {
+            let toggles = toggles.clone();
+            cx.subscribe(&tree, move |_, event: &TreeEvent<()>, _| match event {
+                TreeEvent::Toggled { id, expanded, .. } => {
+                    toggles.borrow_mut().push((id.clone(), *expanded));
+                }
+            })
+        });
+
+        tree.update(cx, |tree, cx| {
+            tree.set_items(items(true), cx);
+            tree.toggle_expand(1, cx);
+            tree.toggle_expand(1, cx);
+            // A leaf is not a folder, so nothing toggles.
+            tree.toggle_expand(0, cx);
+        });
+        cx.run_until_parked();
+
+        assert_eq!(
+            *toggles.borrow(),
+            vec![
+                (SharedString::from("group"), false),
+                (SharedString::from("group"), true),
+            ]
+        );
+    }
+
+    #[gpui::test]
     fn selection_follows_the_item_across_rebuilds(cx: &mut TestAppContext) {
         let tree = cx.new(|cx| TreeState::new(Plain, cx));
         tree.update(cx, |tree, cx| {
@@ -595,9 +647,9 @@ mod tests {
             assert_eq!(tree.select_id("leaf", cx), Some(2));
 
             // Collapsing the group hides the item, reopening shows it selected.
-            tree.toggle_expand(1);
+            tree.toggle_expand(1, cx);
             assert_eq!(tree.selected_index(), None);
-            tree.toggle_expand(1);
+            tree.toggle_expand(1, cx);
             assert_eq!(tree.selected_index(), Some(2));
 
             // A rebuild with a new item above keeps the same item selected.

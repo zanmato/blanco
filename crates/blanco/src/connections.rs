@@ -20,7 +20,7 @@ use app_database::{AppDatabase, ConnectionData, EnvironmentType};
 use blanco_core::ConnectionContext;
 use blanco_core::DatabaseService as DatabaseServiceTrait;
 use blanco_ui::IconName;
-use blanco_ui::tree::{Tree, TreeItem, TreeState};
+use blanco_ui::tree::{Tree, TreeEvent, TreeItem, TreeState};
 
 use crate::name_filter::NameFilter;
 use database::DatabaseService;
@@ -250,6 +250,16 @@ impl ConnectionsPanel {
         let delegate = ConnectionsTreeDelegate::new(&panel_entity);
 
         let tree_state = cx.new(|cx| TreeState::new(delegate, cx));
+        let tree_subscription = cx.subscribe(
+            &tree_state,
+            |this, _tree, event: &TreeEvent<TreeItemMetadata>, _cx| match event {
+                TreeEvent::Toggled {
+                    id,
+                    expanded,
+                    metadata,
+                } => this.record_expansion(id, *expanded, metadata),
+            },
+        );
 
         let mut panel = Self {
             connections: Vec::new(),
@@ -258,7 +268,7 @@ impl ConnectionsPanel {
             database_metadata,
             tree_state,
             filter_input,
-            _subscriptions: vec![filter_subscription],
+            _subscriptions: vec![filter_subscription, tree_subscription],
             loaded_connections,
             expanded_connections,
             expanded_categories,
@@ -535,13 +545,6 @@ impl ConnectionsPanel {
                         // Set loading state before starting async operation
                         self.set_item_loading(item_id, true, cx);
                         self.load_connection_children(connection_id, true, cx);
-                    } else {
-                        // Already loaded. The tree widget toggled this node
-                        // itself on mouse-down (before this click handler), so
-                        // we only mirror the resulting state; toggling again
-                        // here would fight it, and rebuilding would re-apply
-                        // stored state to every other node.
-                        self.record_connection_expansion(connection_id, item_id, cx);
                     }
                 }
                 TreeItemKind::Database => {
@@ -558,13 +561,6 @@ impl ConnectionsPanel {
                             // Set loading state before starting async operation
                             self.set_item_loading(item_id, true, cx);
                             self.load_database_children(connection_id, database_name.clone(), cx);
-                        } else {
-                            self.record_database_expansion(
-                                connection_id,
-                                database_name,
-                                item_id,
-                                cx,
-                            );
                         }
                     }
                 }
@@ -592,28 +588,13 @@ impl ConnectionsPanel {
                                 schema_name.clone(),
                                 cx,
                             );
-                        } else {
-                            self.record_schema_expansion(
-                                connection_id,
-                                database_name,
-                                schema_name,
-                                item_id,
-                                cx,
-                            );
                         }
                     }
                 }
-                TreeItemKind::Table => self.record_table_expansion(item_id, cx),
-                TreeItemKind::View | TreeItemKind::MaterializedView => {}
-                TreeItemKind::Category => {
-                    // The tree widget toggles the clicked folder's expansion
-                    // itself (on mouse-down, before this click handler). We only
-                    // persist the resulting state so it survives later tree
-                    // rebuilds. We must NOT rebuild here: a full rebuild
-                    // re-applies stored state to every folder and would reopen
-                    // unrelated ones.
-                    self.record_category_expansion(item_id, cx);
-                }
+                TreeItemKind::Table
+                | TreeItemKind::View
+                | TreeItemKind::MaterializedView
+                | TreeItemKind::Category => {}
                 TreeItemKind::Procedure | TreeItemKind::Function | TreeItemKind::Trigger => {
                     if let (Some(routine_kind), Some(name)) =
                         (metadata.kind.routine_kind(), metadata.table_name.clone())
@@ -663,101 +644,80 @@ impl ConnectionsPanel {
         }
     }
 
-    /// Read back the expansion state the tree widget applied to `item_id` when
-    /// it handled the mouse-down that preceded the current click.
-    ///
-    /// The widget owns the actual toggle; every `record_*_expansion` below
-    /// mirrors its result into the panel's own state so it survives the next
-    /// tree rebuild. Mirroring instead of independently toggling is what keeps
-    /// the two in sync: if the panel toggled on its own, any click the widget
-    /// swallowed (or handled for a node the panel didn't expect to be a folder)
-    /// would leave the panel one toggle out of phase, and the next rebuild
-    /// would snap the node back open.
-    fn widget_expansion(&self, item_id: &str, cx: &Context<Self>) -> bool {
-        self.tree_state
-            .read(cx)
-            .entries()
-            .iter()
-            .find(|entry| entry.item().id == item_id)
-            .is_some_and(|entry| entry.is_expanded())
-    }
-
-    /// Record a connection's expansion after the tree widget toggled it.
-    fn record_connection_expansion(
-        &mut self,
-        connection_id: i64,
-        item_id: &str,
-        cx: &mut Context<Self>,
-    ) {
-        if self.widget_expansion(item_id, cx) {
-            self.expanded_connections.insert(connection_id);
-        } else {
-            self.expanded_connections.remove(&connection_id);
-        }
-    }
-
-    /// Record a database's expansion after the tree widget toggled it.
-    fn record_database_expansion(
-        &mut self,
-        connection_id: i64,
-        database_name: &str,
-        item_id: &str,
-        cx: &mut Context<Self>,
-    ) {
-        let expanded = self.widget_expansion(item_id, cx);
-        if let Some(metadata) = self.database_metadata.get_mut(&connection_id)
-            && let Some(database) = metadata
-                .databases
-                .iter_mut()
-                .find(|db| db.name == database_name)
-        {
-            database.is_expanded = expanded;
-        }
-    }
-
-    /// Record a schema's expansion after the tree widget toggled it.
-    fn record_schema_expansion(
-        &mut self,
-        connection_id: i64,
-        database_name: &str,
-        schema_name: &str,
-        item_id: &str,
-        cx: &mut Context<Self>,
-    ) {
-        let expanded = self.widget_expansion(item_id, cx);
-        if let Some(metadata) = self.database_metadata.get_mut(&connection_id)
-            && let Some(database) = metadata
-                .databases
-                .iter_mut()
-                .find(|db| db.name == database_name)
-            && let Some(schema) = database.schemas.iter_mut().find(|s| s.name == schema_name)
-        {
-            schema.is_expanded = expanded;
-        }
-    }
-
-    /// Record an object-type category folder's expansion after the tree widget
-    /// has toggled it, so the state survives future tree rebuilds. The set
-    /// stores only categories toggled *away* from their default (Tables open,
-    /// the rest closed), matching the XOR used when building the tree.
-    fn record_category_expansion(&mut self, category_key: &str, cx: &mut Context<Self>) {
-        let expanded = self.widget_expansion(category_key, cx);
-        let default_expanded = category_key.ends_with(":tables");
-        if expanded == default_expanded {
-            self.expanded_categories.remove(category_key);
-        } else {
-            self.expanded_categories.insert(category_key.to_string());
-        }
-    }
-
-    /// Record a table's expansion after the tree widget toggled it. Only
-    /// tables with partitions or inheritance children are folders; for any
-    /// other table the widget leaves it collapsed and nothing is recorded.
-    fn record_table_expansion(&mut self, item_id: &str, cx: &mut Context<Self>) {
-        if self.widget_expansion(item_id, cx) {
-            self.expanded_tables.insert(item_id.to_string());
-        } else {
-            self.expanded_tables.remove(item_id);
+    /// Record a folder the tree widget opened or closed, so the next rebuild
+    /// keeps it that way. The widget toggles on mouse-down and on keys, and
+    /// tells the panel through `TreeEvent::Toggled`; recording only on a
+    /// completed click missed a press released off the row and every key, and
+    /// the next rebuild (another connection landing, say) reopened the node.
+    fn record_expansion(&mut self, item_id: &str, expanded: bool, metadata: &TreeItemMetadata) {
+        let connection_id = metadata.connection_id;
+        match metadata.kind {
+            TreeItemKind::Connection => {
+                if expanded {
+                    self.expanded_connections.insert(connection_id);
+                } else {
+                    self.expanded_connections.remove(&connection_id);
+                }
+            }
+            TreeItemKind::Database => {
+                if let Some(database_name) = &metadata.database_name
+                    && let Some(database) =
+                        self.database_metadata
+                            .get_mut(&connection_id)
+                            .and_then(|connection| {
+                                connection
+                                    .databases
+                                    .iter_mut()
+                                    .find(|db| db.name == *database_name)
+                            })
+                {
+                    database.is_expanded = expanded;
+                }
+            }
+            TreeItemKind::Schema => {
+                if let (Some(database_name), Some(schema_name)) =
+                    (&metadata.database_name, &metadata.schema_name)
+                    && let Some(schema) = self
+                        .database_metadata
+                        .get_mut(&connection_id)
+                        .and_then(|connection| {
+                            connection
+                                .databases
+                                .iter_mut()
+                                .find(|db| db.name == *database_name)
+                        })
+                        .and_then(|database| {
+                            database.schemas.iter_mut().find(|s| s.name == *schema_name)
+                        })
+                {
+                    schema.is_expanded = expanded;
+                }
+            }
+            // The set stores only categories toggled away from their default
+            // (Tables open, the rest closed), matching the XOR used when
+            // building the tree. Namespace folders share the set and default
+            // to closed.
+            TreeItemKind::Category => {
+                let default_expanded = item_id.ends_with(":tables");
+                if expanded == default_expanded {
+                    self.expanded_categories.remove(item_id);
+                } else {
+                    self.expanded_categories.insert(item_id.to_string());
+                }
+            }
+            // Only tables with partitions or inheritance children are folders.
+            TreeItemKind::Table => {
+                if expanded {
+                    self.expanded_tables.insert(item_id.to_string());
+                } else {
+                    self.expanded_tables.remove(item_id);
+                }
+            }
+            TreeItemKind::View
+            | TreeItemKind::MaterializedView
+            | TreeItemKind::Procedure
+            | TreeItemKind::Function
+            | TreeItemKind::Trigger => {}
         }
     }
 
