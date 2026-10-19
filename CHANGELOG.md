@@ -2,6 +2,111 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.4] - 2026-10-19
+
+### Features
+
+- DuckDB connections. DuckDB is bundled, so nothing needs installing. The
+  sidebar lists the file's own database and any attached ones above their
+  schemas. Database files open from File, Open, by dropping them on the
+  window, from the command line and from the file manager, and SQLite and
+  DuckDB files are told apart by their contents, whatever the extension.
+  File, New creates either kind
+- CockroachDB connections, with their own icon and connection form. Query plans, the process list,
+  function completion and signature help work as on PostgreSQL. A table
+  without a primary key can be edited through its hidden `rowid`. Structure
+  changes are not applied atomically, as CockroachDB commits each DDL
+  statement, and the preview says so. There is no backup
+- Each backend's SQL is highlighted and parsed with a grammar of its own, so
+  syntax a database adds to standard SQL is understood where it applies
+- Process List in a connection's menu, or a database's Process list in the
+  command palette, shows the server's sessions with their user, database,
+  state, duration and query, refreshed by hand or on an interval. Cancel
+  Query and Kill Session ask first, warn on PROD and are refused on read
+  only connections. PostgreSQL, MySQL, MariaDB and CockroachDB do both, SQL
+  Server can only kill and ClickHouse can only cancel
+- Structure changes are staged. Adding, changing or dropping a column, index
+  or foreign key adds a pending change, and the lists show the table with
+  those changes applied and marked, so a new column can be indexed before
+  anything runs. Each change can be undone from its row. Apply shows every
+  statement first and runs them as one batch, in one transaction where the
+  database can roll DDL back. Discard drops them all, and a tab with
+  pending changes asks before it closes
+- Explain now shows the estimated plan without running the statement on
+  every database. Explain Analyze, in the toolbar's Explain menu and the
+  command palette, runs it and shows actual rows and timings on PostgreSQL,
+  MySQL, MariaDB, DuckDB and SQL Server. SQL Server scripts are split on `GO`
+  lines, and `GO 5` repeats a batch
+- Copy as HTML and Export as HTML write rows as an HTML table, which pastes
+  as a table into documents and email. The export dialog offers HTML too.
+  The cell menu groups its copy and export entries into Copy as, Copy Column
+  and Export as submenus
+- Ctrl+C (Cmd+C on macOS) on the results grid copies the selection: a cell's
+  value, selected rows as TSV with a header row, or a selected column's
+  values one per line. It can be rebound as Copy Selection under Data
+- The run's log line and query history show execution time and fetch time
+  separately from the total
+- The sidebar shows each database's size. PostgreSQL and SQL Server show it
+  on each database, the others on the connection
+- Keyword completion suggests what fits where the caret is: INTO after
+  INSERT, SET after UPDATE and a table, the clauses that may follow FROM,
+  WHERE, GROUP BY or ORDER BY, and so on. Keywords only some databases know,
+  such as RETURNING, TOP, ILIKE and LIMIT, are offered only on those
+- PostgreSQL `hstore` columns show as `key: value` pairs, and expanding a
+  cell opens an editor where pairs are added, changed and removed
+- Highlight Invisible Characters in the Editor settings, on by default, boxes
+  characters that look like nothing or a plain space, such as a pasted
+  no break space. Show Invisible Characters in the Results settings, off by
+  default, marks them in cells, naming zero width characters (ZWSP, BOM) and
+  control characters by code point
+- An empty field in the query parameters dialog binds NULL. Clear empties every field and forgets the tab's
+  remembered values
+- Charts show their value axis, and the first column of a result can be
+  charted
+- User documentation, linked from the website
+
+### Changes
+
+- The STAGING environment tag is now STAGE. Imported connections that say
+  STAGING get STAGE
+- Text field placeholders no longer end in an ellipsis, and the table menu's
+  Rename, Truncate and Drop use the ellipsis character like other menus
+
+### Fixes
+
+- PostgreSQL connections with SSL mode Preferred or Required failed before
+  trying to connect
+- PostgreSQL user names, passwords, database names and certificate paths
+  holding characters such as `@`, `/`, `:`, `#` or spaces are sent as typed
+- A connection the server closed, or a PostgreSQL session an administrator
+  ended, fails one query and reconnects on the next run. Each query also
+  saves a round trip on PostgreSQL and MySQL
+- Clicking into a tab no longer opens its connection, or reconnects one that
+  was closed while idle, to fetch functions for signature help
+- A closed database or folder in the sidebar could open again when another
+  database connected
+- The CSV options in the export dialog were cut off below the Delimiter
+  labels
+- Export as TSV from the cell menu wrote nothing
+- Scrolling a result with large text values stalled. Cells format only the
+  part of a value the grid can show
+- A column in two foreign keys was listed twice, and as part of a primary
+  key it was matched twice when saving grid edits. SQL Server paired the
+  columns of a composite foreign key wrongly
+- Running an unfinished `WITH` query sends the whole statement, not just the
+  CTE body
+- DuckDB's `read_csv` and other table functions with many options showed a
+  signature of dozens of parameters. Their options are now one trailing
+  parameter, and the signature help popover stays inside the window
+- Relationship lines in the schema graph were invisible with every bundled
+  theme
+- Agents in a tab's terminal pane work on their own tab, and `run_tab` goes
+  through the same write policy as `run_sql`
+- The completion menu flickered while deleting
+- Text in a cell moved a pixel when editing started
+- Dialog backdrops are fitted to the window
+- The command palette button sat a pixel high in the title bar
+
 ## [0.1.3] - 2026-10-13
 
 ### Features
