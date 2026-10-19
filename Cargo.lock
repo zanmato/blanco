@@ -3476,7 +3476,7 @@ dependencies = [
 [[package]]
 name = "gpui-base"
 version = "0.7.1"
-source = "git+https://github.com/zanmato/gpui-component?branch=blanco#3bbd294128352fdd0c731d0f778ce3af99771a95"
+source = "git+https://github.com/zanmato/gpui-component?branch=blanco#e09d8efd2c553edcfd693618b8cceb1eb41dffe4"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -3516,7 +3516,7 @@ dependencies = [
 [[package]]
 name = "gpui-component"
 version = "0.7.1"
-source = "git+https://github.com/zanmato/gpui-component?branch=blanco#3bbd294128352fdd0c731d0f778ce3af99771a95"
+source = "git+https://github.com/zanmato/gpui-component?branch=blanco#e09d8efd2c553edcfd693618b8cceb1eb41dffe4"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3565,7 +3565,7 @@ dependencies = [
 [[package]]
 name = "gpui-component-macros"
 version = "0.7.1"
-source = "git+https://github.com/zanmato/gpui-component?branch=blanco#3bbd294128352fdd0c731d0f778ce3af99771a95"
+source = "git+https://github.com/zanmato/gpui-component?branch=blanco#e09d8efd2c553edcfd693618b8cceb1eb41dffe4"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -3576,7 +3576,7 @@ dependencies = [
 [[package]]
 name = "gpui-kit-assets"
 version = "0.7.1"
-source = "git+https://github.com/zanmato/gpui-component?branch=blanco#3bbd294128352fdd0c731d0f778ce3af99771a95"
+source = "git+https://github.com/zanmato/gpui-component?branch=blanco#e09d8efd2c553edcfd693618b8cceb1eb41dffe4"
 dependencies = [
  "anyhow",
  "gpui-pre",
