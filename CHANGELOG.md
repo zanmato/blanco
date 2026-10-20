@@ -7,9 +7,22 @@ All notable changes to this project will be documented in this file.
 ### Features
 
 - Custom themes: theme JSON files in the `themes` folder of Blanco's config
-  directory are listed with the built-in themes after a restart. A file with
+  directory are listed with the built in themes after a restart. A file with
   keys the theme format does not know gets a warning naming them, as those
   keys are ignored. Open Themes Folder in the command palette opens the folder
+- Open Tabs in the sidebar rail lists the window's tabs grouped by
+  connection. Tabs there switch on click, close with the middle button,
+  reorder by dragging and have the same menu as in the tab strip
+
+### Changes
+
+- The completion menu stays open while typing continues the same word,
+  instead of closing and reopening on every keystroke
+
+### Fixes
+
+- Sidebar icons kept the previous theme's colors after switching themes
+  until the sidebar was clicked
 
 ## [0.1.4] - 2026-10-19
 
