@@ -19,13 +19,35 @@ enum AliasResolution {
 
 pub struct TableExtractor {
     dialect: Box<dyn Dialect>,
+    backend: crate::dialect::Dialect,
 }
 
 impl TableExtractor {
     pub fn for_driver(driver: DatabaseType) -> Self {
         Self {
             dialect: driver.dialect().sqlparser_dialect(),
+            backend: driver.dialect(),
         }
+    }
+
+    /// The table a name refers to as a path such as `sales.orders`, schema
+    /// included when the query names one, so the grid reads and writes that
+    /// table and not a namesake on the search path. Unquoted parts are taken
+    /// as the backend folds them, quoted ones as written.
+    fn table_path(&self, name: &ObjectName) -> String {
+        name.0
+            .iter()
+            .map(|part| match part.as_ident() {
+                Some(ident) if ident.quote_style.is_some() => {
+                    self.backend.path_segment(&ident.value)
+                }
+                Some(ident) => self
+                    .backend
+                    .path_segment(&self.backend.unquoted_identifier(&ident.value)),
+                None => part.to_string(),
+            })
+            .collect::<Vec<_>>()
+            .join(".")
     }
 
     fn parse_sql(&self, sql: &str) -> Result<Option<Statement>> {
@@ -49,7 +71,7 @@ impl TableExtractor {
         match statement {
             Statement::Query(query) => self.extract_from_query(query, alias),
             Statement::Insert(insert) => match &insert.table {
-                TableObject::TableName(name) => Some(table_name_only(name)),
+                TableObject::TableName(name) => Some(self.table_path(name)),
                 TableObject::TableFunction(_) => None,
             },
             Statement::Update(update) => {
@@ -75,7 +97,7 @@ impl TableExtractor {
             if !first_table.joins.is_empty() {
                 match Self::resolve_alias_from_projection(&select.projection) {
                     AliasResolution::Single(ref_alias) => {
-                        let alias_map = Self::build_alias_map(first_table);
+                        let alias_map = self.build_alias_map(first_table);
                         if alias_map.contains_key(&ref_alias) {
                             if alias {
                                 return Some(ref_alias);
@@ -92,22 +114,26 @@ impl TableExtractor {
         None
     }
 
-    fn build_alias_map(table_with_joins: &TableWithJoins) -> HashMap<String, String> {
+    /// Each table of a FROM clause by the qualifier a projection uses for
+    /// it (`o.*`, `orders.*`): its alias and its last name part.
+    fn build_alias_map(&self, table_with_joins: &TableWithJoins) -> HashMap<String, String> {
         let mut map = HashMap::new();
-        Self::insert_table_factor_alias(&mut map, &table_with_joins.relation);
+        self.insert_table_factor_alias(&mut map, &table_with_joins.relation);
         for join in &table_with_joins.joins {
-            Self::insert_table_factor_alias(&mut map, &join.relation);
+            self.insert_table_factor_alias(&mut map, &join.relation);
         }
         map
     }
 
-    fn insert_table_factor_alias(map: &mut HashMap<String, String>, factor: &TableFactor) {
+    fn insert_table_factor_alias(&self, map: &mut HashMap<String, String>, factor: &TableFactor) {
         if let TableFactor::Table { name, alias, .. } = factor {
-            let table_name = table_name_only(name);
+            let path = self.table_path(name);
             if let Some(a) = alias {
-                map.insert(a.name.to_string(), table_name.clone());
+                map.insert(a.name.to_string(), path.clone());
             }
-            map.insert(table_name.clone(), table_name);
+            if let Some(last) = name.0.last() {
+                map.insert(last.to_string(), path);
+            }
         }
     }
 
@@ -156,7 +182,7 @@ impl TableExtractor {
                 if alias && let Some(a) = table_alias {
                     return Some(a.name.to_string());
                 }
-                Some(table_name_only(name))
+                Some(self.table_path(name))
             }
             TableFactor::Derived {
                 subquery,
@@ -172,15 +198,6 @@ impl TableExtractor {
             _ => None,
         }
     }
-}
-
-/// Extract just the table name from an ObjectName, stripping any schema/database prefix.
-/// e.g. "public.users" -> "users", "mydb.public.users" -> "users", "users" -> "users"
-fn table_name_only(name: &ObjectName) -> String {
-    name.0
-        .last()
-        .map(|part| part.to_string())
-        .unwrap_or_else(|| name.to_string())
 }
 
 #[cfg(test)]
@@ -235,7 +252,7 @@ mod tests {
             extractor
                 .extract_table("SELECT * FROM public.users", false)
                 .unwrap(),
-            "users"
+            "public.users"
         );
     }
 
@@ -254,7 +271,36 @@ mod tests {
             extractor
                 .extract_table("SELECT * FROM mydb.users", false)
                 .unwrap(),
-            "users"
+            "mydb.users"
+        );
+    }
+
+    #[test]
+    fn schema_qualified_names_keep_their_schema_as_the_backend_reads_it() {
+        let postgres = TableExtractor::for_driver(DatabaseType::PostgreSQL);
+        let extract = |sql: &str| postgres.extract_table(sql, false).unwrap();
+        assert_eq!(extract("SELECT * FROM Sales.Orders"), "sales.orders");
+        assert_eq!(
+            extract(r#"SELECT * FROM "Sales Data"."Orders""#),
+            r#""Sales Data"."Orders""#
+        );
+        assert_eq!(
+            extract(
+                "SELECT o.* FROM sales.orders o JOIN sales.customers c ON c.id = o.customer_id"
+            ),
+            "sales.orders"
+        );
+        assert_eq!(
+            extract("SELECT customers.* FROM sales.orders JOIN sales.customers ON true"),
+            "sales.customers"
+        );
+
+        let mssql = TableExtractor::for_driver(DatabaseType::MsSql);
+        assert_eq!(
+            mssql
+                .extract_table("SELECT * FROM [dbo].[Order Lines]", false)
+                .unwrap(),
+            "dbo.[Order Lines]"
         );
     }
 
@@ -266,7 +312,7 @@ mod tests {
             extractor
                 .extract_table("INSERT INTO public.users (name) VALUES ('test')", false)
                 .unwrap(),
-            "users"
+            "public.users"
         );
     }
 
@@ -278,7 +324,7 @@ mod tests {
             extractor
                 .extract_table("UPDATE public.users SET name = 'test'", false)
                 .unwrap(),
-            "users"
+            "public.users"
         );
     }
 
@@ -290,7 +336,7 @@ mod tests {
             extractor
                 .extract_table("DELETE FROM public.users WHERE id = 1", false)
                 .unwrap(),
-            "users"
+            "public.users"
         );
     }
 

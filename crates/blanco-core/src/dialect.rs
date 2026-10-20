@@ -603,18 +603,84 @@ impl Dialect {
     /// `public.users` or `` `db`.`t` ``: each segment is unquoted in this
     /// dialect's own style and requoted, so user-typed table names round trip.
     pub fn quote_path(&self, path: &str) -> String {
-        let (open, close) = self.identifier_quotes();
-        path.split('.')
-            .map(|part| {
-                let part = part.trim();
-                let bare = part
-                    .strip_prefix(open)
-                    .and_then(|value| value.strip_suffix(close))
-                    .unwrap_or(part);
-                self.quote_identifier(bare)
-            })
+        self.path_segments(path)
+            .iter()
+            .map(|segment| self.quote_identifier(segment))
             .collect::<Vec<_>>()
             .join(".")
+    }
+
+    /// The identifiers of a dotted path such as `public.users` or
+    /// `"Sales Data"."Orders"`, unquoted. Only dots outside quotes separate
+    /// segments, and a doubled closing quote inside quotes is one character.
+    /// Unquoted segments are taken as written.
+    pub fn path_segments(&self, path: &str) -> Vec<String> {
+        let (open, close) = self.identifier_quotes();
+        let mut segments = Vec::new();
+        let mut current = String::new();
+        let mut quoted = false;
+        let mut chars = path.chars().peekable();
+        while let Some(c) = chars.next() {
+            if quoted {
+                if c != close {
+                    current.push(c);
+                } else if chars.peek() == Some(&close) {
+                    current.push(close);
+                    chars.next();
+                } else {
+                    quoted = false;
+                }
+            } else if c == open {
+                quoted = true;
+            } else if c == '.' {
+                segments.push(std::mem::take(&mut current));
+            } else if !c.is_whitespace() {
+                current.push(c);
+            }
+        }
+        segments.push(current);
+        segments
+    }
+
+    /// The schema and name of a table path: its last segment is the name,
+    /// and the one before it, when there is one, the schema.
+    pub fn split_table_path(&self, path: &str) -> (Option<String>, String) {
+        let mut segments = self.path_segments(path);
+        let name = segments.pop().unwrap_or_default();
+        (segments.pop(), name)
+    }
+
+    /// The path segment for the identifier `name`: bare when the backend
+    /// reads it back unquoted as the same identifier, quoted otherwise. A
+    /// path built from these reads well in the UI and quotes back exactly.
+    pub fn path_segment(&self, name: &str) -> String {
+        let plain = name
+            .chars()
+            .next()
+            .is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
+            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+            && self.unquoted_identifier(name) == name;
+        if plain {
+            name.to_string()
+        } else {
+            self.quote_identifier(name)
+        }
+    }
+
+    /// The identifier an unquoted name stands for: PostgreSQL and
+    /// CockroachDB fold it to lower case, the others keep it as written
+    /// (MySQL, SQLite, SQL Server and DuckDB compare names without regard to
+    /// case either way).
+    pub fn unquoted_identifier(&self, name: &str) -> String {
+        match self.0 {
+            DatabaseType::PostgreSQL | DatabaseType::CockroachDb => name.to_lowercase(),
+            DatabaseType::MySQL
+            | DatabaseType::ClickHouse
+            | DatabaseType::MsSql
+            | DatabaseType::SQLite
+            | DatabaseType::DuckDb
+            | DatabaseType::Redis => name.to_string(),
+        }
     }
 
     fn identifier_quotes(&self) -> (char, char) {
@@ -983,6 +1049,44 @@ mod tests {
             dialect(DatabaseType::PostgreSQL).quote_path(" public . \"Users\" "),
             "\"public\".\"Users\""
         );
+    }
+
+    #[test]
+    fn paths_split_only_outside_quotes() {
+        let postgres = dialect(DatabaseType::PostgreSQL);
+        assert_eq!(
+            postgres.path_segments(r#""Sales.Data"."Or""ders""#),
+            ["Sales.Data", "Or\"ders"]
+        );
+        assert_eq!(
+            postgres.quote_path(r#""Sales.Data"."Or""ders""#),
+            r#""Sales.Data"."Or""ders""#
+        );
+        assert_eq!(
+            postgres.split_table_path("public.users"),
+            (Some("public".to_string()), "users".to_string())
+        );
+        assert_eq!(
+            dialect(DatabaseType::MsSql).split_table_path("[db].[dbo].[t]"),
+            (Some("dbo".to_string()), "t".to_string())
+        );
+        assert_eq!(
+            postgres.split_table_path("users"),
+            (None, "users".to_string())
+        );
+    }
+
+    #[test]
+    fn path_segments_quote_what_would_not_read_back_bare() {
+        let postgres = dialect(DatabaseType::PostgreSQL);
+        assert_eq!(postgres.path_segment("orders"), "orders");
+        assert_eq!(postgres.path_segment("Orders"), "\"Orders\"");
+        assert_eq!(postgres.path_segment("sales data"), "\"sales data\"");
+        assert_eq!(
+            dialect(DatabaseType::MySQL).path_segment("Orders"),
+            "Orders"
+        );
+        assert_eq!(dialect(DatabaseType::MsSql).path_segment("1st"), "[1st]");
     }
 
     #[test]

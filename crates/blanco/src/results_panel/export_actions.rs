@@ -102,6 +102,9 @@ impl ResultsPanel {
             .table_name
             .clone()
             .unwrap_or_else(|| "export".to_string());
+        let db_type = selected_data
+            .db_type
+            .unwrap_or(database::DatabaseType::PostgreSQL);
 
         let extension = match format {
             "csv" => "csv",
@@ -114,7 +117,8 @@ impl ResultsPanel {
         };
 
         let timestamp = chrono::Utc::now().format("%Y-%m-%d_%H-%M-%S").to_string();
-        let default_filename = format!("{}_{}.{}", table_name, timestamp, extension);
+        let file_stem = db_type.dialect().path_segments(&table_name).join(".");
+        let default_filename = format!("{file_stem}_{timestamp}.{extension}");
 
         let home_dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
         let path = cx.prompt_for_new_path(&home_dir, Some(&default_filename));
@@ -125,9 +129,6 @@ impl ResultsPanel {
             .csv
             .to_options();
         let table_name_for_sql = table_name;
-        let db_type = selected_data
-            .db_type
-            .unwrap_or(database::DatabaseType::PostgreSQL);
 
         cx.spawn_in(window, async move |entity, cx| {
             let outer_result = path.await;

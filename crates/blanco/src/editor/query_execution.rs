@@ -727,11 +727,15 @@ impl EditorPanel {
                                 }
                             }
 
-                            if let Some(table_name) = &table_name
-                                && let Ok(columns) =
-                                    connection.get_columns_for_table(table_name, None).await
-                            {
-                                result.table_columns = Some(columns);
+                            if let Some(table_name) = &table_name {
+                                let (schema, table) =
+                                    db_type.dialect().split_table_path(table_name);
+                                if let Ok(columns) = connection
+                                    .get_columns_for_table(&table, schema.as_deref())
+                                    .await
+                                {
+                                    result.table_columns = Some(columns);
+                                }
                             }
                         }
 

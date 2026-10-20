@@ -28,6 +28,27 @@ pub struct PostgresConnection {
 }
 
 impl PostgresConnection {
+    /// The schema of the table an unqualified `table_name` refers to: the
+    /// first one on the session's search path that has it, as for the
+    /// statements the grid writes. `public` when none does.
+    pub(crate) async fn schema_on_search_path(&self, table_name: &str) -> Result<String> {
+        let result = self
+            .execute_query(
+                "SELECT n.nspname::text FROM pg_class c \
+                 JOIN pg_namespace n ON n.oid = c.relnamespace \
+                 WHERE c.oid = to_regclass(quote_ident($1))",
+                self.initial_database.as_deref(),
+                Some(&[table_name.to_string()]),
+            )
+            .await?;
+        Ok(result
+            .rows
+            .into_iter()
+            .next()
+            .and_then(|row| row.into_iter().next().flatten())
+            .unwrap_or_else(|| "public".to_string()))
+    }
+
     /// Create a new PostgreSQL connection from a connection string
     pub fn from_connection_string(connection_string: &str) -> Result<Self> {
         let connection_key = PgConnectionKey::from_connection_string(connection_string)?;

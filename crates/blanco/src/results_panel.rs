@@ -53,6 +53,8 @@ pub mod filter_bar;
 mod foreign_key_popover;
 pub(crate) mod json_text;
 mod key_value_editor;
+#[cfg(test)]
+mod multi_schema_test;
 mod results_table_delegate;
 mod row_ops;
 mod server_filter;

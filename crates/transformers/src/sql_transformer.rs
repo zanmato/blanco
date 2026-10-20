@@ -93,7 +93,8 @@ fn statement_prefix(table_name: &str, columns: &[String], db_type: DatabaseType)
         .join(", ");
     format!(
         "INSERT INTO {} ({}) VALUES",
-        sql_identifier(table_name, db_type),
+        // The grid's table is a path, `sales.orders`.
+        db_type.dialect().quote_path(table_name),
         column_list
     )
 }
@@ -403,6 +404,18 @@ mod tests {
         }
         output.push_str(&transformer.finalize_stream().unwrap());
         output
+    }
+
+    #[test]
+    fn a_schema_qualified_table_is_quoted_part_by_part() {
+        assert_eq!(
+            statement_prefix(
+                "sales.\"Order Lines\"",
+                &["id".to_string()],
+                DatabaseType::PostgreSQL
+            ),
+            "INSERT INTO \"sales\".\"Order Lines\" (\"id\") VALUES"
+        );
     }
 
     #[test]

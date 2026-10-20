@@ -268,7 +268,16 @@ obtained with `db_type.dialect()`: identifier quoting (`quote_identifier`, `quot
 emits `TOP n` for SQL Server), EXPLAIN wrapping and plan parsing, upsert spelling, default
 schema/port and capability flags (`supports_sql`, `rows_editable`, `supports_create_table_ddl`,
 `supports_column_ddl`). Do not match on `DatabaseType` in UI, transformer or import code; add a
-method here instead so a new backend is one arm per method. `DatabaseType::ALL` / `index()`
+method here instead so a new backend is one arm per method.
+
+The table a result grid edits is a path (`QueryResult::table_name`, `sales.orders`), schema
+included whenever the query names one, built by `TableExtractor` with unquoted parts folded as
+the backend folds them (`Dialect::unquoted_identifier`) and quoted only where needed
+(`Dialect::path_segment`). Writes quote it with `quote_path`; lookups split it with
+`split_table_path` and pass the schema on. An unqualified name means what the session's search
+path finds, so PostgreSQL's `get_columns_for_table` resolves it there rather than assuming
+`public`. `results_panel/multi_schema_test.rs` edits, defers and follows foreign keys across
+schemas against the compose PostgreSQL and CockroachDB, with a namesake in `public` each time. `DatabaseType::ALL` / `index()`
 give the connection dialog order.
 
 The identity a tab or action works against is one `blanco_core::ConnectionContext`

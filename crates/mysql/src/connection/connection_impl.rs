@@ -785,7 +785,7 @@ impl Connection for MysqlConnection {
     async fn get_columns_for_table(
         &self,
         table_name: &str,
-        _schema: Option<&str>,
+        schema: Option<&str>,
     ) -> Result<Vec<ColumnInfo>, anyhow::Error> {
         tracing::debug!("Getting columns for table: {}", table_name);
 
@@ -795,6 +795,8 @@ impl Connection for MysqlConnection {
             .ok_or_else(|| anyhow::anyhow!("No database specified"))?;
 
         let pool = self.get_or_create_pool(database).await?;
+        // A MySQL schema is a database: `other.t` is read from `other`.
+        let table_schema = schema.unwrap_or(database);
 
         // Single query to get columns with PK and FK information
         let query = "
@@ -846,9 +848,9 @@ impl Connection for MysqlConnection {
         ";
 
         let rows = sqlx::query(query)
-            .bind(database)
+            .bind(table_schema)
             .bind(table_name)
-            .bind(database)
+            .bind(table_schema)
             .bind(table_name)
             .fetch_all(&pool)
             .await?;

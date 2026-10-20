@@ -75,7 +75,11 @@ impl DeferredRead {
             .extract_table_name_from_query(query, false)
             .ok()
             .flatten()?;
-        let table_columns = connection.get_columns_for_table(&table, None).await.ok()?;
+        let (schema, table) = db_type.dialect().split_table_path(&table);
+        let table_columns = connection
+            .get_columns_for_table(&table, schema.as_deref())
+            .await
+            .ok()?;
         Self::plan(db_type, query, &table_columns, threshold)
     }
 

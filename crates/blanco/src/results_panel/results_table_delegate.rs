@@ -111,22 +111,20 @@ impl ResultsTableDelegate {
             .column_types
             .get(col_ix)
             .is_some_and(ColumnType::is_numeric);
-        let sql = self.db_type?.dialect().referenced_row_query(
+        let dialect = self.db_type?.dialect();
+        let sql = dialect.referenced_row_query(
             &foreign_key.foreign_table_name,
             &foreign_key.foreign_column_name,
             value,
             numeric,
             self.column_types.get(col_ix) == Some(&ColumnType::Binary),
         );
-        let (schema_name, table) = match foreign_key.foreign_table_name.rsplit_once('.') {
-            Some((schema, table)) => (Some(schema.to_string()), table),
-            None => (None, foreign_key.foreign_table_name.as_str()),
-        };
+        let (schema_name, table) = dialect.split_table_path(&foreign_key.foreign_table_name);
         Some(crate::app::ShowQueryInNewTab {
             connection_id: self.connection_id,
             database_name: self.database_name.to_string(),
             schema_name,
-            title: table.to_string(),
+            title: table,
             sql,
         })
     }

@@ -23,6 +23,13 @@ All notable changes to this project will be documented in this file.
 
 - Sidebar icons kept the previous theme's colors after switching themes
   until the sidebar was clicked
+- Results from a PostgreSQL or CockroachDB table outside the `public` schema
+  could not be edited, and opening one of their large values or following
+  a foreign key into another schema read a table of the same name on the
+  search path instead. Mixed case names written without quotes, which
+  PostgreSQL reads in lower case, are matched the same way. MySQL reads a
+  table written as `database.table` from that database. A SQL export of
+  such a result names the table with its schema
 
 ## [0.1.4] - 2026-10-19
 

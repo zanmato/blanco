@@ -800,7 +800,11 @@ impl Connection for PostgresConnection {
         table_name: &str,
         schema: Option<&str>,
     ) -> Result<Vec<ColumnInfo>> {
-        let schema_name = schema.unwrap_or("public");
+        let schema_name = match schema {
+            Some(schema) => schema.to_string(),
+            None => self.schema_on_search_path(table_name).await?,
+        };
+        let schema_name = schema_name.as_str();
         tracing::debug!(
             "Getting columns for PostgreSQL table '{}.{}",
             schema_name,
@@ -1053,32 +1057,21 @@ impl Connection for PostgresConnection {
     ) -> Result<QueryResult, anyhow::Error> {
         const ROW_ESTIMATE_THRESHOLD: i64 = 20;
         const LIMIT_THRESHOLD: i64 = 100;
-        let quote_identifier = |identifier: &str| {
-            identifier
-                .split('.')
-                .map(|part| {
-                    let part = part.trim();
-                    let unquoted = part
-                        .strip_prefix('"')
-                        .and_then(|value| value.strip_suffix('"'))
-                        .unwrap_or(part);
-                    format!("\"{}\"", unquoted.replace('"', "\"\""))
-                })
-                .collect::<Vec<_>>()
-                .join(".")
-        };
-        let table_identifier = quote_identifier(table_name);
-        let column_identifier = quote_identifier(column_name);
+        let dialect = self.database_type.dialect();
+        let table_identifier = dialect.quote_path(table_name);
+        let column_identifier = dialect.quote_identifier(column_name);
         let reference_value = reference_value.replace('\'', "''");
 
         // Get row estimate from pg_class
+        // By the table's own oid: a name alone matches every schema's
+        // namesake.
         let estimate_query =
-            "SELECT reltuples::bigint AS estimate FROM pg_class WHERE relname = $1";
+            "SELECT reltuples::bigint AS estimate FROM pg_class WHERE oid = to_regclass($1)";
         let estimate_result = self
             .execute_query(
                 estimate_query,
                 self.initial_database.as_deref(),
-                Some(&[table_name.to_string()]),
+                Some(std::slice::from_ref(&table_identifier)),
             )
             .await?;
 
