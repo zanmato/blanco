@@ -41,6 +41,7 @@ use crate::{
     database_file,
     editor::{
         EditorPanel, EditorPanelEvent, ObjectDdlParams, TabCreationParams, TableStructureParams,
+        open_tabs::OpenTabsPanel,
     },
     history_panel::{HistoryPanel, HistoryPanelEvent},
     result_ext::ResultExt,
@@ -411,17 +412,24 @@ pub(crate) enum SidebarTab {
     Connections,
     Snippets,
     History,
+    OpenTabs,
 }
 
 impl SidebarTab {
     /// Rail order, top to bottom.
-    const ALL: [SidebarTab; 3] = [Self::Connections, Self::Snippets, Self::History];
+    const ALL: [SidebarTab; 4] = [
+        Self::Connections,
+        Self::OpenTabs,
+        Self::Snippets,
+        Self::History,
+    ];
 
     fn label(self) -> &'static str {
         match self {
             Self::Connections => "Connections",
             Self::Snippets => "Snippets",
             Self::History => "History",
+            Self::OpenTabs => "Open Tabs",
         }
     }
 
@@ -430,6 +438,7 @@ impl SidebarTab {
             Self::Connections => BlancoIcon::Database,
             Self::Snippets => BlancoIcon::Braces,
             Self::History => BlancoIcon::History,
+            Self::OpenTabs => BlancoIcon::Files,
         }
     }
 }
@@ -446,6 +455,7 @@ pub struct BlancoApp {
     sidebar: Entity<ConnectionsPanel>,
     snippets_panel: Entity<SnippetsPanel>,
     history_panel: Entity<HistoryPanel>,
+    open_tabs_panel: Entity<OpenTabsPanel>,
     editor_panel: Entity<EditorPanel>,
     /// The object last selected in the sidebar for the active tab, so the
     /// sidebar is only moved when the active tab shows something else.
@@ -494,6 +504,7 @@ impl BlancoApp {
         let editor_panel = cx.new(|cx| {
             EditorPanel::new_with_saved_tabs(window, cx, saved.id, saved.active_tab_id, saved_tabs)
         });
+        let open_tabs_panel = cx.new(|cx| OpenTabsPanel::new(editor_panel.clone(), cx));
         let command_palette = cx.new(|cx| {
             CommandPalette::new(sidebar.downgrade(), editor_panel.downgrade(), window, cx)
         });
@@ -522,6 +533,7 @@ impl BlancoApp {
             sidebar,
             snippets_panel,
             history_panel,
+            open_tabs_panel,
             editor_panel,
             revealed_target: None,
             command_palette,
@@ -1638,6 +1650,9 @@ impl BlancoApp {
                                     SidebarTab::Connections => this.child(self.sidebar.clone()),
                                     SidebarTab::Snippets => this.child(self.snippets_panel.clone()),
                                     SidebarTab::History => this.child(self.history_panel.clone()),
+                                    SidebarTab::OpenTabs => {
+                                        this.child(self.open_tabs_panel.clone())
+                                    }
                                 }),
                         ),
                 ),
@@ -1675,6 +1690,11 @@ impl BlancoApp {
     #[cfg(test)]
     pub fn sidebar_tab(&self) -> SidebarTab {
         self.sidebar_tab
+    }
+
+    #[cfg(test)]
+    pub fn open_tabs_panel(&self) -> &Entity<OpenTabsPanel> {
+        &self.open_tabs_panel
     }
 
     fn on_quit(&mut self, _: &Quit, _window: &mut Window, cx: &mut Context<Self>) {
@@ -3339,6 +3359,84 @@ mod tests {
             assert!(!app.sidebar_collapsed());
             assert_eq!(app.sidebar_tab(), SidebarTab::Snippets);
         });
+    }
+
+    #[gpui::test]
+    async fn test_open_tabs_panel_groups_tabs_by_connection(cx: &mut TestAppContext) {
+        let harness = FullAppHarness::new(cx);
+        let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+        let app = harness.app;
+
+        app.update(&mut cx, |app, cx| {
+            app.select_sidebar_tab(SidebarTab::OpenTabs, cx)
+        });
+        cx.update(|window, cx| {
+            let handle = app.read(cx).focus_handle(cx);
+            window.focus(&handle, cx);
+            window.dispatch_action(Box::new(OpenSettings), cx);
+        });
+        cx.run_until_parked();
+
+        let groups = app.read_with(&cx, |app, cx| {
+            app.open_tabs_panel().read(cx).group_titles(cx)
+        });
+        assert_eq!(
+            groups.len(),
+            2,
+            "one connection group and Other: {groups:?}"
+        );
+        assert!(groups[0].0.is_some());
+        assert_eq!(groups[0].1, vec!["Test Query".to_string()]);
+        assert_eq!(groups[1].0, None, "the settings tab has no connection");
+        assert_eq!(groups[1].1.len(), 1);
+    }
+
+    #[gpui::test]
+    async fn test_open_tabs_panel_scrolls_to_the_active_tab(cx: &mut TestAppContext) {
+        let harness = FullAppHarness::new(cx);
+        let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+        let editor_panel = harness.editor_panel(&cx);
+        let app = harness.app;
+
+        app.update(&mut cx, |app, cx| {
+            app.select_sidebar_tab(SidebarTab::OpenTabs, cx)
+        });
+        editor_panel.update_in(&mut cx, |panel, window, cx| {
+            let context = panel
+                .active_context(cx)
+                .expect("the harness tab has a context");
+            for number in 0..60 {
+                panel.create_and_add_tab_with_connection(
+                    window,
+                    TabCreationParams {
+                        title: format!("Query {number}"),
+                        content: None,
+                        db_id: None,
+                        last_run_at: None,
+                        context: context.clone(),
+                    },
+                    cx,
+                );
+            }
+            panel.activate_tab(0, window, cx);
+        });
+        cx.run_until_parked();
+        let at_top = app.read_with(&cx, |app, cx| {
+            app.open_tabs_panel().read(cx).scroll_offset_y()
+        });
+        assert_eq!(at_top, gpui::px(0.));
+
+        editor_panel.update_in(&mut cx, |panel, window, cx| {
+            panel.activate_tab(60, window, cx)
+        });
+        cx.run_until_parked();
+        let scrolled = app.read_with(&cx, |app, cx| {
+            app.open_tabs_panel().read(cx).scroll_offset_y()
+        });
+        assert!(
+            scrolled < gpui::px(0.),
+            "the list should scroll down to the last tab, offset {scrolled:?}"
+        );
     }
 
     #[gpui::test]

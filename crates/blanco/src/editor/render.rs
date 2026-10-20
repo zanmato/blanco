@@ -31,7 +31,7 @@ use crate::results_panel::ResultsPanel;
 use app_database::EnvironmentType;
 
 impl EditorPanel {
-    fn close_tab_button(
+    pub(super) fn close_tab_button(
         &self,
         id: impl Into<gpui::ElementId>,
         tab_index: usize,
@@ -47,7 +47,7 @@ impl EditorPanel {
     }
 
     /// Create a tab bar click handler closure
-    fn tab_bar_click_handler(
+    pub(super) fn tab_bar_click_handler(
         view: WeakEntity<Self>,
     ) -> impl Fn(&usize, &ClickEvent, &mut Window, &mut App) + 'static {
         move |ix: &usize, event: &ClickEvent, window: &mut Window, cx: &mut App| {
@@ -122,7 +122,7 @@ impl EditorPanel {
     }
 
     /// The small outlined dev/staging/prod chip shown on connection-backed tabs.
-    fn environment_badge(env_type: EnvironmentType, cx: &App) -> impl IntoElement {
+    pub(super) fn environment_badge(env_type: EnvironmentType, cx: &App) -> impl IntoElement {
         div()
             .text_size(rems(0.55))
             .font_family(cx.theme().mono_font_family.clone())
@@ -186,7 +186,7 @@ impl EditorPanel {
     }
 
     /// The tab's right-click menu.
-    fn tab_context_menu(
+    pub(super) fn tab_context_menu(
         &self,
         ix: usize,
         cx: &mut Context<Self>,
@@ -247,7 +247,7 @@ impl EditorPanel {
 
     /// Where the tab's data lives: the qualified table for a structure tab,
     /// the connection and database (and schema) for other tabs on one.
-    fn tab_tooltip(tab: &TabType, cx: &App) -> Option<SharedString> {
+    pub(super) fn tab_tooltip(tab: &TabType, cx: &App) -> Option<SharedString> {
         let context = tab.context(cx)?;
         let mut path = vec![context.database_name.clone()];
         path.extend(
@@ -263,7 +263,7 @@ impl EditorPanel {
     }
 
     /// The icon that tells the tab kinds apart in the strip.
-    fn tab_icon(tab: &TabType, cx: &App) -> Option<Icon> {
+    pub(super) fn tab_icon(tab: &TabType, cx: &App) -> Option<Icon> {
         let theme = cx.theme();
         Some(match tab {
             TabType::Query(_) => return None,
@@ -1105,11 +1105,11 @@ impl Render for EditorPanel {
     }
 }
 
-/// A tab being dragged along the strip.
+/// A tab being dragged along the strip or the open tabs list.
 #[derive(Clone)]
-struct DraggedTab {
-    ix: usize,
-    label: SharedString,
+pub(super) struct DraggedTab {
+    pub(super) ix: usize,
+    pub(super) label: SharedString,
 }
 
 impl Render for DraggedTab {

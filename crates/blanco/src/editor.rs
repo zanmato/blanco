@@ -1,5 +1,6 @@
 mod file_runner;
 mod object_ddl;
+pub(crate) mod open_tabs;
 mod parameter_form;
 pub(crate) mod process_list;
 mod query_execution;
