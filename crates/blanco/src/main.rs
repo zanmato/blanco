@@ -15,6 +15,7 @@ mod connection_integration_test;
 mod connection_modal;
 mod connections;
 mod copy_handler;
+mod custom_themes;
 mod database_file;
 mod editor;
 mod export;
@@ -45,10 +46,9 @@ mod windows;
 
 use assets::Assets;
 use database::DatabaseService;
-use gpui::{AssetSource as _, SharedString};
-use gpui_component::{Theme, ThemeRegistry};
+use gpui::AssetSource as _;
+use gpui_component::ThemeRegistry;
 use gpui_platform::application;
-use std::path::PathBuf;
 
 use crate::{app_settings::AppSettings, settings::Settings};
 use app_database::AppDatabase;
@@ -206,32 +206,14 @@ fn main() {
 
         settings::keep_fonts_on_theme_reload(cx);
 
-        // Apply theme
-        let theme_name = SharedString::from(settings::theme_for_appearance(
+        custom_themes::load_custom_themes(cx);
+        load_embedded_themes(cx);
+        let theme_name = settings::theme_for_appearance(
             &AppSettings::global(cx).settings.appearance,
             cx.window_appearance(),
-        ));
-        if let Err(err) = ThemeRegistry::watch_dir(PathBuf::from("./themes"), cx, move |cx| {
-            // `ThemeRegistry::reload` clears the registry and repopulates it
-            // from the watched directory alone, and it runs just before this
-            // callback, so the embedded themes have to be (re)loaded here
-            // rather than once at startup. `load_themes_from_str` skips names
-            // that are already present, so a `./themes/*.json` on disk still
-            // wins and hot-reload keeps working during development.
-            load_embedded_themes(cx);
-            if let Some(theme) = ThemeRegistry::global(cx).themes().get(&theme_name).cloned() {
-                let mode = theme.mode;
-                Theme::global_mut(cx).apply_config(&theme);
-                // `apply_config` only touches the gpui-component theme. `change`
-                // re-applies the config we just stored and pushes it into the
-                // base layer (scrollbars, resize handles, input frame), which
-                // otherwise keeps the theme installed by `gpui_component::init`.
-                Theme::change(mode, None, cx);
-            }
-            settings::apply_font_settings(cx);
-        }) {
-            tracing::error!("Failed to watch themes directory: {}", err);
-        }
+        )
+        .to_string();
+        settings::install_theme(&theme_name, cx);
 
         settings::apply_font_settings(cx);
 
