@@ -76,7 +76,10 @@ impl Server {
 
     /// Run `sql`, again when CockroachDB asks for it: schema changes that
     /// other tests make at the same time make it refuse a transaction with
-    /// "restart transaction", which its clients are meant to retry.
+    /// "restart transaction", which its clients are meant to retry. It
+    /// commits each DDL statement on its own, so a script may be run again
+    /// after part of it took effect, and the scripts are written to allow
+    /// that.
     fn try_script(&self, sql: &str) -> anyhow::Result<Vec<blanco_core::QueryResult>> {
         let mut attempts = 0;
         loop {
@@ -311,9 +314,9 @@ async fn edit_in_own_schema(
     assert_eq!(server.value(public).as_deref(), Some("edited 3"));
 
     server.script(
-        r#"DROP SCHEMA blanco_schema_edit CASCADE;
-           DROP SCHEMA "Blanco Schema Edit" CASCADE;
-           DROP TABLE public.schema_edit_items;"#,
+        r#"DROP SCHEMA IF EXISTS blanco_schema_edit CASCADE;
+           DROP SCHEMA IF EXISTS "Blanco Schema Edit" CASCADE;
+           DROP TABLE IF EXISTS public.schema_edit_items;"#,
     );
 }
 
@@ -388,8 +391,8 @@ async fn fetch_deferred_from_own_schema(
     assert_eq!(body, Some("x".repeat(3000)), "{:?}", server.db_type);
 
     server.script(
-        "DROP SCHEMA blanco_schema_deferred CASCADE;
-         DROP TABLE public.schema_deferred_items;",
+        "DROP SCHEMA IF EXISTS blanco_schema_deferred CASCADE;
+         DROP TABLE IF EXISTS public.schema_deferred_items;",
     );
 }
 
@@ -489,8 +492,8 @@ async fn follow_foreign_key_into_schema(
     );
 
     server.script(
-        r#"DROP SCHEMA blanco_schema_orders CASCADE;
-           DROP SCHEMA "Blanco Schema Customers" CASCADE;
-           DROP TABLE public."Customers";"#,
+        r#"DROP SCHEMA IF EXISTS blanco_schema_orders CASCADE;
+           DROP SCHEMA IF EXISTS "Blanco Schema Customers" CASCADE;
+           DROP TABLE IF EXISTS public."Customers";"#,
     );
 }
