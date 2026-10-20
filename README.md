@@ -35,6 +35,16 @@ Prebuilt binaries for Linux (x86_64, plus a `.deb`), macOS (Apple silicon) and
 Windows (x86_64) are attached to each
 [release](https://github.com/zanmato/blanco/releases).
 
+On macOS you can install it with [Homebrew](https://brew.sh):
+
+```bash
+brew install --cask zanmato/tap/blanco
+```
+
+The app isn't notarized. If you download the release manually, run
+`xattr -r -d com.apple.quarantine Blanco.app` in the folder of the app before
+opening it. The Homebrew cask does this for you.
+
 ## Building
 
 Requirements: a recent stable Rust toolchain and the tree-sitter CLI
