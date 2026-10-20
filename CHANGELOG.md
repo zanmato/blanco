@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Features
+
+- PostgreSQL and CockroachDB schemas list their enums, composite types,
+  domains and sequences in folders of their own in the sidebar, and each
+  opens its DDL in a read only tab. The labels of an enum column are offered
+  when typing a value for it in the editor (`status = '`, `status IN (`,
+  `SET status =`) and under Pick Value when editing one of its cells
+
 ### Changes
 
 - Query history and the SQL log show passwords in statements that create
@@ -11,6 +19,11 @@ All notable changes to this project will be documented in this file.
   `CREATE`/`ALTER` `USER`/`ROLE`, MySQL and MariaDB `CREATE`/`ALTER USER`,
   `GRANT` and `SET PASSWORD`, and SQL Server `CREATE`/`ALTER LOGIN`. The
   statement is sent to the server as typed
+
+### Fixes
+
+- Revealing a PostgreSQL object in the sidebar could stop before selecting
+  it when the database sizes arrived while its schema was loading
 
 ## [0.1.5] - 2026-10-20
 

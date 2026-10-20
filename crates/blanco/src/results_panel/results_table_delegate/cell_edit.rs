@@ -335,6 +335,7 @@ impl ResultsTableDelegate {
     ) {
         let edit_state = &mut state.delegate_mut().edit_state;
         edit_state.date_picker = None;
+        edit_state.enum_picker_open = false;
         if let DateTimePickerEvent::Pick(value) = event
             && edit_state.editing_cell == Some(cell)
         {
@@ -353,6 +354,53 @@ impl ResultsTableDelegate {
     #[cfg(test)]
     pub(crate) fn date_time_picker(&self) -> Option<gpui::Entity<DateTimePicker>> {
         self.edit_state.date_picker.clone()
+    }
+
+    /// The labels of the enum type of a column, when it has one.
+    pub(crate) fn enum_labels(&self, col_ix: usize) -> Option<&[String]> {
+        self.table_column_info(col_ix)
+            .map(|info| info.enum_labels.as_slice())
+            .filter(|labels| !labels.is_empty())
+    }
+
+    pub(crate) fn set_enum_picker_open(
+        state: &mut TableState<ResultsTableDelegate>,
+        open: bool,
+        cx: &mut Context<'_, TableState<ResultsTableDelegate>>,
+    ) {
+        let edit_state = &mut state.delegate_mut().edit_state;
+        if edit_state.enum_picker_open != open {
+            edit_state.enum_picker_open = open;
+            state.refresh(cx);
+            cx.notify();
+        }
+    }
+
+    /// A picked label replaces the editor's text and the edit stays open, so
+    /// it is committed the same way as a typed one.
+    pub(crate) fn pick_enum_label(
+        state: &mut TableState<ResultsTableDelegate>,
+        cell: (usize, usize),
+        label: &str,
+        window: &mut Window,
+        cx: &mut Context<'_, TableState<ResultsTableDelegate>>,
+    ) {
+        let edit_state = &mut state.delegate_mut().edit_state;
+        edit_state.enum_picker_open = false;
+        if edit_state.editing_cell == Some(cell) {
+            if let Some(CellInput::Inline(input)) = edit_state.editing_input.clone() {
+                input.update(cx, |input, cx| {
+                    input.set_value(label.to_string(), window, cx)
+                });
+            }
+            // A label is data, never SQL to evaluate.
+            edit_state.editing_as_expression = false;
+            edit_state
+                .edited_values
+                .insert(cell, Some(label.to_string()));
+        }
+        state.refresh(cx);
+        cx.notify();
     }
 
     /// Whether the cell's value is bytes the binary viewer can show: a
@@ -427,6 +475,7 @@ impl ResultsTableDelegate {
         edit_state.expanded_cell = Some((row_ix, col_ix));
         edit_state.editing_input = None;
         edit_state.date_picker = None;
+        edit_state.enum_picker_open = false;
         edit_state.editing_as_expression = false;
         edit_state.binary_viewer = None;
         edit_state.key_value_editor = Some(editor.clone());
@@ -495,6 +544,7 @@ impl ResultsTableDelegate {
         edit_state.expanded_cell = Some((row_ix, col_ix));
         edit_state.editing_input = None;
         edit_state.date_picker = None;
+        edit_state.enum_picker_open = false;
         edit_state.editing_as_expression = false;
         edit_state.binary_viewer = Some(viewer.clone());
 

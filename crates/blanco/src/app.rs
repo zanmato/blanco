@@ -322,7 +322,7 @@ pub struct CreateNewScriptTab {
 #[derive(Action, Clone, PartialEq, Eq)]
 #[action(namespace = blanco_app, no_json)]
 pub struct OpenObjectDdl {
-    pub kind: blanco_core::RoutineKind,
+    pub kind: blanco_core::ObjectKind,
     pub context: ConnectionContext,
     pub object_name: String,
 }

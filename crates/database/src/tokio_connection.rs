@@ -15,8 +15,8 @@ use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use blanco_core::{
     connection_trait::{
-        ColumnType, DatabaseSchemaResult, ForeignKeyConstraint, IndexInfo, QueryableEntity,
-        RoutineKind,
+        ColumnType, DatabaseSchemaResult, ForeignKeyConstraint, IndexInfo, ObjectKind,
+        QueryableEntity,
     },
     write_guard, BatchFailure, BatchOutcome, ColumnInfo, Connection, DatabaseType,
     FunctionSignatureInfo, KeyValueResult, QueryResult, StatementAccess, TableParent,
@@ -324,6 +324,20 @@ impl Connection for TokioConnection {
             .await
     }
 
+    async fn list_types(&self, schema: Option<&str>) -> Result<Vec<(String, ObjectKind)>> {
+        let inner = Arc::clone(&self.inner);
+        let schema = schema.map(str::to_string);
+        self.run(async move { inner.list_types(schema.as_deref()).await })
+            .await
+    }
+
+    async fn list_sequences(&self, schema: Option<&str>) -> Result<Vec<String>> {
+        let inner = Arc::clone(&self.inner);
+        let schema = schema.map(str::to_string);
+        self.run(async move { inner.list_sequences(schema.as_deref()).await })
+            .await
+    }
+
     async fn get_object_sizes(
         &self,
         schema: Option<&str>,
@@ -362,7 +376,7 @@ impl Connection for TokioConnection {
 
     async fn object_ddl(
         &self,
-        kind: RoutineKind,
+        kind: ObjectKind,
         schema: Option<&str>,
         name: &str,
     ) -> Result<String> {

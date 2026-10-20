@@ -21,14 +21,19 @@ impl EntityType {
     }
 }
 
-/// Routine and trigger objects in a schema. Used by `list_procedures`,
-/// `list_functions`, and `list_triggers` on the `Connection` trait so the
-/// sidebar can render them and `object_ddl` can fetch their source.
+/// The schema objects the sidebar lists outside tables and views: routines
+/// and triggers (`list_procedures`, `list_functions`, `list_triggers`), user
+/// defined types (`list_types`) and sequences (`list_sequences`), whose DDL
+/// `object_ddl` returns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RoutineKind {
+pub enum ObjectKind {
     Procedure,
     Function,
     Trigger,
+    Enum,
+    CompositeType,
+    Domain,
+    Sequence,
 }
 
 /// A user-defined function's signature as reported by the database catalog.
@@ -43,12 +48,16 @@ pub struct FunctionSignatureInfo {
     pub comment: Option<String>,
 }
 
-impl RoutineKind {
+impl ObjectKind {
     pub fn display_name(&self) -> &'static str {
         match self {
-            RoutineKind::Procedure => "Procedure",
-            RoutineKind::Function => "Function",
-            RoutineKind::Trigger => "Trigger",
+            ObjectKind::Procedure => "Procedure",
+            ObjectKind::Function => "Function",
+            ObjectKind::Trigger => "Trigger",
+            ObjectKind::Enum => "Enum",
+            ObjectKind::CompositeType => "Composite type",
+            ObjectKind::Domain => "Domain",
+            ObjectKind::Sequence => "Sequence",
         }
     }
 }
@@ -454,6 +463,10 @@ pub struct ColumnInfo {
     pub numeric_precision: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub numeric_scale: Option<i32>,
+    /// The labels of the column's enum type, in their order. Empty for any
+    /// other type.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub enum_labels: Vec<String>,
 }
 
 impl ColumnInfo {
@@ -781,6 +794,21 @@ pub trait Connection: Send + Sync {
         Ok(Vec::new())
     }
 
+    /// List the user defined types of a schema with their kind:
+    /// [`ObjectKind::Enum`], [`ObjectKind::CompositeType`] or
+    /// [`ObjectKind::Domain`]. Defaults to empty.
+    async fn list_types(
+        &self,
+        _schema: Option<&str>,
+    ) -> Result<Vec<(String, ObjectKind)>, anyhow::Error> {
+        Ok(Vec::new())
+    }
+
+    /// List the sequences of a schema. Defaults to empty.
+    async fn list_sequences(&self, _schema: Option<&str>) -> Result<Vec<String>, anyhow::Error> {
+        Ok(Vec::new())
+    }
+
     /// Return physical sizes in bytes for tables and materialized views in a
     /// schema, keyed by object name. Names not present in the map are treated
     /// as having no reported size. Defaults to empty; drivers that can report
@@ -822,11 +850,11 @@ pub trait Connection: Send + Sync {
         Ok(std::collections::HashMap::new())
     }
 
-    /// Return the SQL DDL source for a routine/trigger object. Used by the
-    /// "Show DDL" tab. Drivers without source-stored objects return an error.
+    /// Return the SQL DDL of a routine, trigger, type or sequence, for the
+    /// read only DDL tab. Drivers without such objects return an error.
     async fn object_ddl(
         &self,
-        _kind: RoutineKind,
+        _kind: ObjectKind,
         _schema: Option<&str>,
         _name: &str,
     ) -> Result<String, anyhow::Error> {
@@ -1152,6 +1180,7 @@ mod tests {
             comment: None,
             numeric_precision: None,
             numeric_scale: None,
+            enum_labels: Vec::new(),
         }
     }
 

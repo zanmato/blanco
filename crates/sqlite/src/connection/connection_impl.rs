@@ -345,6 +345,7 @@ impl Connection for SqliteConnection {
                     comment: None,
                     numeric_precision: None,
                     numeric_scale: None,
+                    enum_labels: Vec::new(),
                 };
                 columns.push(column_info);
             }

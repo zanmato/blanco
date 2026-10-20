@@ -79,12 +79,26 @@ impl std::fmt::Debug for TreeItemIcon {
     }
 }
 
+/// The icon and color of a type or sequence, the same in the sidebar and on
+/// its DDL tab. `None` for routines and triggers, which keep their own.
+pub fn schema_object_icon(kind: blanco_core::ObjectKind) -> Option<(IconName, TreeIconColor)> {
+    use blanco_core::ObjectKind;
+    match kind {
+        ObjectKind::Enum => Some((IconName::List, TreeIconColor::Yellow)),
+        ObjectKind::CompositeType => Some((IconName::Parentheses, TreeIconColor::Blue)),
+        ObjectKind::Domain => Some((IconName::Type, TreeIconColor::Blue)),
+        ObjectKind::Sequence => Some((IconName::Hash, TreeIconColor::Green)),
+        ObjectKind::Procedure | ObjectKind::Function | ObjectKind::Trigger => None,
+    }
+}
+
 /// The theme color a tree icon is drawn in. Tree items outlive a theme
 /// change, so they name the color and it is looked up when the row renders.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TreeIconColor {
     Foreground,
     Primary,
+    Blue,
     Yellow,
     Green,
     Cyan,
@@ -98,6 +112,7 @@ impl TreeIconColor {
         match self {
             Self::Foreground => theme.foreground,
             Self::Primary => theme.primary,
+            Self::Blue => theme.blue,
             Self::Yellow => theme.yellow,
             Self::Green => theme.green,
             Self::Cyan => theme.cyan,
@@ -153,19 +168,27 @@ pub enum TreeItemKind {
     Procedure,
     Function,
     Trigger,
+    Enum,
+    CompositeType,
+    Domain,
+    Sequence,
     /// A grouping folder for one object type (Tables, Views, Functions, ...)
     /// inserted between a schema/connection and its objects.
     Category,
 }
 
 impl TreeItemKind {
-    /// The routine kind behind a procedure/function/trigger node, `None` for
-    /// every other node.
-    pub fn routine_kind(&self) -> Option<blanco_core::RoutineKind> {
+    /// The object kind behind a routine, trigger, type or sequence node,
+    /// whose DDL opens in a tab of its own. `None` for every other node.
+    pub fn object_kind(&self) -> Option<blanco_core::ObjectKind> {
         match self {
-            TreeItemKind::Procedure => Some(blanco_core::RoutineKind::Procedure),
-            TreeItemKind::Function => Some(blanco_core::RoutineKind::Function),
-            TreeItemKind::Trigger => Some(blanco_core::RoutineKind::Trigger),
+            TreeItemKind::Procedure => Some(blanco_core::ObjectKind::Procedure),
+            TreeItemKind::Function => Some(blanco_core::ObjectKind::Function),
+            TreeItemKind::Trigger => Some(blanco_core::ObjectKind::Trigger),
+            TreeItemKind::Enum => Some(blanco_core::ObjectKind::Enum),
+            TreeItemKind::CompositeType => Some(blanco_core::ObjectKind::CompositeType),
+            TreeItemKind::Domain => Some(blanco_core::ObjectKind::Domain),
+            TreeItemKind::Sequence => Some(blanco_core::ObjectKind::Sequence),
             _ => None,
         }
     }
@@ -218,10 +241,16 @@ impl CreateNewQueryTabParams for TreeItemMetadata {
     fn create_new_query_tab_action(&self) -> Option<CreateNewQueryTab> {
         match self.kind {
             TreeItemKind::Connection | TreeItemKind::Category => None,
-            // Procedures/Functions/Triggers don't open a query tab when
-            // double-clicked; they get a dedicated DDL tab instead, opened by
-            // the panel itself.
-            TreeItemKind::Procedure | TreeItemKind::Function | TreeItemKind::Trigger => None,
+            // Routines, triggers, types and sequences don't open a query tab
+            // when double-clicked; they get a dedicated DDL tab instead,
+            // opened by the panel itself.
+            TreeItemKind::Procedure
+            | TreeItemKind::Function
+            | TreeItemKind::Trigger
+            | TreeItemKind::Enum
+            | TreeItemKind::CompositeType
+            | TreeItemKind::Domain
+            | TreeItemKind::Sequence => None,
             TreeItemKind::Database
             | TreeItemKind::Schema
             | TreeItemKind::Table
@@ -622,13 +651,19 @@ impl ConnectionsPanel {
                 | TreeItemKind::View
                 | TreeItemKind::MaterializedView
                 | TreeItemKind::Category => {}
-                TreeItemKind::Procedure | TreeItemKind::Function | TreeItemKind::Trigger => {
-                    if let (Some(routine_kind), Some(name)) =
-                        (metadata.kind.routine_kind(), metadata.table_name.clone())
+                TreeItemKind::Procedure
+                | TreeItemKind::Function
+                | TreeItemKind::Trigger
+                | TreeItemKind::Enum
+                | TreeItemKind::CompositeType
+                | TreeItemKind::Domain
+                | TreeItemKind::Sequence => {
+                    if let (Some(object_kind), Some(name)) =
+                        (metadata.kind.object_kind(), metadata.table_name.clone())
                     {
                         window.dispatch_action(
                             Box::new(crate::app::OpenObjectDdl {
-                                kind: routine_kind,
+                                kind: object_kind,
 
                                 object_name: name,
 
@@ -744,7 +779,11 @@ impl ConnectionsPanel {
             | TreeItemKind::MaterializedView
             | TreeItemKind::Procedure
             | TreeItemKind::Function
-            | TreeItemKind::Trigger => {}
+            | TreeItemKind::Trigger
+            | TreeItemKind::Enum
+            | TreeItemKind::CompositeType
+            | TreeItemKind::Domain
+            | TreeItemKind::Sequence => {}
         }
     }
 

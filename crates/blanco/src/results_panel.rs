@@ -48,6 +48,8 @@ mod date_time_picker;
 pub(crate) mod deferred_values;
 #[cfg(test)]
 mod deferred_values_test;
+#[cfg(test)]
+mod enum_picker_test;
 mod export_actions;
 pub mod filter_bar;
 mod foreign_key_popover;

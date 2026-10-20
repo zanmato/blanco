@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::ops::{Deref, DerefMut, Range};
 use std::sync::Arc;
 
-use blanco_core::RoutineKind;
+use blanco_core::ObjectKind;
 use blanco_ui::SqlView;
 use gpui::{App, Entity};
 use gpui_component::input::{EditorState, RangeDecorationCollection};
@@ -308,7 +308,7 @@ pub struct TabCreationParams {
 /// Parameters for creating an object DDL tab (procedures/functions/triggers).
 #[derive(Clone)]
 pub struct ObjectDdlParams {
-    pub kind: RoutineKind,
+    pub kind: ObjectKind,
     pub context: ConnectionContext,
     pub object_name: String,
 }

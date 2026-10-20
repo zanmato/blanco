@@ -1,4 +1,4 @@
-use blanco_core::RoutineKind;
+use blanco_core::ObjectKind;
 use blanco_ui::{SqlView, SqlViewMessage};
 use gpui::{
     App, AppContext as _, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement,
@@ -10,7 +10,7 @@ use blanco_core::ConnectionContext;
 
 pub struct ObjectDdlTab {
     pub title: String,
-    pub kind: RoutineKind,
+    pub kind: ObjectKind,
     pub context: ConnectionContext,
     pub object_name: String,
     sql_view: Entity<SqlView>,
@@ -21,7 +21,7 @@ pub struct ObjectDdlTab {
 
 impl ObjectDdlTab {
     pub fn new(
-        kind: RoutineKind,
+        kind: ObjectKind,
         context: ConnectionContext,
         object_name: String,
         _window: &mut Window,

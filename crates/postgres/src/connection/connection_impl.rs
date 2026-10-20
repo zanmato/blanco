@@ -2,7 +2,7 @@ use anyhow::{Context as _, Result};
 use async_trait::async_trait;
 use blanco_core::{
     ColumnInfo, ColumnType, Connection, ForeignKeyConstraint, ForeignKeyInfo,
-    FunctionSignatureInfo, IndexInfo, QueryResult, RoutineKind, TableParent,
+    FunctionSignatureInfo, IndexInfo, ObjectKind, QueryResult, TableParent,
 };
 use futures::{Stream, StreamExt};
 use sqlx::{Column, Executor, Row, TypeInfo};
@@ -342,6 +342,67 @@ impl Connection for PostgresConnection {
             .collect())
     }
 
+    async fn list_types(&self, schema: Option<&str>) -> Result<Vec<(String, ObjectKind)>> {
+        let schema_filter = schema.unwrap_or("public");
+        // Every table has a composite row type too; only the ones made with
+        // CREATE TYPE ... AS (...) have a relation of kind 'c'.
+        let query = "
+            SELECT t.typname, t.typtype::text
+            FROM pg_type t
+            JOIN pg_namespace n ON n.oid = t.typnamespace
+            WHERE n.nspname = $1
+              AND (t.typtype IN ('e', 'd')
+                   OR (t.typtype = 'c' AND EXISTS (
+                       SELECT 1 FROM pg_class c WHERE c.oid = t.typrelid AND c.relkind = 'c')))
+            ORDER BY t.typname
+        ";
+        let result = self
+            .execute_query(
+                query,
+                self.initial_database.as_deref(),
+                Some(&[schema_filter.to_string()]),
+            )
+            .await?;
+        Ok(result
+            .rows
+            .into_iter()
+            .filter_map(|row| {
+                let mut row = row.into_iter();
+                let name = row.next().flatten()?;
+                let kind = match row.next().flatten()?.as_str() {
+                    "e" => ObjectKind::Enum,
+                    "c" => ObjectKind::CompositeType,
+                    "d" => ObjectKind::Domain,
+                    _ => return None,
+                };
+                Some((name, kind))
+            })
+            .collect())
+    }
+
+    async fn list_sequences(&self, schema: Option<&str>) -> Result<Vec<String>> {
+        let schema_filter = schema.unwrap_or("public");
+        let query = "
+            SELECT c.relname
+            FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = $1 AND c.relkind = 'S'
+            ORDER BY c.relname
+        ";
+        let result = self
+            .execute_query(
+                query,
+                self.initial_database.as_deref(),
+                Some(&[schema_filter.to_string()]),
+            )
+            .await?;
+        Ok(result
+            .rows
+            .into_iter()
+            .filter_map(|row| row.into_iter().next().flatten())
+            .collect())
+    }
+
     async fn list_function_signatures(
         &self,
         schema: Option<&str>,
@@ -551,26 +612,91 @@ impl Connection for PostgresConnection {
 
     async fn object_ddl(
         &self,
-        kind: RoutineKind,
+        kind: ObjectKind,
         schema: Option<&str>,
         name: &str,
     ) -> Result<String> {
         let schema_filter = schema.unwrap_or("public");
         let query = match kind {
-            RoutineKind::Procedure | RoutineKind::Function => {
+            ObjectKind::Procedure | ObjectKind::Function => {
                 "SELECT pg_get_functiondef(p.oid)
                  FROM pg_proc p
                  JOIN pg_namespace n ON n.oid = p.pronamespace
                  WHERE n.nspname = $1 AND p.proname = $2
                  LIMIT 1"
             }
-            RoutineKind::Trigger => {
+            ObjectKind::Trigger => {
                 "SELECT pg_get_triggerdef(t.oid, true)
                  FROM pg_trigger t
                  JOIN pg_class c ON c.oid = t.tgrelid
                  JOIN pg_namespace n ON n.oid = c.relnamespace
                  WHERE n.nspname = $1 AND t.tgname = $2 AND NOT t.tgisinternal
                  LIMIT 1"
+            }
+            // PostgreSQL has no pg_get_*def for types and sequences, so their
+            // DDL is put together from the catalog.
+            ObjectKind::Enum => {
+                "SELECT format(E'CREATE TYPE %I.%I AS ENUM (%s);', n.nspname, t.typname,
+                        coalesce(E'\\n    ' || (
+                            SELECT string_agg(quote_literal(e.enumlabel), E',\\n    '
+                                              ORDER BY e.enumsortorder)
+                            FROM pg_enum e WHERE e.enumtypid = t.oid) || E'\\n', ''))
+                 FROM pg_type t
+                 JOIN pg_namespace n ON n.oid = t.typnamespace
+                 WHERE n.nspname = $1 AND t.typname = $2 AND t.typtype = 'e'"
+            }
+            ObjectKind::CompositeType => {
+                "SELECT format(E'CREATE TYPE %I.%I AS (%s);', n.nspname, t.typname,
+                        coalesce(E'\\n    ' || (
+                            SELECT string_agg(format('%I %s', a.attname,
+                                                     format_type(a.atttypid, a.atttypmod)),
+                                              E',\\n    ' ORDER BY a.attnum)
+                            FROM pg_attribute a
+                            WHERE a.attrelid = t.typrelid AND a.attnum > 0
+                              AND NOT a.attisdropped) || E'\\n', ''))
+                 FROM pg_type t
+                 JOIN pg_namespace n ON n.oid = t.typnamespace
+                 WHERE n.nspname = $1 AND t.typname = $2 AND t.typtype = 'c'"
+            }
+            ObjectKind::Domain => {
+                "SELECT format('CREATE DOMAIN %I.%I AS %s', n.nspname, t.typname,
+                               format_type(t.typbasetype, t.typtypmod))
+                        || CASE WHEN t.typcollation <> 0 AND t.typcollation <> base.typcollation
+                                THEN ' COLLATE ' || quote_ident(domain_collation.collname) ELSE '' END
+                        || coalesce(E'\\n    DEFAULT ' || t.typdefault, '')
+                        || CASE WHEN t.typnotnull THEN E'\\n    NOT NULL' ELSE '' END
+                        || coalesce((
+                            SELECT string_agg(E'\\n    CONSTRAINT ' || quote_ident(con.conname)
+                                              || ' ' || pg_get_constraintdef(con.oid, true),
+                                              '' ORDER BY con.conname)
+                            FROM pg_constraint con
+                            WHERE con.contypid = t.oid AND con.contype = 'c'), '')
+                        || ';'
+                 FROM pg_type t
+                 JOIN pg_namespace n ON n.oid = t.typnamespace
+                 JOIN pg_type base ON base.oid = t.typbasetype
+                 LEFT JOIN pg_collation domain_collation ON domain_collation.oid = t.typcollation
+                 WHERE n.nspname = $1 AND t.typname = $2 AND t.typtype = 'd'"
+            }
+            ObjectKind::Sequence => {
+                "SELECT format(E'CREATE SEQUENCE %I.%I\\n    AS %s\\n    INCREMENT BY %s\\n    MINVALUE %s\\n    MAXVALUE %s\\n    START WITH %s\\n    CACHE %s%s%s;',
+                               n.nspname, c.relname, format_type(s.seqtypid, NULL),
+                               s.seqincrement, s.seqmin, s.seqmax, s.seqstart, s.seqcache,
+                               CASE WHEN s.seqcycle THEN E'\\n    CYCLE' ELSE '' END,
+                               coalesce((
+                                   SELECT format(E'\\n    OWNED BY %s.%I',
+                                                 d.refobjid::regclass, a.attname)
+                                   FROM pg_depend d
+                                   JOIN pg_attribute a
+                                     ON a.attrelid = d.refobjid AND a.attnum = d.refobjsubid
+                                   WHERE d.classid = 'pg_class'::regclass AND d.objid = c.oid
+                                     AND d.refclassid = 'pg_class'::regclass
+                                     AND d.deptype IN ('a', 'i')
+                                   LIMIT 1), ''))
+                 FROM pg_class c
+                 JOIN pg_namespace n ON n.oid = c.relnamespace
+                 JOIN pg_sequence s ON s.seqrelid = c.oid
+                 WHERE n.nspname = $1 AND c.relname = $2 AND c.relkind = 'S'"
             }
         };
         let result = self
@@ -846,7 +972,14 @@ impl Connection for PostgresConnection {
                     AND a.attname = c.column_name
                 ) AS column_comment,
                 c.numeric_precision,
-                c.numeric_scale
+                c.numeric_scale,
+                (
+                    SELECT json_agg(e.enumlabel ORDER BY e.enumsortorder)::text
+                    FROM pg_attribute a
+                    JOIN pg_enum e ON e.enumtypid = a.atttypid
+                    WHERE a.attrelid = to_regclass(quote_ident($2) || '.' || quote_ident($1))
+                    AND a.attname = c.column_name
+                ) AS enum_labels
             FROM information_schema.columns c
             LEFT JOIN (
                 SELECT a.attname AS column_name
@@ -896,6 +1029,12 @@ impl Connection for PostgresConnection {
                 let comment = row.get(9).cloned().flatten();
                 let numeric_precision = row.get(10).cloned().flatten().and_then(|v| v.parse().ok());
                 let numeric_scale = row.get(11).cloned().flatten().and_then(|v| v.parse().ok());
+                let enum_labels = row
+                    .get(12)
+                    .cloned()
+                    .flatten()
+                    .and_then(|labels| serde_json::from_str::<Vec<String>>(&labels).ok())
+                    .unwrap_or_default();
 
                 // Only create ForeignKeyInfo if we have actual FK values
                 let foreign_key = match (fk_table, fk_column) {
@@ -922,6 +1061,7 @@ impl Connection for PostgresConnection {
                     comment,
                     numeric_precision,
                     numeric_scale,
+                    enum_labels,
                 });
             }
         }

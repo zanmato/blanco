@@ -350,6 +350,7 @@ fn column_from_spec(spec: &ColumnSpec) -> ColumnInfo {
         comment: None,
         numeric_precision: None,
         numeric_scale: None,
+        enum_labels: Vec::new(),
     }
 }
 
@@ -408,6 +409,7 @@ mod tests {
             comment: None,
             numeric_precision: None,
             numeric_scale: None,
+            enum_labels: Vec::new(),
         }
     }
 

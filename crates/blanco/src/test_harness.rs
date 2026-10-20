@@ -1,10 +1,12 @@
-use blanco_core::ConnectionContext;
-use database::{ConnectionConfig, DatabaseService};
-use gpui::{AppContext, TestAppContext, VisualTestContext};
+use blanco_core::{ConnectionContext, DatabaseService as _};
+use database::{ConnectionConfig, DatabaseService, DatabaseType};
+use gpui::{AppContext, Entity, TestAppContext, VisualTestContext};
 use gpui_component::Root;
+use gpui_component::table::TableState;
 
 use crate::app_settings::AppSettings;
 use crate::editor::{EditorPanel, TabCreationParams};
+use crate::results_panel::{ResultsPanel, ResultsTableDelegate};
 use crate::settings::Settings;
 use crate::status_bar::{StatusBarState, StatusLine};
 use app_database::AppDatabase;
@@ -415,4 +417,146 @@ pub async fn wait_for_query(harness: &TestHarness, cx: &mut VisualTestContext) {
             .await;
     }
     panic!("Query did not complete within timeout");
+}
+
+/// A compose database server a test drives directly, beside the app.
+pub struct LiveServer {
+    pub service: DatabaseService,
+    pub handle: tokio::runtime::Handle,
+    pub config_id: i64,
+    pub db_type: DatabaseType,
+}
+
+impl LiveServer {
+    /// Connect to the compose server and run `setup`. `None` when the server
+    /// is down and the database tests are not required.
+    pub fn connect(
+        (db_type, port): (DatabaseType, u16),
+        config_id: i64,
+        setup: &str,
+        cx: &mut VisualTestContext,
+    ) -> Option<Self> {
+        let (service, handle) = cx.update(|_, cx| {
+            (
+                DatabaseService::global(cx).clone(),
+                gpui_tokio::Tokio::handle(cx),
+            )
+        });
+        let config = ConnectionConfig::new(
+            config_id,
+            "it-schemas".to_string(),
+            db_type,
+            "localhost".to_string(),
+            port,
+            "blanco".to_string(),
+            "blanco".to_string(),
+            Some("blanco".to_string()),
+        );
+        let server = Self {
+            service,
+            handle,
+            config_id,
+            db_type,
+        };
+        server
+            .handle
+            .block_on(server.service.add_connection_config(config));
+        match server.try_script(setup) {
+            Ok(_) => Some(server),
+            Err(error) => {
+                assert!(
+                    std::env::var("BLANCO_RUN_DB_TESTS").as_deref() != Ok("1"),
+                    "{db_type:?} unreachable: {error:#}"
+                );
+                None
+            }
+        }
+    }
+
+    /// Run `sql`, again when CockroachDB asks for it: schema changes that
+    /// other tests make at the same time make it refuse a transaction with
+    /// "restart transaction", which its clients are meant to retry. It
+    /// commits each DDL statement on its own, so a script may be run again
+    /// after part of it took effect, and the scripts are written to allow
+    /// that.
+    pub fn try_script(&self, sql: &str) -> anyhow::Result<Vec<blanco_core::QueryResult>> {
+        let mut attempts = 0;
+        loop {
+            let result = self.handle.block_on(self.service.execute_script(
+                self.config_id,
+                Some("blanco"),
+                sql,
+            ));
+            match result {
+                Err(error)
+                    if attempts < 20 && format!("{error:#}").contains("restart transaction") =>
+                {
+                    attempts += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                result => return result,
+            }
+        }
+    }
+
+    pub fn script(&self, sql: &str) {
+        self.try_script(sql)
+            .unwrap_or_else(|error| panic!("{sql}: {error:#}"));
+    }
+
+    /// The first column of the first row `sql` returns.
+    pub fn value(&self, sql: &str) -> Option<String> {
+        self.try_script(sql)
+            .unwrap_or_else(|error| panic!("{sql}: {error:#}"))
+            .first()
+            .and_then(|result| result.rows.first())
+            .and_then(|row| row.first().cloned().flatten())
+    }
+
+    pub fn open_tab(&self, harness: &TestHarness, cx: &mut VisualTestContext) {
+        let context = ConnectionContext {
+            connection_id: self.config_id,
+            db_type: self.db_type,
+            connection_name: "it-schemas".into(),
+            database_name: "blanco".into(),
+            schema_name: None,
+            environment_type: None,
+        };
+        harness.editor_panel.update_in(cx, |panel, window, cx| {
+            panel.create_and_add_tab_with_connection(
+                window,
+                TabCreationParams {
+                    title: "schemas".into(),
+                    content: None,
+                    db_id: None,
+                    last_run_at: None,
+                    context,
+                },
+                cx,
+            );
+        });
+    }
+}
+
+/// Run `sql` in the active query tab and wait for its results.
+pub async fn run_for_results(
+    harness: &TestHarness,
+    sql: &str,
+    cx: &mut VisualTestContext,
+) -> (
+    Entity<ResultsPanel>,
+    Entity<TableState<ResultsTableDelegate>>,
+) {
+    set_editor_text(harness, sql, cx);
+    run_query(harness, cx);
+    wait_for_query(harness, cx).await;
+    let panel = harness.editor_panel.read_with(cx, |panel, _| {
+        panel
+            .active_query_tab()
+            .expect("query tab")
+            .results_panel
+            .clone()
+    });
+    let table_state = panel.read_with(cx, |panel, _| panel.table_state().clone());
+    (panel, table_state)
 }

@@ -393,6 +393,7 @@ mod tests {
                 comment: None,
                 numeric_precision: None,
                 numeric_scale: None,
+                enum_labels: Vec::new(),
             },
             ColumnInfo {
                 name: "name".into(),
@@ -405,6 +406,7 @@ mod tests {
                 comment: None,
                 numeric_precision: None,
                 numeric_scale: None,
+                enum_labels: Vec::new(),
             },
             ColumnInfo {
                 name: "email".into(),
@@ -417,6 +419,7 @@ mod tests {
                 comment: None,
                 numeric_precision: None,
                 numeric_scale: None,
+                enum_labels: Vec::new(),
             },
             ColumnInfo {
                 name: "tenant_id".into(),
@@ -429,6 +432,7 @@ mod tests {
                 comment: None,
                 numeric_precision: None,
                 numeric_scale: None,
+                enum_labels: Vec::new(),
             },
         ]
     }

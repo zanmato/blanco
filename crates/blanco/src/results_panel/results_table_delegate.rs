@@ -544,6 +544,7 @@ mod tests {
             comment: None,
             numeric_precision: None,
             numeric_scale: None,
+            enum_labels: Vec::new(),
         };
         let note = ColumnInfo {
             name: "note".to_string(),
@@ -787,6 +788,7 @@ mod tests {
                     comment: None,
                     numeric_precision: None,
                     numeric_scale: None,
+                    enum_labels: Vec::new(),
                 },
                 ColumnInfo {
                     name: "name".to_string(),
@@ -799,6 +801,7 @@ mod tests {
                     comment: None,
                     numeric_precision: None,
                     numeric_scale: None,
+                    enum_labels: Vec::new(),
                 },
             ],
             columns: vec![
@@ -862,6 +865,7 @@ mod tests {
             comment: None,
             numeric_precision: None,
             numeric_scale: None,
+            enum_labels: Vec::new(),
         }
     }
 

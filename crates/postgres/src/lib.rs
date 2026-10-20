@@ -635,6 +635,118 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_types_and_sequences_are_listed_with_their_ddl()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::PostgresConnection;
+        use blanco_core::{Connection as _, ObjectKind};
+
+        let test_name = "test_types_and_sequences_are_listed_with_their_ddl";
+        let pool = match PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&default_connection_string())
+            .await
+        {
+            Ok(pool) => pool,
+            Err(e) => return handle_unreachable(test_name, &e),
+        };
+        let schema = "blanco_types_test";
+        for statement in [
+            "DROP SCHEMA IF EXISTS blanco_types_test CASCADE",
+            "CREATE SCHEMA blanco_types_test",
+            "CREATE TYPE blanco_types_test.mood AS ENUM ('sad', 'it''s, fine', 'happy')",
+            "CREATE TYPE blanco_types_test.\"Point Pair\" AS (a point, \"Label\" varchar(20))",
+            "CREATE DOMAIN blanco_types_test.score AS numeric(5,2) DEFAULT 0 NOT NULL \
+             CONSTRAINT score_range CHECK (VALUE >= 0 AND VALUE <= 100)",
+            "CREATE TABLE blanco_types_test.visits \
+             (id integer GENERATED ALWAYS AS IDENTITY, mood blanco_types_test.mood, ticket integer)",
+            "CREATE SEQUENCE blanco_types_test.ticket_numbers AS integer \
+             INCREMENT BY 5 MINVALUE 10 MAXVALUE 1000 START WITH 20 CACHE 2 CYCLE \
+             OWNED BY blanco_types_test.visits.ticket",
+        ] {
+            sqlx::query(statement).execute(&pool).await?;
+        }
+
+        let mut conn = PostgresConnection::from_connection_string(&default_connection_string())?;
+        conn.connect(&default_connection_string()).await?;
+
+        assert_eq!(
+            conn.list_types(Some(schema)).await?,
+            [
+                ("Point Pair".to_string(), ObjectKind::CompositeType),
+                ("mood".to_string(), ObjectKind::Enum),
+                ("score".to_string(), ObjectKind::Domain),
+            ],
+            "the table's own row type is no composite type of its own"
+        );
+        assert_eq!(
+            conn.list_sequences(Some(schema)).await?,
+            ["ticket_numbers", "visits_id_seq"]
+        );
+
+        let ddl = |kind, name: &'static str| {
+            let conn = &conn;
+            async move { conn.object_ddl(kind, Some(schema), name).await }
+        };
+        let enum_ddl = ddl(ObjectKind::Enum, "mood").await?;
+        assert_eq!(
+            enum_ddl,
+            "CREATE TYPE blanco_types_test.mood AS ENUM (\n    'sad',\n    'it''s, fine',\n    'happy'\n);"
+        );
+        let composite_ddl = ddl(ObjectKind::CompositeType, "Point Pair").await?;
+        assert_eq!(
+            composite_ddl,
+            "CREATE TYPE blanco_types_test.\"Point Pair\" AS (\n    a point,\n    \"Label\" character varying(20)\n);"
+        );
+        let domain_ddl = ddl(ObjectKind::Domain, "score").await?;
+        assert_eq!(
+            domain_ddl,
+            "CREATE DOMAIN blanco_types_test.score AS numeric(5,2)\n    DEFAULT 0\n    NOT NULL\n    CONSTRAINT score_range CHECK (VALUE >= 0::numeric AND VALUE <= 100::numeric);"
+        );
+        assert_eq!(
+            ddl(ObjectKind::Sequence, "ticket_numbers").await?,
+            "CREATE SEQUENCE blanco_types_test.ticket_numbers\n    AS integer\n    INCREMENT BY 5\n    MINVALUE 10\n    MAXVALUE 1000\n    START WITH 20\n    CACHE 2\n    CYCLE\n    OWNED BY blanco_types_test.visits.ticket;"
+        );
+        assert!(
+            ddl(ObjectKind::Enum, "score").await.is_err(),
+            "a domain is no enum"
+        );
+
+        let columns = conn.get_columns_for_table("visits", Some(schema)).await?;
+        let labels: Vec<(&str, &[String])> = columns
+            .iter()
+            .map(|column| (column.name.as_str(), column.enum_labels.as_slice()))
+            .collect();
+        assert_eq!(
+            labels,
+            [
+                ("id", &[][..]),
+                (
+                    "mood",
+                    &[
+                        "sad".to_string(),
+                        "it's, fine".to_string(),
+                        "happy".to_string()
+                    ][..]
+                ),
+                ("ticket", &[][..]),
+            ]
+        );
+
+        // The type DDL recreates the types it was read from.
+        for statement in [
+            "DROP SCHEMA blanco_types_test CASCADE",
+            "CREATE SCHEMA blanco_types_test",
+            &enum_ddl,
+            &composite_ddl,
+            &domain_ddl,
+            "DROP SCHEMA blanco_types_test CASCADE",
+        ] {
+            sqlx::query(statement).execute(&pool).await?;
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_table_and_column_comments() -> Result<(), Box<dyn std::error::Error>> {
         use crate::PostgresConnection;
         use blanco_core::Connection as _;

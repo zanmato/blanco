@@ -1,5 +1,6 @@
 mod cache;
 mod context;
+mod enum_values;
 mod fetch;
 mod keywords;
 
@@ -97,6 +98,8 @@ fn comment_documentation(comment: Option<&str>) -> Option<lsp_types::Documentati
 /// other schemas, functions and keywords.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum ItemGroup {
+    /// The labels of the enum column a value is typed for.
+    EnumLabel,
     /// Snippets whose trigger word is being typed.
     Snippet,
     /// Keywords the cursor's place in the statement calls for, such as
@@ -487,6 +490,57 @@ impl SqlCompletionProvider {
     }
 
     /// Invalidate all cached metadata (call after DDL statements)
+    /// The labels of the enum column whose value the cursor is typing, and
+    /// whether the value is typed inside quotes. The column is resolved as
+    /// one being completed where its name ends.
+    async fn enum_label_items(
+        &self,
+        rope: &Rope,
+        text: &str,
+        offset: usize,
+    ) -> Option<(bool, Vec<CompletionItem>)> {
+        let target = enum_values::value_target(text, offset)?;
+        let column_context = statement_parser::extract_completion_context(
+            self.driver.sql_grammar(),
+            rope,
+            target.column_end,
+        )?;
+        let (schemas, supports_schemas) = self
+            .get_cached_schemas()
+            .await
+            .inspect_err(|error| tracing::warn!("Completing without schemas: {error:#}"))
+            .ok()?;
+        let CompletionPlan::Columns { sources } = plan_completion(
+            &column_context,
+            &self.current_schema,
+            &schemas,
+            supports_schemas,
+        ) else {
+            return None;
+        };
+        for source in sources {
+            let ColumnSource::Table(table) = source else {
+                continue;
+            };
+            let Ok(columns) = self.get_cached_columns(&table.schema, &table.table).await else {
+                continue;
+            };
+            if let Some(column) = columns
+                .iter()
+                .find(|column| ident_eq(&column.name, &target.column))
+            {
+                if column.enum_labels.is_empty() {
+                    return None;
+                }
+                return Some((
+                    target.quoted,
+                    build_enum_label_items(&column.enum_labels, &target, text, offset, rope),
+                ));
+            }
+        }
+        None
+    }
+
     pub fn invalidate_cache(&self) {
         if let Ok(mut cache) = self.cache.lock() {
             cache.invalidate_all();
@@ -1009,6 +1063,54 @@ fn build_join_condition_items(
         .collect()
 }
 
+/// The labels that start with the value typed so far. Inside quotes a label
+/// replaces the typed text and closes the quote unless a quote follows;
+/// without quotes it is inserted quoted.
+fn build_enum_label_items(
+    labels: &[String],
+    target: &enum_values::ValueTarget,
+    text: &str,
+    offset: usize,
+    rope: &Rope,
+) -> Vec<CompletionItem> {
+    let typed = text
+        .get(target.value_start..offset)
+        .unwrap_or_default()
+        .to_lowercase();
+    let closing = if text
+        .get(offset..)
+        .is_some_and(|rest| rest.starts_with('\''))
+    {
+        ""
+    } else {
+        "'"
+    };
+    let range = Range::new(
+        rope.offset_to_position(target.value_start),
+        rope.offset_to_position(offset),
+    );
+    labels
+        .iter()
+        .filter(|label| label.to_lowercase().starts_with(&typed))
+        .map(|label| {
+            let escaped = label.replace('\'', "''");
+            let new_text = if target.quoted {
+                format!("{escaped}{closing}")
+            } else {
+                format!("'{escaped}'")
+            };
+            CompletionItem {
+                label: label.clone(),
+                kind: Some(CompletionItemKind::ENUM_MEMBER),
+                detail: Some("enum label".to_string()),
+                filter_text: Some(label.clone()),
+                text_edit: Some(CompletionTextEdit::Edit(TextEdit::new(range, new_text))),
+                ..Default::default()
+            }
+        })
+        .collect()
+}
+
 fn build_keyword_items(keywords: &[&str], range: Range) -> Vec<CompletionItem> {
     keywords
         .iter()
@@ -1128,10 +1230,19 @@ impl CompletionProvider for SqlCompletionProvider {
         // a new completion request replaces this task (via _context_menu_task).
         window.spawn(cx, async move |cx| {
             cx.background_spawn(async move {
+                let offset = offset.min(rope_clone.len());
+                let text: String = rope_clone.chunks().collect();
+                // Inside a string only the labels of an enum column fit.
+                let enum_labels = provider.enum_label_items(&rope_clone, &text, offset).await;
+                let enum_label_items = match enum_labels {
+                    Some((true, items)) => return Ok(CompletionResponse::Array(items)),
+                    Some((false, items)) => items,
+                    None => Vec::new(),
+                };
                 let context = statement_parser::extract_completion_context(
                     provider.driver.sql_grammar(),
                     &rope_clone,
-                    offset.min(rope_clone.len()),
+                    offset,
                 );
                 let Some(context) = context else {
                     return Ok(CompletionResponse::Array(Vec::new()));
@@ -1157,7 +1268,6 @@ impl CompletionProvider for SqlCompletionProvider {
                     }
                 };
 
-                let text: String = rope_clone.chunks().collect();
                 let (expected_keywords, other_keywords) =
                     keywords::KeywordPosition::at(&text, offset, &context.current_word)
                         .ranked(provider.driver.dialect(), &context.current_word);
@@ -1373,6 +1483,7 @@ impl CompletionProvider for SqlCompletionProvider {
                 };
 
                 groups.push((ItemGroup::Snippet, snippet_items));
+                groups.push((ItemGroup::EnumLabel, enum_label_items));
 
                 Ok(CompletionResponse::Array(rank_items(
                     groups,
@@ -1387,7 +1498,8 @@ impl CompletionProvider for SqlCompletionProvider {
         // A deletion arrives as empty text. The editor closes the list on
         // every edit, so answering one would reopen it on each repeat of a
         // held Delete or Backspace.
-        matches!(new_text, " " | "." | "," | "(")
+        // An opening quote may start the value of an enum column.
+        matches!(new_text, " " | "." | "," | "(" | "'")
             || (!new_text.is_empty() && new_text.chars().all(|c| c.is_alphanumeric() || c == '_'))
     }
 }
@@ -1500,6 +1612,103 @@ pub(crate) mod tests {
             cx.executor(),
         );
         (provider, service, release)
+    }
+
+    /// Values typed for an enum column, inside quotes or right after the
+    /// comparison, are offered the labels of its type, against the compose
+    /// PostgreSQL server. Skipped when it is down, unless
+    /// `BLANCO_RUN_DB_TESTS=1`.
+    #[gpui::test]
+    async fn enum_columns_offer_their_labels_as_values(cx: &mut gpui::TestAppContext) {
+        use crate::test_harness::{LiveServer, TestHarness};
+
+        let harness = TestHarness::new(cx);
+        let mut cx = gpui::VisualTestContext::from_window(harness.window_handle.into(), cx);
+        let Some(server) = LiveServer::connect(
+            (DatabaseType::PostgreSQL, 5488),
+            9701,
+            "DROP SCHEMA IF EXISTS blanco_enum_complete CASCADE;
+             CREATE SCHEMA blanco_enum_complete;
+             CREATE TYPE blanco_enum_complete.status AS ENUM ('open', 'on hold', 'it''s done');
+             CREATE TABLE blanco_enum_complete.tickets
+                 (id integer PRIMARY KEY, status blanco_enum_complete.status, note text);",
+            &mut cx,
+        ) else {
+            return;
+        };
+        let provider = SqlCompletionProvider::new(
+            server.config_id,
+            "blanco".to_string(),
+            None,
+            DatabaseType::PostgreSQL,
+            Arc::new(server.service.clone()),
+            cx.executor(),
+        );
+
+        // `|` marks the cursor.
+        let complete = |text_with_cursor: &str| {
+            let offset = text_with_cursor.find('|').expect("cursor");
+            let text = text_with_cursor.replace('|', "");
+            let provider = provider.clone();
+            cx.background_spawn(async move {
+                let rope = Rope::from(text.as_str());
+                provider
+                    .enum_label_items(&rope, &text, offset)
+                    .await
+                    .map(|(quoted, items)| {
+                        let edits: Vec<(String, String)> = items
+                            .into_iter()
+                            .map(|item| {
+                                let Some(CompletionTextEdit::Edit(edit)) = item.text_edit else {
+                                    panic!("an edit");
+                                };
+                                (item.label, edit.new_text)
+                            })
+                            .collect();
+                        (quoted, edits)
+                    })
+            })
+        };
+        let pair = |label: &str, text: &str| (label.to_string(), text.to_string());
+
+        let from = "SELECT * FROM blanco_enum_complete.tickets t";
+        assert_eq!(
+            complete(&format!("{from} WHERE t.status = 'o|")).await,
+            Some((
+                true,
+                vec![pair("open", "open'"), pair("on hold", "on hold'")]
+            ))
+        );
+        assert_eq!(
+            complete(&format!("{from} WHERE status = '|'")).await,
+            Some((
+                true,
+                vec![
+                    pair("open", "open"),
+                    pair("on hold", "on hold"),
+                    pair("it's done", "it''s done")
+                ]
+            )),
+            "a quote after the cursor is not doubled"
+        );
+        assert_eq!(
+            complete(&format!("{from} WHERE status IN ('open', |")).await,
+            Some((
+                false,
+                vec![
+                    pair("open", "'open'"),
+                    pair("on hold", "'on hold'"),
+                    pair("it's done", "'it''s done'")
+                ]
+            ))
+        );
+        assert_eq!(
+            complete("UPDATE blanco_enum_complete.tickets SET status = it|").await,
+            Some((false, vec![pair("it's done", "'it''s done'")]))
+        );
+        assert_eq!(complete(&format!("{from} WHERE note = '|")).await, None);
+
+        server.script("DROP SCHEMA blanco_enum_complete CASCADE");
     }
 
     fn request_tables(
@@ -2392,6 +2601,7 @@ pub(crate) mod tests {
             comment: None,
             numeric_precision: None,
             numeric_scale: None,
+            enum_labels: Vec::new(),
         }
     }
 

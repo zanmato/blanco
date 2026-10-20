@@ -336,6 +336,7 @@ impl Connection for DuckdbConnection {
                         .filter(|comment| !comment.is_empty()),
                     foreign_key,
                     name,
+                    enum_labels: Vec::new(),
                 })
             })
             .collect())

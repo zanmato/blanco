@@ -8,7 +8,7 @@ pub use connection::MssqlConnection;
 #[allow(clippy::print_stdout, clippy::print_stderr)]
 mod tests {
     use super::*;
-    use blanco_core::{ColumnType, Connection, connection_trait::RoutineKind};
+    use blanco_core::{ColumnType, Connection, connection_trait::ObjectKind};
     use std::env;
 
     fn default_connection_string() -> String {
@@ -453,7 +453,7 @@ mod tests {
         );
 
         let proc_ddl = conn
-            .object_ddl(RoutineKind::Procedure, Some("dbo"), "blanco_routine_proc")
+            .object_ddl(ObjectKind::Procedure, Some("dbo"), "blanco_routine_proc")
             .await?;
         assert!(
             proc_ddl.contains("CREATE PROCEDURE"),

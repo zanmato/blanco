@@ -22,8 +22,12 @@ pub struct RevealTarget {
 pub(super) struct PendingReveal {
     target: RevealTarget,
     /// The level whose load was requested last. A reveal that needs the same
-    /// load twice gives up, so a failing load cannot loop.
+    /// load again once it has landed gives up, so a failing load cannot loop.
     requested_load: Option<String>,
+    /// The requested load has finished. Until then the tree may be rebuilt
+    /// for other reasons, such as database sizes arriving, and the reveal
+    /// keeps waiting.
+    load_landed: bool,
 }
 
 /// Where the object sits in the tree once its parents are open.
@@ -45,6 +49,7 @@ impl ConnectionsPanel {
         self.pending_reveal = Some(PendingReveal {
             target,
             requested_load: None,
+            load_landed: false,
         });
         self.advance_reveal(cx);
     }
@@ -111,17 +116,31 @@ impl ConnectionsPanel {
     }
 
     /// Note that `key` is being loaded for the reveal. False when it was the
-    /// last load asked for too, which ends the reveal.
+    /// last load asked for too: the reveal waits while that load runs, and
+    /// ends when it landed without the level.
     fn request_reveal_load(&mut self, key: &str) -> bool {
         let Some(pending) = self.pending_reveal.as_mut() else {
             return false;
         };
         if pending.requested_load.as_deref() == Some(key) {
-            self.pending_reveal = None;
+            if pending.load_landed {
+                self.pending_reveal = None;
+            }
             return false;
         }
         pending.requested_load = Some(key.to_string());
+        pending.load_landed = false;
         true
+    }
+
+    /// The load of the tree level `key` finished, with or without what it
+    /// was meant to bring.
+    pub(super) fn note_reveal_load_landed(&mut self, key: &str) {
+        if let Some(pending) = self.pending_reveal.as_mut()
+            && pending.requested_load.as_deref() == Some(key)
+        {
+            pending.load_landed = true;
+        }
     }
 
     /// Find the target in the loaded tree, expanding its database and schema
@@ -358,5 +377,110 @@ mod tests {
             selected_id(&panel, &cx),
             Some(format!("table:{connection_id}:main:recent"))
         );
+    }
+    /// PostgreSQL types and sequences load into folders of their own under
+    /// their schema, against the compose server. Skipped when it is down,
+    /// unless `BLANCO_RUN_DB_TESTS=1`.
+    #[gpui::test]
+    async fn types_and_sequences_are_listed_under_their_schema(cx: &mut TestAppContext) {
+        use crate::test_harness::LiveServer;
+
+        let harness = TestHarness::new(cx);
+        let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+        let Some(server) = LiveServer::connect(
+            (database::DatabaseType::PostgreSQL, 5488),
+            9801,
+            "DROP SCHEMA IF EXISTS blanco_types_sidebar CASCADE;
+             CREATE SCHEMA blanco_types_sidebar;
+             CREATE TYPE blanco_types_sidebar.mood AS ENUM ('sad', 'happy');
+             CREATE TYPE blanco_types_sidebar.pair AS (a int, b text);
+             CREATE DOMAIN blanco_types_sidebar.score AS int CHECK (VALUE >= 0);
+             CREATE SEQUENCE blanco_types_sidebar.ticket_numbers;
+             CREATE TABLE blanco_types_sidebar.visits (id int PRIMARY KEY, mood blanco_types_sidebar.mood);",
+            &mut cx,
+        ) else {
+            return;
+        };
+
+        let panel = cx.update(|window, cx| cx.new(|cx| ConnectionsPanel::new(window, cx)));
+        for _ in 0..100 {
+            cx.run_until_parked();
+            if panel.read_with(&cx, |panel, _| panel.initial_load_completed) {
+                break;
+            }
+            cx.executor()
+                .timer(std::time::Duration::from_millis(20))
+                .await;
+        }
+        let connection_id = server.config_id;
+        panel.update(&mut cx, |panel, cx| {
+            let mut connection = app_database::ConnectionData::new_server(
+                database::DatabaseType::PostgreSQL,
+                "it-schemas".into(),
+                "localhost".into(),
+                5488,
+                "blanco".into(),
+                "blanco".into(),
+                String::new(),
+            );
+            connection.id = Some(connection_id);
+            panel.connections = vec![connection];
+            panel.rebuild_tree(cx);
+            panel.reveal(
+                RevealTarget {
+                    connection_id,
+                    database_name: "blanco".into(),
+                    schema_name: Some("blanco_types_sidebar".into()),
+                    name: "ticket_numbers".into(),
+                },
+                cx,
+            );
+        });
+        settle(&panel, &mut cx).await;
+        let kinds = panel.read_with(&cx, |panel, _| {
+            panel
+                .database_metadata
+                .get(&connection_id)
+                .and_then(|metadata| metadata.databases.iter().find(|db| db.name == "blanco"))
+                .and_then(|database| {
+                    database
+                        .schemas
+                        .iter()
+                        .find(|schema| schema.name == "blanco_types_sidebar")
+                })
+                .map(|schema| {
+                    schema
+                        .tables
+                        .iter()
+                        .map(|item| (item.name.clone(), item.item_type))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        });
+        assert_eq!(
+            kinds,
+            [
+                ("mood".to_string(), DatabaseItemType::Enum),
+                ("pair".to_string(), DatabaseItemType::CompositeType),
+                ("score".to_string(), DatabaseItemType::Domain),
+                ("ticket_numbers".to_string(), DatabaseItemType::Sequence),
+                ("visits".to_string(), DatabaseItemType::Table),
+            ]
+        );
+        assert_eq!(
+            selected_id(&panel, &cx),
+            Some(format!(
+                "table:{connection_id}:blanco:blanco_types_sidebar:ticket_numbers"
+            ))
+        );
+
+        assert!(
+            panel.read_with(&cx, |panel, _| panel.expanded_categories.contains(
+                &format!("category:{connection_id}:blanco:blanco_types_sidebar:sequences")
+            )),
+            "the Sequences folder is open"
+        );
+
+        server.script("DROP SCHEMA blanco_types_sidebar CASCADE");
     }
 }

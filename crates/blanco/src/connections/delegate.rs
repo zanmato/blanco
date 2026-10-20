@@ -588,9 +588,16 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                         )),
                     )
             }
-            TreeItemKind::Procedure | TreeItemKind::Function | TreeItemKind::Trigger => {
-                // Routine items have no contextual operations yet; double-
-                // click handling (DDL tab) is wired separately in the panel.
+            TreeItemKind::Procedure
+            | TreeItemKind::Function
+            | TreeItemKind::Trigger
+            | TreeItemKind::Enum
+            | TreeItemKind::CompositeType
+            | TreeItemKind::Domain
+            | TreeItemKind::Sequence => {
+                // Routines, triggers, types and sequences have no contextual
+                // operations yet; double-click handling (DDL tab) is wired
+                // separately in the panel.
                 menu
             }
             TreeItemKind::Category => {

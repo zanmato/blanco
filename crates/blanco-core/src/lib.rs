@@ -24,8 +24,8 @@ pub mod write_guard;
 pub use connection_trait::{
     BatchFailure, BatchOutcome, ColumnInfo, ColumnType, Connection, ConnectionFactory,
     DatabaseSchemaResult, EntityType, ForeignKeyConstraint, ForeignKeyInfo, FunctionSignatureInfo,
-    InboundForeignKey, IndexInfo, KeyValueResult, ObjectComments, PaginationInfo, QueryResult,
-    QueryTiming, QueryableEntity, RedisType, RedisValue, ResultPayload, RoutineKind,
+    InboundForeignKey, IndexInfo, KeyValueResult, ObjectComments, ObjectKind, PaginationInfo,
+    QueryResult, QueryTiming, QueryableEntity, RedisType, RedisValue, ResultPayload,
     StatementTimer, TableMetadata, TableParent, TableSchemaInfo, WriteOperation, sizes_from_rows,
 };
 

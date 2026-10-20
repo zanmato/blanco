@@ -1,4 +1,4 @@
-use blanco_core::{ExplainMode, RoutineKind};
+use blanco_core::{ExplainMode, ObjectKind};
 use blanco_ui::{IconName, SqlViewMessage, Tab, TabBar};
 use gpui::{
     AnyElement, App, AppContext as _, ClickEvent, Context, FocusHandle, Focusable, FontWeight,
@@ -271,10 +271,18 @@ impl EditorPanel {
             TabType::Snippet(_) => Icon::new(IconName::File).text_color(theme.green),
             TabType::Settings(_) => Icon::new(IconName::Settings),
             TabType::ObjectDdl(tab) => {
-                let (icon, color) = match tab.read(cx).kind {
-                    RoutineKind::Procedure => (IconName::SquareTerminal, theme.magenta),
-                    RoutineKind::Function => (IconName::Braces, theme.cyan),
-                    RoutineKind::Trigger => (IconName::DatabaseConnected, theme.yellow),
+                let kind = tab.read(cx).kind;
+                let (icon, color) = match kind {
+                    ObjectKind::Procedure => (IconName::SquareTerminal, theme.magenta),
+                    ObjectKind::Function => (IconName::Braces, theme.cyan),
+                    ObjectKind::Trigger => (IconName::DatabaseConnected, theme.yellow),
+                    ObjectKind::Enum
+                    | ObjectKind::CompositeType
+                    | ObjectKind::Domain
+                    | ObjectKind::Sequence => match crate::connections::schema_object_icon(kind) {
+                        Some((icon, color)) => (icon, color.hsla(cx)),
+                        None => (IconName::File, theme.foreground),
+                    },
                 };
                 Icon::new(icon).text_color(color)
             }

@@ -487,6 +487,9 @@ impl ResultsTableDelegate {
                         .child(self.render_expression_button("CellEditor", cx))
                         .when_some(self.temporal_shape(row_ix, col_ix), |this, shape| {
                             this.child(self.render_date_time_picker(shape, row_ix, col_ix, cx))
+                        })
+                        .when_some(self.enum_labels(col_ix), |this, labels| {
+                            this.child(self.render_enum_picker(labels.to_vec(), row_ix, col_ix, cx))
                         }),
                 )
                 .with_priority(99),
@@ -531,6 +534,74 @@ impl ResultsTableDelegate {
             )
             .content(move |_, _, _| {
                 div().when_some(picker.clone(), |this, picker| this.child(picker))
+            })
+    }
+
+    /// Button of an enum cell editor and the list of the type's labels it
+    /// opens. The label the editor holds is marked.
+    fn render_enum_picker(
+        &self,
+        labels: Vec<String>,
+        row_ix: usize,
+        col_ix: usize,
+        cx: &mut Context<TableState<Self>>,
+    ) -> impl IntoElement {
+        let table_state = cx.entity();
+        let current = self
+            .edit_state
+            .editing_input
+            .as_ref()
+            .map(|input| input.text(cx))
+            .unwrap_or_default();
+        Popover::new(("cell-enum-picker", row_ix * 1000 + col_ix))
+            .anchor(gpui::Anchor::TopRight)
+            .open(self.edit_state.enum_picker_open)
+            .on_open_change({
+                let table_state = table_state.clone();
+                move |open, _window, cx| {
+                    table_state.update(cx, |state, cx| {
+                        Self::set_enum_picker_open(state, *open, cx);
+                    });
+                }
+            })
+            .trigger(
+                Button::new(("cell-enum-picker-trigger", row_ix * 1000 + col_ix))
+                    .icon(IconName::List)
+                    .label("Pick Value")
+                    .ghost()
+                    .xsmall()
+                    .disabled(!self.is_editable()),
+            )
+            .content(move |_, _, cx| {
+                v_flex()
+                    .id(("cell-enum-labels", row_ix * 1000 + col_ix))
+                    .max_h(px(280.))
+                    .min_w(px(160.))
+                    .overflow_y_scroll()
+                    .gap(px(1.))
+                    .children(labels.iter().enumerate().map(|(index, label)| {
+                        let table_state = table_state.clone();
+                        let picked = label.clone();
+                        Button::new(("cell-enum-label", index))
+                            .label(label.clone())
+                            .ghost()
+                            .small()
+                            .w_full()
+                            .justify_start()
+                            .selected(*label == current)
+                            .on_click(move |_, window, cx| {
+                                table_state.update(cx, |state, cx| {
+                                    Self::pick_enum_label(
+                                        state,
+                                        (row_ix, col_ix),
+                                        &picked,
+                                        window,
+                                        cx,
+                                    );
+                                });
+                            })
+                    }))
+                    .text_color(cx.theme().popover_foreground)
             })
     }
 

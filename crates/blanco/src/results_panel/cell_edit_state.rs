@@ -231,6 +231,8 @@ pub struct CellEditState {
     pub json_error: Option<String>,
     /// The open date and time picker of the cell being edited.
     pub date_picker: Option<Entity<DateTimePicker>>,
+    /// The list of enum labels of the cell being edited is open.
+    pub enum_picker_open: bool,
     /// The viewer a binary cell is expanded into. It takes the place of the
     /// text editors, so `editing_input` is empty while it is open.
     pub binary_viewer: Option<Entity<BinaryViewer>>,
@@ -279,6 +281,7 @@ impl CellEditState {
         self.editing_input = Some(input);
         self.editing_as_expression = self.is_expression(row, col);
         self.date_picker = None;
+        self.enum_picker_open = false;
     }
 
     pub fn stop_editing(&mut self) {
@@ -286,6 +289,7 @@ impl CellEditState {
         self.editing_input = None;
         self.expanded_cell = None;
         self.date_picker = None;
+        self.enum_picker_open = false;
         self.binary_viewer = None;
         self.key_value_editor = None;
         self.editing_as_expression = false;
@@ -316,6 +320,7 @@ impl CellEditState {
         self.editing_input = None;
         self.expanded_cell = None;
         self.date_picker = None;
+        self.enum_picker_open = false;
         self.binary_viewer = None;
     }
 
@@ -329,6 +334,7 @@ impl CellEditState {
         self.editing_input = None;
         self.expanded_cell = None;
         self.date_picker = None;
+        self.enum_picker_open = false;
         self.binary_viewer = None;
         self.changes.clear();
         self.selected_rows.clear();

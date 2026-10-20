@@ -323,6 +323,7 @@ impl Connection for ClickhouseConnection {
                     comment,
                     numeric_precision: None,
                     numeric_scale: None,
+                    enum_labels: Vec::new(),
                 }
             })
             .collect())

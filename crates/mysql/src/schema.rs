@@ -114,6 +114,7 @@ impl MysqlConnection {
                                 comment: None,
                                 numeric_precision: None,
                                 numeric_scale: None,
+                                enum_labels: Vec::new(),
                             });
                         }
                     }

@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use blanco_core::{
     ColumnInfo, Connection, FunctionSignatureInfo, QueryResult, QueryTiming, StatementTimer,
     connection_trait::ColumnType, connection_trait::ForeignKeyInfo, connection_trait::IndexInfo,
-    connection_trait::RoutineKind,
+    connection_trait::ObjectKind,
 };
 use futures::{Stream, StreamExt};
 use sqlx::{Column, Executor, Row};
@@ -677,7 +677,7 @@ impl Connection for MysqlConnection {
 
     async fn object_ddl(
         &self,
-        kind: RoutineKind,
+        kind: ObjectKind,
         _schema: Option<&str>,
         name: &str,
     ) -> Result<String, anyhow::Error> {
@@ -690,15 +690,21 @@ impl Connection for MysqlConnection {
         // column ('Create Procedure'/'Create Function'/'SQL Original Statement')
         // contains the DDL. The exact column name varies, so we pick by index.
         let (stmt, ddl_col) = match kind {
-            RoutineKind::Procedure => (
+            ObjectKind::Procedure => (
                 format!("SHOW CREATE PROCEDURE `{}`.`{}`", database, name),
                 2usize,
             ),
-            RoutineKind::Function => (
+            ObjectKind::Function => (
                 format!("SHOW CREATE FUNCTION `{}`.`{}`", database, name),
                 2usize,
             ),
-            RoutineKind::Trigger => (format!("SHOW CREATE TRIGGER `{}`.`{}`", database, name), 2),
+            ObjectKind::Trigger => (format!("SHOW CREATE TRIGGER `{}`.`{}`", database, name), 2),
+            ObjectKind::Enum
+            | ObjectKind::CompositeType
+            | ObjectKind::Domain
+            | ObjectKind::Sequence => {
+                anyhow::bail!("MySQL has no {}s", kind.display_name().to_lowercase())
+            }
         };
         let row = sqlx::query(&stmt)
             .fetch_one(&pool)
@@ -893,6 +899,7 @@ impl Connection for MysqlConnection {
                 comment,
                 numeric_precision,
                 numeric_scale,
+                enum_labels: Vec::new(),
             });
         }
 

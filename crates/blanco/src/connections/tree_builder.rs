@@ -7,7 +7,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use blanco_core::TableParent;
+use blanco_core::{ObjectKind, TableParent};
 use blanco_ui::IconName;
 use blanco_ui::tree::TreeItem;
 
@@ -351,6 +351,14 @@ const CATEGORY_ORDER: &[(DatabaseItemType, &str, &str)] = &[
     (DatabaseItemType::Function, "Functions", "functions"),
     (DatabaseItemType::Procedure, "Procedures", "procedures"),
     (DatabaseItemType::Trigger, "Triggers", "triggers"),
+    (DatabaseItemType::Enum, "Enums", "enums"),
+    (
+        DatabaseItemType::CompositeType,
+        "Composite Types",
+        "composite_types",
+    ),
+    (DatabaseItemType::Domain, "Domains", "domains"),
+    (DatabaseItemType::Sequence, "Sequences", "sequences"),
 ];
 
 /// Build a leaf tree item for a single database object, paired with its type so
@@ -623,7 +631,22 @@ fn icon_for_item_type(item_type: DatabaseItemType) -> (IconName, TreeIconColor, 
             TreeItemKind::Function,
         ),
         DatabaseItemType::Trigger => (IconName::Zap, TreeIconColor::Red, TreeItemKind::Trigger),
+        DatabaseItemType::Enum => schema_object(ObjectKind::Enum, TreeItemKind::Enum),
+        DatabaseItemType::CompositeType => {
+            schema_object(ObjectKind::CompositeType, TreeItemKind::CompositeType)
+        }
+        DatabaseItemType::Domain => schema_object(ObjectKind::Domain, TreeItemKind::Domain),
+        DatabaseItemType::Sequence => schema_object(ObjectKind::Sequence, TreeItemKind::Sequence),
     }
+}
+
+fn schema_object(
+    kind: ObjectKind,
+    tree_kind: TreeItemKind,
+) -> (IconName, TreeIconColor, TreeItemKind) {
+    let (icon, color) =
+        super::schema_object_icon(kind).unwrap_or((IconName::File, TreeIconColor::Foreground));
+    (icon, color, tree_kind)
 }
 
 #[cfg(test)]

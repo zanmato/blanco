@@ -253,6 +253,22 @@ comment shows the split after the total, and query history stores it in
 `execution_us`/`fetch_us` next to the whole run's `duration_ms`. A new driver
 path that builds a `QueryResult` from a server query should fill `timing`.
 
+## Types and sequences
+
+The sidebar lists PostgreSQL's (and CockroachDB's) enums, composite types,
+domains and sequences from `Connection::list_types` and `list_sequences`, in
+category folders after Triggers, and opens their DDL like a routine's:
+`ObjectKind` (once `RoutineKind`) names every object `object_ddl` returns, and
+PostgreSQL builds the type and sequence DDL from the catalog. A new
+`Connection` method needs forwarding in `database::TokioConnection`, which
+every driver is wrapped in, or the app sees the trait default.
+`ColumnInfo::enum_labels` carries an enum column's labels, so the grid's
+table columns and completion's column cache have them without another query:
+the cell editor's bubble offers them under Pick Value, and
+`sql/completion/enum_values.rs` finds a value typed for a column from the text
+before the cursor (a half typed string leaves the syntax tree in error), which
+completion resolves like a column completed where its name ends.
+
 ## SQL log selection
 
 `blanco_ui::SqlView` entries are `SelectableLogEntry` elements that register with

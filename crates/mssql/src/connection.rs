@@ -4,7 +4,7 @@ use blanco_core::{
     ColumnInfo, Connection, FunctionSignatureInfo, QueryResult, QueryTiming, StatementTimer,
     connection_trait::{
         ColumnType, DatabaseSchemaResult, EntityType, ForeignKeyInfo, InboundForeignKey, IndexInfo,
-        PaginationInfo, QueryableEntity, RoutineKind, TableSchemaInfo,
+        ObjectKind, PaginationInfo, QueryableEntity, TableSchemaInfo,
     },
 };
 use futures::{Stream, TryStreamExt};
@@ -1008,6 +1008,7 @@ impl Connection for MssqlConnection {
                     comment: get(9).filter(|v| !v.is_empty()),
                     numeric_precision: get(10).and_then(|v| v.parse().ok()),
                     numeric_scale: get(11).and_then(|v| v.parse().ok()),
+                    enum_labels: Vec::new(),
                 }
             })
             .collect())
@@ -1245,7 +1246,7 @@ impl Connection for MssqlConnection {
 
     async fn object_ddl(
         &self,
-        kind: RoutineKind,
+        kind: ObjectKind,
         schema: Option<&str>,
         name: &str,
     ) -> Result<String> {

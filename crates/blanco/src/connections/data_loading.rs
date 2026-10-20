@@ -65,7 +65,11 @@ fn item_comment(
             &comments.relations
         }
         DatabaseItemType::Procedure | DatabaseItemType::Function => &comments.routines,
-        DatabaseItemType::Trigger => return None,
+        DatabaseItemType::Trigger
+        | DatabaseItemType::Enum
+        | DatabaseItemType::CompositeType
+        | DatabaseItemType::Domain
+        | DatabaseItemType::Sequence => return None,
     };
     map.get(name).cloned()
 }
@@ -81,6 +85,10 @@ pub enum DatabaseItemType {
     Procedure,
     Function,
     Trigger,
+    Enum,
+    CompositeType,
+    Domain,
+    Sequence,
 }
 
 /// Represents a database with its schemas
@@ -336,6 +344,7 @@ impl ConnectionsPanel {
                             if expand {
                                 this.expanded_connections.insert(connection_id);
                             }
+                            this.note_reveal_load_landed(&item_id);
 
                             // Build tree items with all loaded connections visible
                             this.update_tree_items(cx);
@@ -366,6 +375,7 @@ impl ConnectionsPanel {
                             // Drop any state a racing connect may have recorded so
                             // the tree rebuild reflects the disconnected state.
                             this.forget_connection(connection_id);
+                            this.note_reveal_load_landed(&item_id);
                             this.update_tree_items(cx);
                             cx.notify();
                         })
@@ -498,6 +508,7 @@ impl ConnectionsPanel {
                             // Clear loading state for this database
                             let item_id = format!("database:{}:{}", connection_id, database_name);
                             this.set_item_loading(&item_id, false, cx);
+                            this.note_reveal_load_landed(&item_id);
 
                             if let Some(metadata) = this.database_metadata.get_mut(&connection_id) {
                                 // Find the database and update its schemas
@@ -535,6 +546,8 @@ impl ConnectionsPanel {
                         .update(cx, |this, cx| {
                             let item_id = format!("database:{}:{}", connection_id, database_name);
                             this.set_item_loading(&item_id, false, cx);
+                            this.note_reveal_load_landed(&item_id);
+                            this.advance_reveal(cx);
                             cx.notify();
                         })
                         .log_err();
@@ -566,6 +579,8 @@ impl ConnectionsPanel {
                     let procs_result = connection.list_procedures(Some(&schema_name)).await;
                     let funcs_result = connection.list_functions(Some(&schema_name)).await;
                     let triggers_result = connection.list_triggers(Some(&schema_name)).await;
+                    let types_result = connection.list_types(Some(&schema_name)).await;
+                    let sequences_result = connection.list_sequences(Some(&schema_name)).await;
 
                     let sizes = connection
                         .get_object_sizes(Some(&schema_name))
@@ -630,6 +645,26 @@ impl ConnectionsPanel {
                     if let Ok(v) = triggers_result {
                         push_named(&mut all_items, v, DatabaseItemType::Trigger, &sizes);
                     }
+                    match types_result {
+                        Ok(types) => {
+                            for (name, kind) in types {
+                                let item_type = match kind {
+                                    blanco_core::ObjectKind::Enum => DatabaseItemType::Enum,
+                                    blanco_core::ObjectKind::CompositeType => {
+                                        DatabaseItemType::CompositeType
+                                    }
+                                    blanco_core::ObjectKind::Domain => DatabaseItemType::Domain,
+                                    _ => continue,
+                                };
+                                push_named(&mut all_items, vec![name], item_type, &sizes);
+                            }
+                        }
+                        Err(error) => tracing::warn!("Could not list the types of {schema_name}: {error:#}"),
+                    }
+                    match sequences_result {
+                        Ok(v) => push_named(&mut all_items, v, DatabaseItemType::Sequence, &sizes),
+                        Err(error) => tracing::warn!("Could not list the sequences of {schema_name}: {error:#}"),
+                    }
 
                     // Sort all items alphabetically by name
                     all_items.sort_by(|a, b| a.name.cmp(&b.name));
@@ -638,6 +673,9 @@ impl ConnectionsPanel {
 
                     // Update the panel with loaded items
                     this_handle.update(cx, |this, cx| {
+                        this.note_reveal_load_landed(&format!(
+                            "schema:{connection_id}:{database_name}:{schema_name}"
+                        ));
                         if let Some(metadata) = this.database_metadata.get_mut(&connection_id) {
                             // Find the database and schema, then update its tables
                             if let Some(database) = metadata.databases.iter_mut().find(|db| db.name == database_name)
@@ -654,6 +692,14 @@ impl ConnectionsPanel {
                 }
                 Err(e) => {
                     tracing::error!("Failed to get connection for schema {} in database {} on connection {}: {}", schema_name, database_name, connection_id, e);
+                    this_handle
+                        .update(cx, |this, cx| {
+                            this.note_reveal_load_landed(&format!(
+                                "schema:{connection_id}:{database_name}:{schema_name}"
+                            ));
+                            this.advance_reveal(cx);
+                        })
+                        .log_err();
                 }
             }
         })
