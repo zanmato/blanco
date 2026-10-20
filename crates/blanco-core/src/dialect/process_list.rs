@@ -79,10 +79,13 @@ impl Dialect {
                  WHERE ID <> CONNECTION_ID() \
                  ORDER BY TIME DESC"
             }
+            // A session still logging in reports 1900-01-01 as its last
+            // request, which has no duration. DATEDIFF_BIG because whole
+            // milliseconds overflow an int after 24 days.
             DatabaseType::MsSql => {
                 "SELECT CAST(s.session_id AS varchar(10)), s.login_name, \
                  DB_NAME(COALESCE(r.database_id, s.database_id)), COALESCE(r.status, s.status), \
-                 DATEDIFF(millisecond, COALESCE(r.start_time, s.last_request_start_time), SYSDATETIME()) / 1000.0, \
+                 DATEDIFF_BIG(millisecond, COALESCE(r.start_time, NULLIF(s.last_request_start_time, '19000101')), SYSDATETIME()) / 1000.0, \
                  t.text \
                  FROM sys.dm_exec_sessions s \
                  LEFT JOIN sys.dm_exec_requests r ON r.session_id = s.session_id \

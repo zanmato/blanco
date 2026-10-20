@@ -30,6 +30,9 @@ All notable changes to this project will be documented in this file.
   PostgreSQL reads in lower case, are matched the same way. MySQL reads a
   table written as `database.table` from that database. A SQL export of
   such a result names the table with its schema
+- The SQL Server process list failed with a DATEDIFF overflow while another
+  session was logging in, or when a session had been idle for more than
+  24 days. A session that has not run a request yet shows no duration
 
 ## [0.1.4] - 2026-10-19
 
