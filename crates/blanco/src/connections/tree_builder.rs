@@ -10,13 +10,13 @@ use std::collections::{HashMap, HashSet};
 use blanco_core::TableParent;
 use blanco_ui::IconName;
 use blanco_ui::tree::TreeItem;
-use gpui::Context;
-use gpui_component::ActiveTheme as _;
 
 use app_database::ConnectionData;
 
 use super::data_loading::{DatabaseItemType, DatabaseTable};
-use super::{ChildTables, ConnectionsPanel, TreeItemIcon, TreeItemKind, TreeItemMetadata};
+use super::{
+    ChildTables, ConnectionsPanel, TreeIconColor, TreeItemIcon, TreeItemKind, TreeItemMetadata,
+};
 
 impl ConnectionsPanel {
     /// Build a TreeItem for a connection including its children if loaded.
@@ -24,7 +24,6 @@ impl ConnectionsPanel {
         &self,
         connection: &ConnectionData,
         should_expand: bool,
-        cx: &Context<Self>,
     ) -> TreeItem<TreeItemMetadata> {
         let connection_id = connection.id.unwrap_or(0);
 
@@ -40,7 +39,7 @@ impl ConnectionsPanel {
             database_name: None,
             schema_name: None,
             table_name: None,
-            icon: self.get_connection_icon(connection_id, db_type, cx),
+            icon: self.get_connection_icon(connection_id, db_type),
             environment_type: Some(connection.environment_type),
             loading: false,
             size_bytes,
@@ -89,9 +88,9 @@ impl ConnectionsPanel {
                         icon: TreeItemIcon {
                             icon: IconName::Database,
                             color: if self.is_database_connected(connection_id, &database.name) {
-                                cx.theme().primary.into()
+                                TreeIconColor::Primary
                             } else {
-                                cx.theme().foreground.into()
+                                TreeIconColor::Foreground
                             },
                         },
                         environment_type: Some(connection.environment_type),
@@ -121,7 +120,7 @@ impl ConnectionsPanel {
                                 table_name: None,
                                 icon: TreeItemIcon {
                                     icon: IconName::Folder,
-                                    color: cx.theme().yellow.into(),
+                                    color: TreeIconColor::Yellow,
                                 },
                                 environment_type: Some(connection.environment_type),
                                 loading: false,
@@ -150,7 +149,6 @@ impl ConnectionsPanel {
                                             Some(schema.name.clone()),
                                             table_key,
                                             table,
-                                            cx,
                                         )
                                     })
                                     .collect();
@@ -170,7 +168,6 @@ impl ConnectionsPanel {
                                         connection_id, database.name, schema.name
                                     ),
                                     children,
-                                    cx,
                                 )
                             } else {
                                 Vec::new()
@@ -210,7 +207,6 @@ impl ConnectionsPanel {
                                 None,
                                 table_key,
                                 table,
-                                cx,
                             )
                         })
                         .collect();
@@ -225,7 +221,6 @@ impl ConnectionsPanel {
                 None,
                 &format!("category:{}", connection_id),
                 children,
-                cx,
             );
             base_item.children(category_items)
         }
@@ -256,7 +251,6 @@ impl ConnectionsPanel {
         schema_name: Option<String>,
         category_key_prefix: &str,
         children: Vec<(DatabaseItemType, TreeItem<TreeItemMetadata>)>,
-        cx: &Context<Self>,
     ) -> Vec<TreeItem<TreeItemMetadata>> {
         CATEGORY_ORDER
             .iter()
@@ -289,7 +283,7 @@ impl ConnectionsPanel {
 
                 // Match the folder's icon and color to the objects it holds so
                 // the grouping reads as "more of these".
-                let (icon, color, _) = icon_for_item_type(item_type, cx);
+                let (icon, color, _) = icon_for_item_type(item_type);
                 let category_metadata = TreeItemMetadata {
                     connection_id,
                     connection_name: connection.display_name(),
@@ -318,7 +312,7 @@ impl ConnectionsPanel {
                         &category_metadata,
                         TreeItemIcon {
                             icon: IconName::Folder,
-                            color: cx.theme().yellow.into(),
+                            color: TreeIconColor::Yellow,
                         },
                         category_children,
                     ),
@@ -370,9 +364,8 @@ fn build_object_item(
     schema_name: Option<String>,
     item_key: String,
     table: &DatabaseTable,
-    cx: &Context<ConnectionsPanel>,
 ) -> (DatabaseItemType, TreeItem<TreeItemMetadata>) {
-    let (icon, color, kind) = icon_for_item_type(table.item_type, cx);
+    let (icon, color, kind) = icon_for_item_type(table.item_type);
 
     let metadata = TreeItemMetadata {
         connection_id,
@@ -610,33 +603,26 @@ fn fold_namespace_level(
 }
 
 /// Pick the icon, color, and metadata kind to render for a given object kind.
-fn icon_for_item_type(
-    item_type: DatabaseItemType,
-    cx: &Context<ConnectionsPanel>,
-) -> (IconName, gpui::Rgba, TreeItemKind) {
+fn icon_for_item_type(item_type: DatabaseItemType) -> (IconName, TreeIconColor, TreeItemKind) {
     match item_type {
-        DatabaseItemType::Table => (
-            IconName::Sheet,
-            cx.theme().green.into(),
-            TreeItemKind::Table,
-        ),
-        DatabaseItemType::View => (IconName::Eye, cx.theme().cyan.into(), TreeItemKind::View),
+        DatabaseItemType::Table => (IconName::Sheet, TreeIconColor::Green, TreeItemKind::Table),
+        DatabaseItemType::View => (IconName::Eye, TreeIconColor::Cyan, TreeItemKind::View),
         DatabaseItemType::MaterializedView => (
             IconName::LayoutDashboard,
-            cx.theme().magenta.into(),
+            TreeIconColor::Magenta,
             TreeItemKind::MaterializedView,
         ),
         DatabaseItemType::Procedure => (
             IconName::SquareTerminal,
-            cx.theme().magenta.into(),
+            TreeIconColor::Magenta,
             TreeItemKind::Procedure,
         ),
         DatabaseItemType::Function => (
             IconName::Braces,
-            cx.theme().cyan.into(),
+            TreeIconColor::Cyan,
             TreeItemKind::Function,
         ),
-        DatabaseItemType::Trigger => (IconName::Zap, cx.theme().red.into(), TreeItemKind::Trigger),
+        DatabaseItemType::Trigger => (IconName::Zap, TreeIconColor::Red, TreeItemKind::Trigger),
     }
 }
 
@@ -658,7 +644,7 @@ mod tests {
             table_name: Some(name.to_string()),
             icon: TreeItemIcon {
                 icon: IconName::Sheet,
-                color: gpui::rgba(0),
+                color: TreeIconColor::Green,
             },
             environment_type: None,
             loading: false,

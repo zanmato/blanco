@@ -65,16 +65,45 @@ pub enum ConnectionsPanelEvent {
 #[derive(Clone)]
 pub struct TreeItemIcon {
     pub icon: IconName,
-    pub color: gpui::Rgba,
+    pub color: TreeIconColor,
 }
 
 impl std::fmt::Debug for TreeItemIcon {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "TreeItemIcon {{ icon: IconName({:?}), color: rgba(...) }}",
-            std::mem::discriminant(&self.icon)
+            "TreeItemIcon {{ icon: IconName({:?}), color: {:?} }}",
+            std::mem::discriminant(&self.icon),
+            self.color
         )
+    }
+}
+
+/// The theme color a tree icon is drawn in. Tree items outlive a theme
+/// change, so they name the color and it is looked up when the row renders.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TreeIconColor {
+    Foreground,
+    Primary,
+    Yellow,
+    Green,
+    Cyan,
+    Magenta,
+    Red,
+}
+
+impl TreeIconColor {
+    pub fn hsla(self, cx: &App) -> gpui::Hsla {
+        let theme = cx.theme();
+        match self {
+            Self::Foreground => theme.foreground,
+            Self::Primary => theme.primary,
+            Self::Yellow => theme.yellow,
+            Self::Green => theme.green,
+            Self::Cyan => theme.cyan,
+            Self::Magenta => theme.magenta,
+            Self::Red => theme.red,
+        }
     }
 }
 
@@ -462,7 +491,6 @@ impl ConnectionsPanel {
                     connection,
                     self.expanded_connections
                         .contains(&connection.id.unwrap_or(0)),
-                    cx,
                 )
             })
             .collect();
@@ -508,7 +536,6 @@ impl ConnectionsPanel {
         &self,
         connection_id: i64,
         db_type: database::DatabaseType,
-        cx: &Context<Self>,
     ) -> TreeItemIcon {
         // The icon shows the driver type; connection state is conveyed purely
         // through color. A loaded connection is by definition connected, and
@@ -517,9 +544,9 @@ impl ConnectionsPanel {
         let connected = self.loaded_connections.contains(&connection_id)
             || self.is_database_connected(connection_id, "default");
         let color = if connected {
-            cx.theme().primary.into()
+            TreeIconColor::Primary
         } else {
-            cx.theme().foreground.into()
+            TreeIconColor::Foreground
         };
         TreeItemIcon {
             icon: connection_type_icon(db_type),
@@ -1586,7 +1613,7 @@ mod tests {
             table_name: None,
             icon: TreeItemIcon {
                 icon: IconName::Database,
-                color: gpui::rgba(0),
+                color: TreeIconColor::Foreground,
             },
             environment_type: None,
             loading: false,

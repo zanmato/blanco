@@ -314,7 +314,7 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                         .build(window, cx),
                         None => Tooltip::new(tooltip_label.clone()).build(window, cx),
                     })
-                    .child(Icon::new(tree_item_icon.icon).text_color(tree_item_icon.color))
+                    .child(Icon::new(tree_item_icon.icon).text_color(tree_item_icon.color.hsla(cx)))
                     .child(
                         div()
                             .flex_1()
