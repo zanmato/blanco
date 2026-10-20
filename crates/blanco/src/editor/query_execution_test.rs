@@ -700,3 +700,132 @@ async fn test_explain_produces_plan_tree(cx: &mut TestAppContext) {
         "raw rows stay available"
     );
 }
+
+/// A role created from the editor keeps its password out of the history and
+/// the SQL log, while the server gets it as typed: the new role logs in with
+/// it. Runs against the compose PostgreSQL, and is skipped when it is down
+/// unless `BLANCO_RUN_DB_TESTS=1`.
+#[gpui::test]
+async fn test_passwords_are_masked_in_history_and_log_but_not_sent_masked(cx: &mut TestAppContext) {
+    use blanco_core::{ConnectionContext, DatabaseService as _};
+    use database::{ConnectionConfig, DatabaseType};
+
+    const CONFIG_ID: i64 = 9501;
+    const ROLE_CONFIG_ID: i64 = 9502;
+    const PASSWORD: &str = "hunter2-mask";
+    let config = |id: i64, user: &str, password: &str| {
+        ConnectionConfig::new(
+            id,
+            format!("it-{user}"),
+            DatabaseType::PostgreSQL,
+            "localhost".to_string(),
+            5488,
+            "blanco".to_string(),
+            user.to_string(),
+            Some(password.to_string()),
+        )
+    };
+
+    let harness = TestHarness::new(cx);
+    let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+    let (service, handle) = cx.update(|_, cx| {
+        (
+            database::DatabaseService::global(cx).clone(),
+            gpui_tokio::Tokio::handle(cx),
+        )
+    });
+    let reachable = handle.block_on(async {
+        service
+            .add_connection_config(config(CONFIG_ID, "blanco", "blanco"))
+            .await;
+        service
+            .execute_script(
+                CONFIG_ID,
+                Some("blanco"),
+                "DROP ROLE IF EXISTS blanco_mask_test",
+            )
+            .await
+    });
+    if let Err(error) = reachable {
+        assert!(
+            std::env::var("BLANCO_RUN_DB_TESTS").as_deref() != Ok("1"),
+            "PostgreSQL unreachable: {error:#}"
+        );
+        return;
+    }
+
+    harness
+        .editor_panel
+        .update_in(&mut cx, |panel, window, cx| {
+            panel.create_and_add_tab_with_connection(
+                window,
+                crate::editor::TabCreationParams {
+                    title: "roles".into(),
+                    content: None,
+                    db_id: None,
+                    last_run_at: None,
+                    context: ConnectionContext {
+                        connection_id: CONFIG_ID,
+                        db_type: DatabaseType::PostgreSQL,
+                        connection_name: "it-blanco".into(),
+                        database_name: "blanco".into(),
+                        schema_name: None,
+                        environment_type: None,
+                    },
+                },
+                cx,
+            );
+        });
+    let script = format!(
+        "SELECT 'PASSWORD' AS kept;\nCREATE ROLE blanco_mask_test LOGIN PASSWORD '{PASSWORD}';\nSELECT 1"
+    );
+    set_editor_text(&harness, &script, &mut cx);
+    // Run the whole script, as a selection does.
+    harness
+        .editor_panel
+        .update_in(&mut cx, |panel, window, cx| {
+            let tab = panel.active_query_tab().expect("query tab");
+            tab.editor.update(cx, |editor, cx| {
+                editor.set_selected_range(0..script.len(), window, cx);
+            });
+        });
+    run_query(&harness, &mut cx);
+    wait_for_query(&harness, &mut cx).await;
+
+    let masked = "SELECT 'PASSWORD' AS kept;\nCREATE ROLE blanco_mask_test LOGIN PASSWORD '********';\nSELECT 1";
+    let history = wait_for_history(&mut cx, 1).await;
+    assert_eq!(history[0].query_text, masked);
+    let log = harness.editor_panel.read_with(&cx, |panel, cx| {
+        panel
+            .active_query_tab()
+            .map(|tab| tab.sql_view.read(cx).all_text())
+            .unwrap_or_default()
+    });
+    assert!(
+        log.contains(masked),
+        "the log should hold the masked text: {log}"
+    );
+    assert!(!log.contains(PASSWORD), "the log holds the password: {log}");
+
+    let login = handle.block_on(async {
+        service
+            .add_connection_config(config(ROLE_CONFIG_ID, "blanco_mask_test", PASSWORD))
+            .await;
+        service
+            .execute_script(ROLE_CONFIG_ID, Some("blanco"), "SELECT current_user")
+            .await
+    });
+    handle
+        .block_on(service.disconnect(ROLE_CONFIG_ID, None))
+        .expect("close the role's connection");
+    let current_user = login
+        .unwrap_or_else(|error| panic!("the role should log in with its password: {error:#}"))
+        .first()
+        .and_then(|result| result.rows.first())
+        .and_then(|row| row.first().cloned().flatten());
+    assert_eq!(current_user.as_deref(), Some("blanco_mask_test"));
+
+    handle
+        .block_on(service.execute_script(CONFIG_ID, Some("blanco"), "DROP ROLE blanco_mask_test"))
+        .expect("drop the role");
+}

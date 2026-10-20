@@ -491,17 +491,21 @@ impl EditorPanel {
             self.loading = true;
             cx.notify();
 
+            // The log and the history keep the query with its passwords
+            // masked; the server gets it as typed.
+            let kept_query = blanco_core::password_mask::mask_passwords(db_type.dialect(), &query);
+
             // Log the query to the SQL log, truncating if too long
-            let query_for_log = if query.chars().count() > SQL_QUERY_LOG_MAX_LENGTH {
+            let query_for_log = if kept_query.chars().count() > SQL_QUERY_LOG_MAX_LENGTH {
                 format!(
                     "{}... (truncated)",
-                    query
+                    kept_query
                         .chars()
                         .take(SQL_QUERY_LOG_MAX_LENGTH)
                         .collect::<String>()
                 )
             } else {
-                query.clone()
+                kept_query.clone()
             };
             query_tab.sql_view.update(cx, |sql_view, cx| {
                 sql_view.append_text(&blanco_ui::SqlViewMessage::SqlStatement(query_for_log), cx);
@@ -622,7 +626,7 @@ impl EditorPanel {
             // bits (duration, row counts, success/error) are filled in once the
             // result arrives.
             let history_db = AppDatabase::global(cx).clone();
-            let history_query = query_for_metadata.clone();
+            let history_query = kept_query;
             let history_connection_id = connection_id;
             let history_connection_name = query_tab.context.connection_name.clone();
             let history_database_name = database_name.clone();

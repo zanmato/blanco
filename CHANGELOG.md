@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Changes
+
+- Query history and the SQL log show passwords in statements that create
+  or change an account as `'********'`: PostgreSQL and CockroachDB
+  `CREATE`/`ALTER` `USER`/`ROLE`, MySQL and MariaDB `CREATE`/`ALTER USER`,
+  `GRANT` and `SET PASSWORD`, and SQL Server `CREATE`/`ALTER LOGIN`. The
+  statement is sent to the server as typed
+
 ## [0.1.5] - 2026-10-20
 
 ### Features
