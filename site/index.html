@@ -783,13 +783,10 @@
         <picture>
           <source
             media="(prefers-color-scheme: dark)"
-            srcset="images/editor-mocha-1136.webp 1136w, images/editor-mocha.webp 1600w"
-            sizes="(min-width: 1216px) 1136px, 100vw"
+            srcset="images/editor-mocha.webp"
           />
           <img
             src="images/editor-latte.webp"
-            srcset="images/editor-latte-1136.webp 1136w, images/editor-latte.webp 1600w"
-            sizes="(min-width: 1216px) 1136px, 100vw"
             width="1600"
             height="1000"
             alt="Blanco with the caret inside one of three SQL statements, that statement framed and its results below, and the sidebar listing tables with their sizes"
@@ -871,13 +868,10 @@
             <picture>
               <source
                 media="(prefers-color-scheme: dark)"
-                srcset="images/inline-edit-mocha-1136.webp 1136w, images/inline-edit-mocha.webp 1600w"
-                sizes="(min-width: 1216px) 1136px, 100vw"
+                srcset="images/inline-edit-mocha.webp"
               />
               <img
                 src="images/inline-edit-latte.webp"
-                srcset="images/inline-edit-latte-1136.webp 1136w, images/inline-edit-latte.webp 1600w"
-                sizes="(min-width: 1216px) 1136px, 100vw"
                 width="1600"
                 height="1000"
                 loading="lazy"
@@ -907,13 +901,10 @@
             <picture>
               <source
                 media="(prefers-color-scheme: dark)"
-                srcset="images/script-mocha-1136.webp 1136w, images/script-mocha.webp 1600w"
-                sizes="(min-width: 1216px) 1136px, 100vw"
+                srcset="images/script-mocha.webp"
               />
               <img
                 src="images/script-latte.webp"
-                srcset="images/script-latte-1136.webp 1136w, images/script-latte.webp 1600w"
-                sizes="(min-width: 1216px) 1136px, 100vw"
                 width="1600"
                 height="1000"
                 loading="lazy"
@@ -944,13 +935,10 @@
             <picture>
               <source
                 media="(prefers-color-scheme: dark)"
-                srcset="images/terminal-mocha-1136.webp 1136w, images/terminal-mocha.webp 1600w"
-                sizes="(min-width: 1216px) 1136px, 100vw"
+                srcset="images/terminal-mocha.webp"
               />
               <img
                 src="images/terminal-latte.webp"
-                srcset="images/terminal-latte-1136.webp 1136w, images/terminal-latte.webp 1600w"
-                sizes="(min-width: 1216px) 1136px, 100vw"
                 width="1600"
                 height="1000"
                 loading="lazy"
@@ -979,13 +967,10 @@
             <picture>
               <source
                 media="(prefers-color-scheme: dark)"
-                srcset="images/snippets-mocha-1136.webp 1136w, images/snippets-mocha.webp 1600w"
-                sizes="(min-width: 1216px) 1136px, 100vw"
+                srcset="images/snippets-mocha.webp"
               />
               <img
                 src="images/snippets-latte.webp"
-                srcset="images/snippets-latte-1136.webp 1136w, images/snippets-latte.webp 1600w"
-                sizes="(min-width: 1216px) 1136px, 100vw"
                 width="1600"
                 height="1000"
                 loading="lazy"
@@ -1073,8 +1058,6 @@
             <figure>
               <img
                 src="images/editor-latte.webp"
-                srcset="images/editor-latte-1136.webp 1136w, images/editor-latte.webp 1600w"
-                sizes="(min-width: 1216px) 360px, (min-width: 961px) 31vw, 100vw"
                 width="1600"
                 height="1000"
                 loading="lazy"
@@ -1087,8 +1070,6 @@
             <figure>
               <img
                 src="images/editor-macchiato.webp"
-                srcset="images/editor-macchiato-1136.webp 1136w, images/editor-macchiato.webp 1600w"
-                sizes="(min-width: 1216px) 360px, (min-width: 961px) 31vw, 100vw"
                 width="1600"
                 height="1000"
                 loading="lazy"
@@ -1101,8 +1082,6 @@
             <figure>
               <img
                 src="images/editor-mocha.webp"
-                srcset="images/editor-mocha-1136.webp 1136w, images/editor-mocha.webp 1600w"
-                sizes="(min-width: 1216px) 360px, (min-width: 961px) 31vw, 100vw"
                 width="1600"
                 height="1000"
                 loading="lazy"
@@ -1318,11 +1297,7 @@
           .forEach(function (image) {
             function open() {
               // currentSrc is the source the page shows, so the dark theme gets the dark screenshot.
-              // It may be the copy at the size the page shows, so swap in the full capture.
-              zoomImage.src = (image.currentSrc || image.src).replace(
-                /-1136\.webp$/,
-                ".webp",
-              );
+              zoomImage.src = image.currentSrc || image.src;
               zoomImage.alt = image.alt;
               zoom.showModal();
             }
