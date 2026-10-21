@@ -31,3 +31,38 @@ palette.
 
 Turn on **Follow System Appearance** to switch between a light and a dark theme
 of your choice along with the system.
+
+### Custom themes
+
+Blanco reads theme files from the `themes` folder in its config folder:
+
+| System | Folder |
+| --- | --- |
+| Linux | `~/.config/blanco/themes` |
+| macOS | `~/Library/Application Support/blanco/themes` |
+| Windows | `%APPDATA%\blanco\themes` |
+
+**Open Themes Folder** in the command palette creates the folder and opens it.
+
+The easiest way to make a theme is to start from one of
+[Blanco's own themes](https://github.com/zanmato/blanco/tree/main/crates/blanco/assets/themes):
+
+1. Download
+   [`catppuccin.json`](https://github.com/zanmato/blanco/blob/main/crates/blanco/assets/themes/catppuccin.json)
+   and save it in the themes folder under a name of your own, such as
+   `my-theme.json`.
+2. A file holds a set of themes. Change the set's `name`, keep the themes you
+   want to build on and give each of them a new `name`. Its `mode` says whether
+   it is a `light` or a `dark` theme.
+3. Change the colors. `colors` covers the interface and `highlight` the syntax
+   colors of the editor. The `$schema` line at the top lets an editor such as
+   VS Code complete and check the keys as you type.
+4. Restart Blanco. Your themes are listed on the Appearance page and in the
+   command palette next to the built in ones.
+
+A theme with the same name as a built in one replaces it, so you can also
+adjust a single Catppuccin flavour by keeping its name.
+
+Keys Blanco doesn't know are ignored. When a file has any, or can't be read at
+all, a notification names them when Blanco starts, which usually points to a
+misspelt color name.
