@@ -60,14 +60,6 @@ jobs:
           libvulkan1 \
           libsqlite3-dev
 
-    # The generated parser.c of both grammars is gitignored, so it is produced
-    # here with the same CLI contributors use locally.
-    - name: Generate tree-sitter parsers
-      shell: bash
-      run: |
-        npm install -g tree-sitter-cli@0.24.7
-        ./scripts/setup.sh
-
     - name: Run sccache-cache
       uses: mozilla-actions/sccache-action@v0.0.9
 

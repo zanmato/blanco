@@ -12,8 +12,10 @@ are generated from a live server in `grammar/keywords.js`; regenerate them with:
 python3 scripts/extract-redis-commands.py --host 127.0.0.1 --port 6400 --password blanco
 ```
 
-The parser (`src/parser.c`) is generated from `grammar.js` and is not committed.
-Run the workspace `scripts/setup.sh` (or `tree-sitter generate` here) to produce
-it after cloning.
+The parser is generated from `grammar.js` and committed Brotli-compressed
+(`src/parser.c.br`, `src/node-types.json.br`), which `bindings/rust/build.rs`
+inflates, so building needs neither the tree-sitter CLI nor Node. After changing
+the grammar, regenerate it with `scripts/generate-parser.sh` (needs Node). It
+runs tree-sitter-cli 0.26.3, the release the polyglot SQL grammars use.
 
 [tree-sitter]: https://tree-sitter.github.io/

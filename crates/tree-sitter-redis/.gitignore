@@ -1,7 +1,6 @@
-# Generated parser. Produced locally by `scripts/setup.sh` (tree-sitter
-# generate) from grammar.js, never committed.
+# Generated parser. scripts/generate-parser.sh commits it Brotli-compressed
+# (src/*.br), which build.rs inflates.
 /src/parser.c
-/src/tree_sitter/
 /src/grammar.json
 /src/node-types.json
 

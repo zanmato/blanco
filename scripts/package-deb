@@ -59,10 +59,8 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Build the application. The tree-sitter grammars must be generated first.
 echo "Building Blanco for ${RUST_TARGET}..."
 cd "${PROJECT_ROOT}"
-./scripts/setup.sh
 
 cargo build --release --target "${RUST_TARGET}" --package blanco
 

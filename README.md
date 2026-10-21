@@ -47,12 +47,10 @@ opening it. The Homebrew cask does this for you.
 
 ## Building
 
-Requirements: a recent stable Rust toolchain and the tree-sitter CLI
-(`cargo install tree-sitter-cli`). On Linux you also need the usual GPUI build
-dependencies (X11/Wayland, Vulkan, fontconfig).
+Requirements: a recent stable Rust toolchain. On Linux you also need the usual
+GPUI build dependencies (X11/Wayland, Vulkan, fontconfig).
 
 ```bash
-./scripts/setup.sh        # generate the Redis grammar's parser
 cargo run --release -p blanco
 ```
 
