@@ -1,0 +1,9 @@
+# Silence C compiler warnings from the vendored grammars, whose parser.c and
+# scanner.c are generated, so they stay out of build and clippy output.
+[env]
+CFLAGS = "-w"
+
+# DuckDB's bundled C++ takes gigabytes per compiler process, and cc starts one
+# per Cargo job. The wrapper runs at most BLANCO_CXX_JOBS (default 4) at once.
+CXX_x86_64_unknown_linux_gnu = { value = "scripts/cxx-limited", relative = true }
+CXX_aarch64_unknown_linux_gnu = { value = "scripts/cxx-limited", relative = true }

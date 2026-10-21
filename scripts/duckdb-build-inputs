@@ -1,0 +1,99 @@
+#!/usr/bin/env python3
+"""Check that every cargo command building DuckDB compiles its build script
+from the same crates, features and profiles, so they share one build of
+DuckDB's C++.
+
+A package built on its own (`cargo test -p database`) turns on fewer features
+of the crates the build script uses than a workspace build does. Cargo then
+gives the build script a new hash and compiles all of DuckDB again. The
+`[build-dependencies]` of crates/duckdb/Cargo.toml turn the missing features
+on. When this script reports missing features, add them there. A profile
+difference means `[profile.dev.build-override]` in the workspace Cargo.toml
+no longer pins it.
+
+Needs a nightly toolchain for `--unit-graph` (`rustup toolchain install
+nightly`). Stdlib only.
+"""
+
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+
+# Every member that pulls in DuckDB, built alone and with its tests.
+PACKAGES = ["blanco", "blanco-duckdb", "database", "app-database", "scripting"]
+
+
+def build_script_inputs(args):
+    """The crates DuckDB's build script is compiled from, each target with its
+    features and profile."""
+    result = subprocess.run(
+        ["cargo", "+nightly", *args, "--unit-graph", "-Z", "unstable-options"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        sys.exit(f"cargo {' '.join(args)} failed:\n{result.stderr}")
+    units = json.loads(result.stdout)["units"]
+    pending = [
+        index
+        for index, unit in enumerate(units)
+        if "libduckdb-sys" in unit["pkg_id"]
+        and unit["target"]["kind"] == ["custom-build"]
+        and unit["mode"] == "build"
+    ]
+    seen = set()
+    while pending:
+        index = pending.pop()
+        if index in seen:
+            continue
+        seen.add(index)
+        pending.extend(dependency["index"] for dependency in units[index]["dependencies"])
+    inputs = {}
+    for index in seen:
+        unit = units[index]
+        crate = f"{unit['pkg_id'].split('#')[-1]} {unit['target']['name']}"
+        # Cargo leaves the profile's name out of its hashes, and `cargo test`
+        # names the same settings "test" where `cargo check` says "dev".
+        settings = {key: value for key, value in unit["profile"].items() if key != "name"}
+        profile = json.dumps(settings, sort_keys=True)
+        inputs[crate] = set(unit["features"]) | {f"profile {profile}"}
+    return inputs
+
+
+def main():
+    reference_args = ["test", "--workspace", "--no-run"]
+    reference = build_script_inputs(reference_args)
+    shapes = [["check", "--workspace"]]
+    for package in PACKAGES:
+        shapes.append(["check", "-p", package])
+        shapes.append(["test", "-p", package, "--no-run"])
+
+    differences = 0
+    for args in shapes:
+        inputs = build_script_inputs(args)
+        for crate in sorted(set(reference) | set(inputs)):
+            missing = reference.get(crate, set()) - inputs.get(crate, set())
+            extra = inputs.get(crate, set()) - reference.get(crate, set())
+            if crate not in inputs or crate not in reference or missing or extra:
+                differences += 1
+                print(f"cargo {' '.join(args)}: {crate}", end="")
+                if missing:
+                    print(f" lacks {', '.join(sorted(missing))}", end="")
+                if extra:
+                    print(f" adds {', '.join(sorted(extra))}", end="")
+                if crate not in inputs:
+                    print(" is not built", end="")
+                if crate not in reference:
+                    print(f" is not built by cargo {' '.join(reference_args)}", end="")
+                print()
+    if differences:
+        sys.exit(1)
+    print(f"All {len(shapes) + 1} commands share one DuckDB build.")
+
+
+if __name__ == "__main__":
+    main()

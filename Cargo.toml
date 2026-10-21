@@ -142,6 +142,13 @@ print_stderr = "warn"
 large_enum_variant = "warn"
 redundant_clone = "warn"
 
+# Cargo gives a build script's dependencies debug info only when the same
+# crate is also a normal dependency of the packages being built, so building
+# one package (`cargo test -p database`) changed DuckDB's build script hash and
+# compiled its C++ again. Setting it outright keeps every command on one build.
+[profile.dev.build-override]
+debug = false
+
 [profile.release]
 opt-level = 3
 

@@ -18,6 +18,21 @@ duckdb = { version = "~1.10506.0", features = ["bundled"] }
 tracing = { workspace = true }
 tokio = { version = "1", features = ["rt"] }
 
+# Not used by a build script. They give the crates libduckdb-sys's build
+# script is compiled from the features the whole workspace turns on, so
+# building one package (`cargo test -p database`) reuses the DuckDB build of
+# a workspace build instead of compiling its C++ again. Keep this list in step
+# with what `scripts/duckdb-build-inputs` reports.
+[build-dependencies]
+bitflags = { version = "2", features = ["serde", "std"] }
+getrandom = { version = "0.2", features = ["std"] }
+once_cell = "1"
+proc-macro2 = { version = "1", features = ["span-locations"] }
+serde = { version = "1", features = ["alloc", "derive", "rc"] }
+serde_core = "1"
+serde_json = { version = "1", features = ["preserve_order", "raw_value"] }
+syn = { version = "2", features = ["extra-traits", "fold", "full", "visit", "visit-mut"] }
+
 [dev-dependencies]
 serde_json = { workspace = true }
 tempfile = "3.8"

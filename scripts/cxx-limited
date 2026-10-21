@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# The C++ compiler for Linux builds, run at most BLANCO_CXX_JOBS (default 4)
+# at a time. The cc crate starts one compiler per Cargo job, and DuckDB's
+# bundled sources take gigabytes of memory each, so a build on a machine with
+# many cores runs out of memory. Each compile waits for a free slot, a lock
+# file that is released when the compiler exits.
+jobs="${BLANCO_CXX_JOBS:-4}"
+compiler="${BLANCO_CXX:-c++}"
+lock_dir="${TMPDIR:-/tmp}/blanco-cxx-slots-$(id -u)"
+mkdir -p "$lock_dir"
+
+while true; do
+    for slot in $(seq 1 "$jobs"); do
+        exec {lock}>"$lock_dir/$slot"
+        if flock --nonblock "$lock"; then
+            "$compiler" "$@"
+            exit $?
+        fi
+        exec {lock}>&-
+    done
+    sleep 0.2
+done

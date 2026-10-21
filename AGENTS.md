@@ -113,7 +113,18 @@ do the same, or it will use previews.
 second component encodes the DuckDB release). It is bundled because neither
 Windows nor Debian has a system libduckdb and the self updater replaces only
 the executable. The first clean build compiles DuckDB's C++ for several
-minutes. duckdb-rs is synchronous, so every call runs in `spawn_blocking`.
+minutes. Each compiler process takes gigabytes and cc starts one per Cargo
+job, so on Linux `.cargo/config.toml` points `CXX` at `scripts/cxx-limited`,
+which runs at most `BLANCO_CXX_JOBS` (default 4) at once. A package built
+on its own (`cargo test -p database`) would turn on fewer features of the
+crates libduckdb-sys's build script is compiled from, and Cargo would build
+DuckDB again for it. The `[build-dependencies]` of `crates/duckdb/Cargo.toml`
+pin those features to the workspace's. Cargo would also give the build
+script's dependencies debug info only when the same crates are normal
+dependencies of the command's packages, so `[profile.dev.build-override]`
+sets `debug = false` outright. `scripts/duckdb-build-inputs`
+(nightly, for `--unit-graph`) reports any command that drifts after a
+dependency change. duckdb-rs is synchronous, so every call runs in `spawn_blocking`.
 
 A process may open a DuckDB file once, so connections to one file share an
 instance from `OPEN_DATABASES` and take their own DuckDB connection from it.
