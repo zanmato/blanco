@@ -9939,7 +9939,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-sql-polyglot"
 version = "0.1.2"
-source = "git+https://github.com/zanmato/Tree-sitter-sql-polyglot?branch=blanco-dialect-coverage#4b453924e98fd1209dc75c75f8a12d5b8417580c"
+source = "git+https://github.com/zanmato/Tree-sitter-sql-polyglot?branch=blanco-dialect-coverage#a3e730bab56656f2ce24e2fae952cddf6b6699e8"
 dependencies = [
  "brotli",
  "cc",

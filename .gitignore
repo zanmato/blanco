@@ -5,3 +5,6 @@
 /_site
 /docs/book
 update-signing/
+
+# nix build output links
+/result*

@@ -35,6 +35,9 @@ Prebuilt binaries for Linux (x86_64, plus a `.deb`), macOS (Apple silicon) and
 Windows (x86_64) are attached to each
 [release](https://github.com/zanmato/blanco/releases).
 
+On Linux with Nix, `nix run github:zanmato/blanco` builds and starts it. See
+[Installing](docs/src/install.md) for the flake's overlay.
+
 On macOS you can install it with [Homebrew](https://brew.sh):
 
 ```bash
@@ -48,7 +51,8 @@ opening it. The Homebrew cask does this for you.
 ## Building
 
 Requirements: a recent stable Rust toolchain. On Linux you also need the usual
-GPUI build dependencies (X11/Wayland, Vulkan, fontconfig).
+GPUI build dependencies (X11/Wayland, Vulkan, fontconfig), or `nix develop` for
+a shell that has them.
 
 ```bash
 cargo run --release -p blanco

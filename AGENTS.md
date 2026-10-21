@@ -396,6 +396,26 @@ workflow makes with the `MINISIGN_SECRET_KEY` secret (`scripts/generate-update-k
 `release_asset()` must name the assets exactly as `build-and-package.yml` uploads them,
 so change both together. Tests build `BlancoApp` without the global, hence `try_global`.
 
+## Nix
+
+`flake.nix` builds Blanco from source with crane (`nix/package.nix`) for
+x86_64 and aarch64 Linux, and offers it as an overlay and a dev shell. The
+package's source is a fileset of `Cargo.toml`, `Cargo.lock`, `.cargo`,
+`crates` and `scripts/cxx-limited`, so a build input outside those must be
+added there. `.cargo/config.toml`'s relative `CXX` does not survive crane's
+dependency build, so the package sets `CXX_<target>` to a wrapper that runs
+`scripts/cxx-limited` from the store. GPUI loads Vulkan, Wayland, xkbcommon
+and the X11 libraries with dlopen, so they reach the binary as an rpath
+(`runtimeLibraries`) rather than a wrapper's `LD_LIBRARY_PATH`, which the
+shell in Blanco's terminal would inherit. A new library loaded that way belongs in that list.
+`dontPatchELF` keeps the fixup's `--shrink-rpath` from dropping them again.
+`scripts/nix-docker` runs any Nix command against the checkout in the
+`nixos/nix` container, with the store in a volume, for testing on a machine
+without Nix (`scripts/nix-docker nix build -L .#blanco`), and
+`scripts/nix-docker bash scripts/nix-smoke` starts the package under Xvfb with
+Mesa's software Vulkan driver and saves a screenshot. The flake sees only
+files git tracks. A prebuilt package fed from the release assets is planned.
+
 ## Architecture
 
 ### File Structure
