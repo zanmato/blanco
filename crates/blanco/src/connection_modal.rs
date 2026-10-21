@@ -35,6 +35,7 @@ pub struct NewConnectionModal {
     environment_type_select: Entity<SelectState<Vec<String>>>,
     read_only: bool,
     only_configured_database: bool,
+    open_default_schema: bool,
     advanced_expanded: bool,
     /// Minutes of inactivity before the connection is closed. Empty follows
     /// the global setting.
@@ -121,6 +122,7 @@ impl NewConnectionModal {
         let read_only = conn_ref.is_some_and(|connection| connection.read_only);
         let only_configured_database =
             conn_ref.is_some_and(|connection| connection.only_configured_database);
+        let open_default_schema = conn_ref.is_none_or(|connection| connection.open_default_schema);
         let idle_timeout_minutes = conn_ref.and_then(|connection| connection.idle_timeout_minutes);
         let global_idle_minutes = crate::app_settings::AppSettings::global(cx)
             .settings
@@ -159,6 +161,7 @@ impl NewConnectionModal {
             environment_type_select,
             read_only,
             only_configured_database,
+            open_default_schema,
             // Open on a connection that already overrides a default.
             advanced_expanded: idle_timeout_minutes.is_some(),
             idle_timeout_input,
@@ -255,6 +258,7 @@ impl NewConnectionModal {
         connection.idle_timeout_minutes = self.idle_timeout_minutes(cx).ok().flatten();
         connection.only_configured_database =
             self.only_configured_database && connection.db_type.dialect().lists_server_databases();
+        connection.open_default_schema = self.open_default_schema;
         Some(connection)
     }
 
@@ -707,6 +711,23 @@ impl Render for NewConnectionModal {
                                 .label("Only show the database entered below")
                                 .on_click(cx.listener(|modal, checked, _window, cx| {
                                     modal.only_configured_database = *checked;
+                                    cx.notify();
+                                })),
+                        )
+                    },
+                )
+                .when(
+                    database::DatabaseType::from(connector_type.clone())
+                        .dialect()
+                        .current_namespace_query()
+                        .is_some(),
+                    |this| {
+                        this.child(
+                            Switch::new("connection-open-default-schema-switch")
+                                .checked(self.open_default_schema)
+                                .label("Open the default database and schema on connect")
+                                .on_click(cx.listener(|modal, checked, _window, cx| {
+                                    modal.open_default_schema = *checked;
                                     cx.notify();
                                 })),
                         )

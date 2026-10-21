@@ -5,6 +5,7 @@ mod tree_builder;
 
 pub use reveal::RevealTarget;
 
+use data_loading::ConnectionLoad;
 pub use data_loading::DatabaseMetadata;
 pub use delegate::ConnectionsTreeDelegate;
 
@@ -600,7 +601,7 @@ impl ConnectionsPanel {
                         tracing::debug!("Loading connection {} for first time", connection_id);
                         // Set loading state before starting async operation
                         self.set_item_loading(item_id, true, cx);
-                        self.load_connection_children(connection_id, true, cx);
+                        self.load_connection_children(connection_id, ConnectionLoad::Open, cx);
                     }
                 }
                 TreeItemKind::Database => {
@@ -699,7 +700,7 @@ impl ConnectionsPanel {
     ) {
         if !self.loaded_connections.contains(&connection_id) {
             self.set_item_loading(&format!("connection:{}", connection_id), true, cx);
-            self.load_connection_children(connection_id, true, cx);
+            self.load_connection_children(connection_id, ConnectionLoad::Open, cx);
         } else if !self.expanded_connections.contains(&connection_id) {
             self.expanded_connections.insert(connection_id);
             self.update_tree_items(cx);
@@ -968,7 +969,7 @@ impl ConnectionsPanel {
         self.update_tree_items(cx);
         cx.notify();
 
-        self.load_connection_children(connection_id, true, cx);
+        self.load_connection_children(connection_id, ConnectionLoad::Expand, cx);
     }
 
     /// Disconnect and remove a connection
@@ -1057,7 +1058,7 @@ impl ConnectionsPanel {
             // database that wasn't connected before, so refresh live status.
             self.update_tree_items(cx);
         } else {
-            self.load_connection_children(connection_id, false, cx);
+            self.load_connection_children(connection_id, ConnectionLoad::Background, cx);
         }
         cx.notify();
     }

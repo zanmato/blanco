@@ -60,10 +60,22 @@ struct ExportedConnection {
     read_only: bool,
     #[serde(default)]
     only_configured_database: bool,
+    /// Written only when off, since files from before the setting existed
+    /// should open the default schema like a new connection does.
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    open_default_schema: bool,
     /// Which secrets are asked for when the connection opens instead of
     /// stored, by `SecretKind::key`. The setting, never a secret itself.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     ask_on_connect: Vec<String>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn is_true(value: &bool) -> bool {
+    *value
 }
 
 impl From<&ConnectionData> for ExportedConnection {
@@ -89,6 +101,7 @@ impl From<&ConnectionData> for ExportedConnection {
             trust_server_certificate: connection.trust_server_certificate,
             read_only: connection.read_only,
             only_configured_database: connection.only_configured_database,
+            open_default_schema: connection.open_default_schema,
             ask_on_connect: connection
                 .ask_secrets
                 .iter()
@@ -130,6 +143,7 @@ impl ExportedConnection {
         connection.trust_server_certificate = self.trust_server_certificate;
         connection.read_only = self.read_only;
         connection.only_configured_database = self.only_configured_database;
+        connection.open_default_schema = self.open_default_schema;
         // A name this build does not know is skipped rather than refused.
         connection.ask_secrets = self
             .ask_on_connect
@@ -257,6 +271,7 @@ mod tests {
         prod.id = Some(4);
         prod.environment_type = EnvironmentType::PROD;
         prod.read_only = true;
+        prod.open_default_schema = false;
 
         let document = export_connections(&[prod.clone()]);
         assert!(!document.contains("secret"), "{document}");
@@ -274,6 +289,10 @@ mod tests {
             Some("~/.ssh/id_ed25519")
         );
         assert!(same_settings(imported, &prod));
+
+        // A file without the setting opens the default schema.
+        let older = document.replace("\"open_default_schema\"", "\"unknown_field\"");
+        assert!(parse_connections(&older).unwrap()[0].open_default_schema);
     }
 
     #[test]

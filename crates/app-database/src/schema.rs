@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 /// Schema version stored in SQLite's `PRAGMA user_version`. Bump it and append
 /// a step to [`MIGRATIONS`] for every schema change.
-pub const SCHEMA_VERSION: i64 = 10;
+pub const SCHEMA_VERSION: i64 = 11;
 
 /// The complete schema for a fresh database, at [`SCHEMA_VERSION`]. Keep it in
 /// sync with the migrations: a database created from this must be identical
@@ -37,7 +37,8 @@ const BASELINE: &[&str] = &[
         only_configured_database INTEGER NOT NULL DEFAULT 0,
         idle_timeout_minutes INTEGER,
         ask_secrets TEXT,
-        ssh_jump_hosts TEXT
+        ssh_jump_hosts TEXT,
+        open_default_schema INTEGER NOT NULL DEFAULT 1
     )
     "#,
     r#"
@@ -144,6 +145,7 @@ const MIGRATIONS: &[Migration] = &[
     |pool| Box::pin(migrate_v7_to_v8(pool)),
     |pool| Box::pin(migrate_v8_to_v9(pool)),
     |pool| Box::pin(migrate_v9_to_v10(pool)),
+    |pool| Box::pin(migrate_v10_to_v11(pool)),
 ];
 
 /// Columns that may be missing from an unversioned database, per table, in the
@@ -311,6 +313,15 @@ async fn migrate_v9_to_v10(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         .execute(&mut *transaction)
         .await?;
     transaction.commit().await
+}
+
+async fn migrate_v10_to_v11(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "ALTER TABLE connections ADD COLUMN open_default_schema INTEGER NOT NULL DEFAULT 1",
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 async fn existing_columns(pool: &SqlitePool, table: &str) -> Result<Vec<String>, sqlx::Error> {

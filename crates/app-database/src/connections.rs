@@ -50,7 +50,8 @@ impl AppDatabase {
                         ssh_private_key_path = ?,
                         ssl_mode = ?, ssl_key_path = ?, ssl_cert_path = ?, ssl_ca_cert_path = ?,
                         trust_server_certificate = ?, read_only = ?,
-                        only_configured_database = ?, idle_timeout_minutes = ?, ask_secrets = ?, ssh_jump_hosts = ?
+                        only_configured_database = ?, idle_timeout_minutes = ?, ask_secrets = ?, ssh_jump_hosts = ?,
+                        open_default_schema = ?
                     WHERE id = ?
                     "#,
                 )
@@ -78,6 +79,7 @@ impl AppDatabase {
                 .bind(conn.idle_timeout_minutes.map(i64::from))
                 .bind(ask_secrets_column(&conn.ask_secrets))
                 .bind(&conn.ssh_jump_hosts)
+                .bind(if conn.open_default_schema { 1 } else { 0 })
                 .bind(id)
                 .execute(&pool)
                 .await?;
@@ -86,8 +88,8 @@ impl AppDatabase {
                 // Insert new connection
                 let result = sqlx::query(
                     r#"
-                    INSERT INTO connections (name, db_type, host, port, database_name, username, database_path, last_used_at, created_at, is_active, environment_type, ssh_host, ssh_port, ssh_user, ssh_private_key_path, ssl_mode, ssl_key_path, ssl_cert_path, ssl_ca_cert_path, trust_server_certificate, read_only, only_configured_database, idle_timeout_minutes, ask_secrets, ssh_jump_hosts)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO connections (name, db_type, host, port, database_name, username, database_path, last_used_at, created_at, is_active, environment_type, ssh_host, ssh_port, ssh_user, ssh_private_key_path, ssl_mode, ssl_key_path, ssl_cert_path, ssl_ca_cert_path, trust_server_certificate, read_only, only_configured_database, idle_timeout_minutes, ask_secrets, ssh_jump_hosts, open_default_schema)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     "#,
                 )
                 .bind(&conn.name)
@@ -115,6 +117,7 @@ impl AppDatabase {
                 .bind(conn.idle_timeout_minutes.map(i64::from))
                 .bind(ask_secrets_column(&conn.ask_secrets))
                 .bind(&conn.ssh_jump_hosts)
+                .bind(if conn.open_default_schema { 1 } else { 0 })
                 .execute(&pool)
                 .await?;
 
@@ -131,7 +134,7 @@ impl AppDatabase {
             .run(async move {
             let rows = sqlx::query(
                 r#"
-                SELECT id, name, db_type, host, port, database_name, username, database_path, last_used_at, is_active, environment_type, ssh_host, ssh_port, ssh_user, ssh_private_key_path, ssl_mode, ssl_key_path, ssl_cert_path, ssl_ca_cert_path, trust_server_certificate, read_only, only_configured_database, idle_timeout_minutes, ask_secrets, ssh_jump_hosts
+                SELECT id, name, db_type, host, port, database_name, username, database_path, last_used_at, is_active, environment_type, ssh_host, ssh_port, ssh_user, ssh_private_key_path, ssl_mode, ssl_key_path, ssl_cert_path, ssl_ca_cert_path, trust_server_certificate, read_only, only_configured_database, idle_timeout_minutes, ask_secrets, ssh_jump_hosts, open_default_schema
                 FROM connections
                 ORDER BY name
                 "#,
@@ -183,6 +186,7 @@ impl AppDatabase {
                             .get::<Option<i64>, _>("idle_timeout_minutes")
                             .and_then(|minutes| u32::try_from(minutes).ok()),
                         ask_secrets: parse_ask_secrets(row.get("ask_secrets")),
+                        open_default_schema: row.get::<i64, _>("open_default_schema") != 0,
                     }
                 })
                 .collect();

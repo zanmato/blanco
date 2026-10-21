@@ -1,10 +1,10 @@
 //! Opening the tree down to an object and selecting it, so the sidebar can
-//! follow the active tab.
+//! follow the active tab, or down to a schema when a connection is opened.
 
 use gpui::{Context, ScrollStrategy};
 
 use super::ConnectionsPanel;
-use super::data_loading::DatabaseItemType;
+use super::data_loading::{ConnectionLoad, DatabaseItemType};
 use super::tree_builder::category_slug;
 
 /// A table, view or routine to select in the tree.
@@ -17,10 +17,34 @@ pub struct RevealTarget {
     pub name: String,
 }
 
+/// A database, and a schema in it when there is one, to open in the tree
+/// without selecting anything.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct NamespaceTarget {
+    pub connection_id: i64,
+    pub database_name: String,
+    pub schema_name: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+enum RevealGoal {
+    Object(RevealTarget),
+    Namespace(NamespaceTarget),
+}
+
+impl RevealGoal {
+    fn connection_id(&self) -> i64 {
+        match self {
+            RevealGoal::Object(target) => target.connection_id,
+            RevealGoal::Namespace(target) => target.connection_id,
+        }
+    }
+}
+
 /// A reveal waiting on the tree to load a level.
 #[derive(Debug, Clone)]
 pub(super) struct PendingReveal {
-    target: RevealTarget,
+    goal: RevealGoal,
     /// The level whose load was requested last. A reveal that needs the same
     /// load again once it has landed gives up, so a failing load cannot loop.
     requested_load: Option<String>,
@@ -47,7 +71,22 @@ impl ConnectionsPanel {
     /// An object the tree does not have is left alone.
     pub fn reveal(&mut self, target: RevealTarget, cx: &mut Context<Self>) {
         self.pending_reveal = Some(PendingReveal {
-            target,
+            goal: RevealGoal::Object(target),
+            requested_load: None,
+            load_landed: false,
+        });
+        self.advance_reveal(cx);
+    }
+
+    /// Open the database and schema of `target`, loading them first, the way
+    /// a reveal opens the parents of an object. An object reveal already on
+    /// its way wins, since it opens its own schema and selects something.
+    pub(super) fn open_namespace(&mut self, target: NamespaceTarget, cx: &mut Context<Self>) {
+        if self.pending_reveal.is_some() {
+            return;
+        }
+        self.pending_reveal = Some(PendingReveal {
+            goal: RevealGoal::Namespace(target),
             requested_load: None,
             load_landed: false,
         });
@@ -59,8 +98,7 @@ impl ConnectionsPanel {
         let Some(pending) = self.pending_reveal.clone() else {
             return;
         };
-        let target = &pending.target;
-        let connection_id = target.connection_id;
+        let connection_id = pending.goal.connection_id();
 
         if !self
             .connections
@@ -77,11 +115,34 @@ impl ConnectionsPanel {
             let item_id = format!("connection:{connection_id}");
             if self.request_reveal_load(&item_id) {
                 self.set_item_loading(&item_id, true, cx);
-                self.load_connection_children(connection_id, true, cx);
+                self.load_connection_children(connection_id, ConnectionLoad::Expand, cx);
             }
             return;
         }
         self.expanded_connections.insert(connection_id);
+
+        let target = match &pending.goal {
+            RevealGoal::Object(target) => target,
+            RevealGoal::Namespace(target) => {
+                match self.open_levels(
+                    connection_id,
+                    &target.database_name,
+                    target.schema_name.as_deref(),
+                ) {
+                    Err(Some(load)) => {
+                        if self.request_reveal_load(&load.key()) {
+                            load.start(self, cx);
+                        }
+                    }
+                    Ok(()) | Err(None) => {
+                        self.pending_reveal = None;
+                        self.rebuild_tree(cx);
+                        cx.notify();
+                    }
+                }
+                return;
+            }
+        };
 
         let located = match self.locate(target) {
             Ok(located) => located,
@@ -143,12 +204,57 @@ impl ConnectionsPanel {
         }
     }
 
+    /// Expand a database and, when given, a schema in it. `Err(Some(load))`
+    /// names the level to load first, `Err(None)` means one is not there; a
+    /// missing schema leaves its database expanded.
+    fn open_levels(
+        &mut self,
+        connection_id: i64,
+        database_name: &str,
+        schema_name: Option<&str>,
+    ) -> Result<(), Option<RevealLoad>> {
+        let metadata = self.database_metadata.get_mut(&connection_id).ok_or(None)?;
+        if !metadata.supports_schemas {
+            return Err(None);
+        }
+        let database = metadata
+            .databases
+            .iter_mut()
+            .find(|database| database.name == database_name)
+            .ok_or(None)?;
+        if database.schemas.is_empty() {
+            return Err(Some(RevealLoad::Database {
+                connection_id,
+                database_name: database.name.clone(),
+            }));
+        }
+        database.is_expanded = true;
+
+        let Some(schema_name) = schema_name else {
+            return Ok(());
+        };
+        let schema = database
+            .schemas
+            .iter_mut()
+            .find(|schema| schema.name == schema_name)
+            .ok_or(None)?;
+        if schema.tables.is_empty() {
+            return Err(Some(RevealLoad::Schema {
+                connection_id,
+                database_name: database.name.clone(),
+                schema_name: schema.name.clone(),
+            }));
+        }
+        schema.is_expanded = true;
+        Ok(())
+    }
+
     /// Find the target in the loaded tree, expanding its database and schema
     /// on the way. `Err(Some(load))` names the level to load first,
     /// `Err(None)` means the object is not there.
     fn locate(&mut self, target: &RevealTarget) -> Result<Located, Option<RevealLoad>> {
         let connection_id = target.connection_id;
-        let metadata = self.database_metadata.get_mut(&connection_id).ok_or(None)?;
+        let metadata = self.database_metadata.get(&connection_id).ok_or(None)?;
 
         if !metadata.supports_schemas {
             // Objects of every schema are merged under the connection; prefer
@@ -172,33 +278,23 @@ impl ConnectionsPanel {
             });
         }
 
-        let database = metadata
-            .databases
-            .iter_mut()
-            .find(|database| database.name == target.database_name)
-            .ok_or(None)?;
-        if database.schemas.is_empty() {
-            return Err(Some(RevealLoad::Database {
-                connection_id,
-                database_name: database.name.clone(),
-            }));
-        }
-        database.is_expanded = true;
-
         let schema_name = target.schema_name.as_deref().unwrap_or("public");
-        let schema = database
-            .schemas
-            .iter_mut()
-            .find(|schema| schema.name == schema_name)
+        self.open_levels(connection_id, &target.database_name, Some(schema_name))?;
+        let (database, schema) = self
+            .database_metadata
+            .get(&connection_id)
+            .and_then(|metadata| {
+                let database = metadata
+                    .databases
+                    .iter()
+                    .find(|database| database.name == target.database_name)?;
+                let schema = database
+                    .schemas
+                    .iter()
+                    .find(|schema| schema.name == schema_name)?;
+                Some((database, schema))
+            })
             .ok_or(None)?;
-        if schema.tables.is_empty() {
-            return Err(Some(RevealLoad::Schema {
-                connection_id,
-                database_name: database.name.clone(),
-                schema_name: schema.name.clone(),
-            }));
-        }
-        schema.is_expanded = true;
 
         let table = schema
             .tables
@@ -378,6 +474,102 @@ mod tests {
             Some(format!("table:{connection_id}:main:recent"))
         );
     }
+    /// Opening a PostgreSQL or CockroachDB connection opens its database and
+    /// the schema a session lands in, and a connection that turns it off
+    /// stays closed, against the compose servers. Skipped when they are down,
+    /// unless `BLANCO_RUN_DB_TESTS=1`.
+    #[gpui::test]
+    async fn opening_a_connection_opens_its_default_schema(cx: &mut TestAppContext) {
+        use crate::test_harness::LiveServer;
+        use database::DatabaseType;
+
+        let harness = TestHarness::new(cx);
+        let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+        let panel = cx.update(|window, cx| cx.new(|cx| ConnectionsPanel::new(window, cx)));
+        for _ in 0..100 {
+            cx.run_until_parked();
+            if panel.read_with(&cx, |panel, _| panel.initial_load_completed) {
+                break;
+            }
+            cx.executor()
+                .timer(std::time::Duration::from_millis(20))
+                .await;
+        }
+
+        for (db_type, port, config_id) in [
+            (DatabaseType::PostgreSQL, 5488, 9802),
+            (DatabaseType::CockroachDb, 26258, 9803),
+        ] {
+            let Some(server) = LiveServer::connect(
+                (db_type, port),
+                config_id,
+                "CREATE TABLE IF NOT EXISTS public.blanco_open_default (id int)",
+                &mut cx,
+            ) else {
+                continue;
+            };
+            let connection_id = server.config_id;
+            let expansion = |panel: &ConnectionsPanel| {
+                let database = panel
+                    .database_metadata
+                    .get(&connection_id)?
+                    .databases
+                    .iter()
+                    .find(|database| database.name == "blanco")?;
+                let public = database
+                    .schemas
+                    .iter()
+                    .find(|schema| schema.name == "public")
+                    .is_some_and(|schema| schema.is_expanded && !schema.tables.is_empty());
+                Some((database.is_expanded, public))
+            };
+
+            for (open_default_schema, expected) in [(true, (true, true)), (false, (false, false))] {
+                panel.update(&mut cx, |panel, cx| {
+                    let mut connection = app_database::ConnectionData::new_server(
+                        db_type,
+                        "it-schemas".into(),
+                        "localhost".into(),
+                        i32::from(port),
+                        "blanco".into(),
+                        "blanco".into(),
+                        String::new(),
+                    );
+                    connection.id = Some(connection_id);
+                    connection.open_default_schema = open_default_schema;
+                    panel.connections = vec![connection];
+                    panel.forget_connection(connection_id);
+                    panel.rebuild_tree(cx);
+                    panel.load_connection_children(connection_id, ConnectionLoad::Open, cx);
+                });
+                for _ in 0..200 {
+                    cx.run_until_parked();
+                    let done = panel.read_with(&cx, |panel, _| {
+                        panel.loaded_connections.contains(&connection_id)
+                            && panel.pending_reveal.is_none()
+                    });
+                    if done {
+                        break;
+                    }
+                    cx.executor()
+                        .timer(std::time::Duration::from_millis(20))
+                        .await;
+                }
+                assert_eq!(
+                    panel.read_with(&cx, |panel, _| expansion(panel)),
+                    Some(expected),
+                    "{db_type:?} with open_default_schema = {open_default_schema}"
+                );
+                assert!(
+                    panel.read_with(&cx, |panel, _| panel
+                        .expanded_connections
+                        .contains(&connection_id)),
+                    "the {db_type:?} connection is open"
+                );
+            }
+        }
+    }
+
     /// PostgreSQL types and sequences load into folders of their own under
     /// their schema, against the compose server. Skipped when it is down,
     /// unless `BLANCO_RUN_DB_TESTS=1`.

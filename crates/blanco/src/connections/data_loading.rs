@@ -7,6 +7,7 @@ use crate::result_ext::ResultExt;
 use crate::status_bar::{ActivityReporter, ActivityResult};
 
 use super::ConnectionsPanel;
+use super::reveal::NamespaceTarget;
 
 /// Populate `DatabaseTable::relative_size` for items in a single schema using
 /// linear normalization.
@@ -146,12 +147,27 @@ impl DatabaseMetadata {
     }
 }
 
+/// A connection's top level, and the database and schema to open in it.
+type LoadedConnection = (DatabaseMetadata, Option<NamespaceTarget>);
+
+/// Why a connection's children are loaded, which decides what opens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ConnectionLoad {
+    /// A query ran on the connection. The tree stays as it is.
+    Background,
+    /// Open the connection node only, as a refresh or a reveal does.
+    Expand,
+    /// The user opened the connection: open its node and, unless the
+    /// connection turns it off, the database and schema a session lands in.
+    Open,
+}
+
 impl ConnectionsPanel {
     /// Load connection children (databases for PostgreSQL, schemas for SQLite) on demand
     pub(super) fn load_connection_children(
         &mut self,
         connection_id: i64,
-        expand: bool,
+        load: ConnectionLoad,
         cx: &mut Context<Self>,
     ) {
         if self.loaded_connections.contains(&connection_id) {
@@ -170,6 +186,12 @@ impl ConnectionsPanel {
         let pinned_database = connection_data
             .and_then(|connection| connection.pinned_database())
             .map(str::to_string);
+        let namespace_query = connection_data
+            .filter(|connection| load == ConnectionLoad::Open && connection.open_default_schema)
+            .and_then(|connection| connection.db_type.dialect().current_namespace_query());
+        let configured_database = connection_data
+            .and_then(|connection| connection.database_name.clone())
+            .filter(|database| !database.is_empty());
         let activity =
             ActivityReporter::global(cx).begin(format!("{connection_label}: listing schema"));
 
@@ -181,7 +203,7 @@ impl ConnectionsPanel {
             // failure. Lazy backends like PostgreSQL only open the SSH tunnel
             // eagerly, so bad credentials don't surface from
             // `get_or_create_connection`, only from the first real query here.
-            let metadata_result: anyhow::Result<DatabaseMetadata> = async {
+            let metadata_result: anyhow::Result<LoadedConnection> = async {
                 let connection = db_service
                     .get_or_create_connection(connection_id, None)
                     .await?;
@@ -212,7 +234,20 @@ impl ConnectionsPanel {
                         databases
                     );
 
-                    Ok(DatabaseMetadata {
+                    let namespace = match namespace_query {
+                        Some(query) => current_namespace(
+                            connection.as_ref(),
+                            connection_id,
+                            configured_database.as_deref(),
+                            query,
+                        )
+                        .await
+                        .log_err()
+                        .flatten(),
+                        None => None,
+                    };
+
+                    let metadata = DatabaseMetadata {
                         _connection_id: Some(connection_id),
                         databases: databases
                             .into_iter()
@@ -227,7 +262,8 @@ impl ConnectionsPanel {
                         schemas: Vec::new(), // Not used for PostgreSQL
                         supports_schemas,
                         size_bytes: None,
-                    })
+                    };
+                    Ok((metadata, namespace))
                 } else {
                     // For SQLite: Load schemas and their tables (no databases level)
                     let schemas = connection
@@ -312,7 +348,7 @@ impl ConnectionsPanel {
                         schema_tables.push((schema_name.clone(), all_items));
                     }
 
-                    Ok(DatabaseMetadata {
+                    let metadata = DatabaseMetadata {
                         _connection_id: Some(connection_id),
                         databases: Vec::new(), // Not used for SQLite
                         schemas: schema_tables
@@ -325,13 +361,14 @@ impl ConnectionsPanel {
                             .collect(),
                         supports_schemas,
                         size_bytes: None,
-                    })
+                    };
+                    Ok((metadata, None))
                 }
             }
             .await;
 
             match metadata_result {
-                Ok(metadata) => {
+                Ok((metadata, namespace)) => {
                     // Update the panel with loaded metadata
                     this_handle
                         .update(cx, |this, cx| {
@@ -341,13 +378,16 @@ impl ConnectionsPanel {
 
                             this.database_metadata.insert(connection_id, metadata);
                             this.loaded_connections.insert(connection_id);
-                            if expand {
+                            if load != ConnectionLoad::Background {
                                 this.expanded_connections.insert(connection_id);
                             }
                             this.note_reveal_load_landed(&item_id);
 
                             // Build tree items with all loaded connections visible
                             this.update_tree_items(cx);
+                            if let Some(namespace) = namespace {
+                                this.open_namespace(namespace, cx);
+                            }
 
                             cx.notify();
                             this.load_database_sizes(connection_id, cx);
@@ -705,6 +745,37 @@ impl ConnectionsPanel {
         })
         .detach();
     }
+}
+
+/// The database and schema a new session on the connection lands in, from
+/// the dialect's `query`. The database is required, the schema optional.
+/// The query runs in the configured database, since the PostgreSQL driver
+/// takes no query without one; the others fall back to their default.
+async fn current_namespace(
+    connection: &dyn blanco_core::Connection,
+    connection_id: i64,
+    configured_database: Option<&str>,
+    query: &str,
+) -> anyhow::Result<Option<NamespaceTarget>> {
+    let result = connection
+        .execute_query(query, configured_database, None)
+        .await
+        .context("Failed to read the current database and schema")?;
+    let mut columns = result
+        .rows
+        .into_iter()
+        .next()
+        .unwrap_or_default()
+        .into_iter();
+    let Some(database_name) = columns.next().flatten().filter(|name| !name.is_empty()) else {
+        return Ok(None);
+    };
+    let schema_name = columns.next().flatten().filter(|name| !name.is_empty());
+    Ok(Some(NamespaceTarget {
+        connection_id,
+        database_name,
+        schema_name,
+    }))
 }
 
 #[cfg(test)]

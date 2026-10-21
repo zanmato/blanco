@@ -251,6 +251,24 @@ impl Dialect {
         )
     }
 
+    /// A query answering one row with the database and the schema a new
+    /// session lands in, which the sidebar opens on connect. PostgreSQL's
+    /// `current_schema()` is the first schema on the search path that exists,
+    /// or NULL when none does. `None` for backends whose tree has no database
+    /// and schema levels to open.
+    pub fn current_namespace_query(&self) -> Option<&'static str> {
+        match self.0 {
+            DatabaseType::PostgreSQL | DatabaseType::CockroachDb | DatabaseType::DuckDb => {
+                Some("SELECT current_database()::text, current_schema()::text")
+            }
+            DatabaseType::MsSql => Some("SELECT DB_NAME(), SCHEMA_NAME()"),
+            DatabaseType::MySQL
+            | DatabaseType::SQLite
+            | DatabaseType::ClickHouse
+            | DatabaseType::Redis => None,
+        }
+    }
+
     /// Whether a leaf object is inspected directly rather than queried. Key/
     /// value stores (Redis) open a key inspector, so their leaf context-menu
     /// action reads "Inspect Key"; relational tables are a starting point for a

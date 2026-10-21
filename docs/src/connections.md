@@ -10,6 +10,13 @@ it. **Save** adds it to the sidebar. Click it there to connect.
 SQLite and DuckDB connections only need a file, see
 [SQLite and DuckDB files](file-databases.md).
 
+Connecting opens the connection's database and its default schema in the
+sidebar: the first schema on the search path on PostgreSQL and CockroachDB, usually
+`public`, the user's default schema on SQL Server, usually `dbo`, and `main`
+on DuckDB. Turn off **Open the default
+database and schema on connect** in the connection's form to keep them
+closed.
+
 Right click a connection for **Edit**, **Duplicate**, **Refresh**,
 **Disconnect** and **Remove**.
 
