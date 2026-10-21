@@ -1112,14 +1112,17 @@
                   >Blanco.app</a
                 >
               </div>
-              <p>
-                The app isn't notarized yet. Clear the quarantine flag after
-                unpacking:
-              </p>
+              <p>Install it with Homebrew:</p>
               <div class="cmd">
-                <code>xattr -r -d com.apple.quarantine Blanco.app</code
+                <code>brew install --cask zanmato/tap/blanco</code
                 ><button type="button">Copy</button>
               </div>
+              <p>
+                The app isn't notarized yet, and the cask clears its quarantine
+                flag for you. After a manual download, run
+                <code>xattr -r -d com.apple.quarantine Blanco.app</code> before
+                opening it.
+              </p>
             </article>
 
             <article class="platform" data-os="windows">

@@ -5,8 +5,15 @@ macOS on Apple silicon, Windows on x86_64 and Linux on x86_64.
 
 ## macOS
 
-Download `Blanco.app`, unpack it and move it to Applications. The app isn't
-notarized yet, so clear the quarantine flag before the first start:
+Install it with [Homebrew](https://brew.sh):
+
+```sh
+brew install --cask zanmato/tap/blanco
+```
+
+The app isn't notarized yet, and the cask clears its quarantine flag for you.
+To install it by hand instead, download `Blanco.app`, unpack it, move it to
+Applications and clear the flag before the first start:
 
 ```sh
 xattr -r -d com.apple.quarantine Blanco.app
