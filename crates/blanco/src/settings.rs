@@ -24,6 +24,34 @@ pub fn apply_theme_by_name(name: &str, cx: &mut App) {
     persist_setting("appearance.theme", name.to_string(), cx);
 }
 
+/// Make the theme called `name` the one in use. With Follow System
+/// Appearance on, it becomes the light or dark theme by its own mode, so
+/// choosing it does not turn following off.
+pub fn use_theme(name: &str, cx: &mut App) {
+    let Some(is_dark) = gpui_component::ThemeRegistry::global(cx)
+        .themes()
+        .get(&SharedString::from(name.to_string()))
+        .map(|theme| theme.mode.is_dark())
+    else {
+        tracing::warn!("Unknown theme: {name}");
+        return;
+    };
+    let appearance = &mut AppSettings::global_mut(cx).settings.appearance;
+    if !appearance.follow_system {
+        apply_theme_by_name(name, cx);
+        return;
+    }
+    if is_dark {
+        appearance.dark_theme = name.to_string();
+        persist_setting("appearance.dark_theme", name.to_string(), cx);
+    } else {
+        appearance.light_theme = name.to_string();
+        persist_setting("appearance.light_theme", name.to_string(), cx);
+    }
+    follow_system_appearance(cx.window_appearance(), cx);
+    cx.refresh_windows();
+}
+
 /// Make the theme called `name` the current one, without changing settings.
 /// False when there is no such theme.
 pub fn install_theme(name: &str, cx: &mut App) -> bool {

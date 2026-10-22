@@ -103,6 +103,7 @@ pub struct SettingsView {
     ui_font_select: Option<Entity<SelectState<SearchableVec<FontOption>>>>,
     mono_font_select: Option<Entity<SelectState<SearchableVec<FontOption>>>>,
     environment_tags_editor: Option<Entity<super::environments_page::EnvironmentTagsEditor>>,
+    theme_browser: Option<Entity<vsx_themes::ThemeBrowser>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -114,6 +115,7 @@ impl SettingsView {
             ui_font_select: None,
             mono_font_select: None,
             environment_tags_editor: None,
+            theme_browser: None,
             // Re-render when the MCP server starts, stops or fails so the
             // status row stays current.
             _subscriptions: vec![cx.observe_global::<McpService>(|_, cx| cx.notify())],
@@ -1205,6 +1207,9 @@ impl SettingsView {
                     )
                     .description("Font size in pixels for the terminal pane (8-32)."),
                 ]),
+                vsx_themes::browser::setting_group(
+                    self.theme_browser.clone().expect("created before the pages"),
+                ),
             ]),
             // MCP Server Settings Page
             SettingPage::new("MCP Server").resettable(true).groups(vec![
@@ -1416,6 +1421,21 @@ impl Render for SettingsView {
         if self.environment_tags_editor.is_none() {
             self.environment_tags_editor =
                 Some(cx.new(|cx| super::environments_page::EnvironmentTagsEditor::new(window, cx)));
+        }
+        if self.theme_browser.is_none() {
+            let options = vsx_themes::ThemeBrowserOptions {
+                themes_dir: crate::custom_themes::themes_dir(),
+                convert: vsx_themes::SQL,
+                // Custom theme files load once at startup.
+                watches_themes_dir: false,
+                use_theme: Some(std::rc::Rc::new(
+                    |name: &str, _: &mut Window, cx: &mut App| {
+                        crate::settings::use_theme(name, cx);
+                    },
+                )),
+            };
+            self.theme_browser =
+                Some(cx.new(|cx| vsx_themes::ThemeBrowser::new(options, window, cx)));
         }
 
         GpuiSettings::new("blanco-settings")

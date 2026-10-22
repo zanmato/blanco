@@ -20,6 +20,7 @@ members = [
     "crates/transformers",
     "crates/terminal",
     "crates/clipboard",
+    "crates/vsx-themes",
 ]
 
 [workspace.package]

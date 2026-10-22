@@ -495,6 +495,15 @@ deserializes each file into `ThemeSet` to catch drift. `catppuccin.json` is
 generated, not hand-edited: change the role mapping in
 `scripts/generate-catppuccin-theme.py` and re-run it.
 
+`tokyo-night.json` is converted from the VS Code theme by
+`cargo run -p vsx-themes --example convert -- --open-vsx enkia.tokyo-night --sql`
+(or a clone of its repository in place of `--open-vsx`). Each third-party theme
+keeps its license beside it as `<theme>.LICENSE.txt`, which is not embedded.
+`embedded_themes_are_registered_and_parse` also fails on keys `custom_themes::unknown_keys`
+reports: gpui-component flattens the status colors (`error`, `error.background`, ...)
+directly into `highlight`, and a nested `status` object, `chart_bullish` or
+`tiles.background` were all silently ignored in the past.
+
 Users add theme files to `<config dir>/blanco/themes` (`custom_themes::themes_dir`).
 `custom_themes::load_custom_themes` reads them once at startup, before the
 embedded themes, since `load_themes_from_str` keeps the first theme of a name
@@ -504,6 +513,44 @@ alone without calling `on_load` again, which drops the embedded themes. Keys a
 file has that the `ThemeSet` schema lacks are reported in a notification, as
 the loader ignores them. `test-data/themes/aurora.json` is a theme from
 gpui-component kept for the tests.
+
+### VS Code themes
+
+`crates/vsx-themes` converts VS Code color themes and holds the settings
+panel that installs them from Open VSX (Appearance, VS Code Themes). It
+is written to be copied into the other gpui-component apps (broquest,
+shouting-robin): nothing in it names Blanco, and only its `gpui` and
+`gpui-component` dependencies change with the app (`gpui-component = { package
+= "gpui-kit", ... }` there). An app creates a `ThemeBrowser` with the folder
+its custom themes load from at startup, `ConvertOptions` (`SQL` here), and what
+Use means (`settings::use_theme`), and adds `browser::setting_group` to a
+settings page. Its HTTP is blocking reqwest on GPUI's background executor, so
+it needs no tokio bridge. `gallery.rs` speaks VS Code's gallery API to Open
+VSX's VS Code adapter (`/vscode/gallery`, see its swagger "VSCode Adapter"),
+not the VS Code Marketplace, whose terms limit it to Microsoft's products. The
+adapter rate limits with 429 and `Retry-After`, which the client waits out once. The
+Themes category also holds icon themes. Tags tell them apart (`vsce` adds
+`color-theme`, `icon-theme`, `product-icon-theme` from what a package
+contributes), so only untagged packages, made by older tools, get their
+manifest fetched. Open VSX's tag filter (filter type 1) does not narrow the
+results, so the tags are read on the client.
+
+`package.rs` reads a `.vsix` or an extension folder: JSONC, `%key%` labels from
+`package.nls.json`, `include` chains and `.tmTheme` token colors.
+`convert.rs` maps workbench colors by role with fallbacks and contrast floors,
+and finds syntax colors by asking which `tokenColors` rule VS Code would apply
+to a representative scope per capture (`CAPTURE_SCOPES`, with `SQL`'s
+preferred scopes first). Converting the Catppuccin VS Code extension and
+diffing it against `catppuccin.json` is a good check after changing the
+mapping: surfaces should match, and the remaining differences are the VS Code
+port's own choices (surface2 borders, mauve `storage.type`). The registry has
+no way to replace or drop a theme, so reinstalling or removing one takes
+effect after a restart. For the same reason Try never registers: it applies the
+converted `ThemeConfig` with `Theme::update` and keeps a clone of the whole
+`Theme` from before, which Revert, or releasing the panel, writes back only
+while the tried config is still the one on screen (`browser::is_showing`), so
+a theme chosen meanwhile stays. Converted themes name no fonts, so an app's
+own font settings survive a Try. Installed files are `vscode.<publisher>.<name>.json`.
 
 ### Using Themes
 

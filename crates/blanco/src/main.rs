@@ -318,6 +318,14 @@ mod tests {
             // Deserializing into the loader's own type is what catches that.
             let theme_set: gpui_component::ThemeSet = serde_json::from_slice(&bytes)
                 .unwrap_or_else(|error| panic!("{path} does not match the theme schema: {error}"));
+            let unknown = crate::custom_themes::unknown_keys(
+                std::str::from_utf8(&bytes).expect("themes are UTF-8"),
+            )
+            .unwrap_or_else(|error| panic!("{path}: {error}"));
+            assert!(
+                unknown.is_empty(),
+                "{path} has keys the loader ignores: {unknown:?}"
+            );
             for theme in &theme_set.themes {
                 let colors = &theme.colors;
                 assert!(
@@ -340,6 +348,9 @@ mod tests {
             "Catppuccin Frappe",
             "Catppuccin Macchiato",
             "Catppuccin Mocha",
+            "Tokyo Night",
+            "Tokyo Night Storm",
+            "Tokyo Night Light",
         ] {
             assert!(
                 names.iter().any(|n| n == expected),

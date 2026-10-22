@@ -132,7 +132,6 @@ def colors(p: dict[str, str], light: bool) -> dict[str, str]:
         "popover.background": p["mantle"],
         "popover.foreground": p["text"],
         "accordion.background": p["base"],
-        "tiles.background": p["mantle"],
         "group_box.background": p["mantle"],
         "group_box.foreground": p["text"],
         "group_box.title.foreground": p["text"],
@@ -247,8 +246,8 @@ def colors(p: dict[str, str], light: bool) -> dict[str, str]:
         "chart.3": p["yellow"],
         "chart.4": p["peach"],
         "chart.5": p["mauve"],
-        "chart_bullish": p["green"],
-        "chart_bearish": p["red"],
+        "chart.bullish": p["green"],
+        "chart.bearish": p["red"],
     }
 
 
@@ -321,28 +320,23 @@ def highlight(p: dict[str, str]) -> dict:
             ("editor.line_number", p["overlay1"]),
             ("editor.active_line_number", accent),
             ("editor.invisible", alpha(p["overlay2"], 0.4)),
-            (
-                "status",
-                collections.OrderedDict(
-                    [
-                        ("error", p["red"]),
-                        ("error.background", alpha(p["red"], 0.15)),
-                        ("error.border", alpha(p["red"], 0.4)),
-                        ("warning", p["peach"]),
-                        ("warning.background", alpha(p["peach"], 0.15)),
-                        ("warning.border", alpha(p["peach"], 0.4)),
-                        ("info", p["blue"]),
-                        ("info.background", alpha(p["blue"], 0.15)),
-                        ("info.border", alpha(p["blue"], 0.4)),
-                        ("success", p["green"]),
-                        ("success.background", alpha(p["green"], 0.15)),
-                        ("success.border", alpha(p["green"], 0.4)),
-                        ("hint", p["teal"]),
-                        ("hint.background", alpha(p["teal"], 0.15)),
-                        ("hint.border", alpha(p["teal"], 0.4)),
-                    ]
-                ),
-            ),
+            # The status colors sit directly in `highlight`: gpui-component
+            # flattens them into it, and a nested `status` object is ignored.
+            ("error", p["red"]),
+            ("error.background", alpha(p["red"], 0.15)),
+            ("error.border", alpha(p["red"], 0.4)),
+            ("warning", p["peach"]),
+            ("warning.background", alpha(p["peach"], 0.15)),
+            ("warning.border", alpha(p["peach"], 0.4)),
+            ("info", p["blue"]),
+            ("info.background", alpha(p["blue"], 0.15)),
+            ("info.border", alpha(p["blue"], 0.4)),
+            ("success", p["green"]),
+            ("success.background", alpha(p["green"], 0.15)),
+            ("success.border", alpha(p["green"], 0.4)),
+            ("hint", p["teal"]),
+            ("hint.background", alpha(p["teal"], 0.15)),
+            ("hint.border", alpha(p["teal"], 0.4)),
             ("syntax", syntax),
         ]
     )

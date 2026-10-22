@@ -12,6 +12,11 @@ All notable changes to this project will be documented in this file.
   when typing a value for it in the editor (`status = '`, `status IN (`,
   `SET status =`) and under Pick Value when editing one of its cells
 
+- Tokyo Night, Tokyo Night Storm and Tokyo Night Light themes
+- Settings, Appearance has a VS Code Themes group that searches Open VSX for
+  VS Code color themes, previews them, lets you try one across the app
+  before installing, and installs them converted to Blanco's theme format
+
 ### Changes
 
 - Query history and the SQL log show passwords in statements that create
@@ -22,6 +27,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixes
 
+- The Catppuccin themes' error, warning, info and hint colors were ignored,
+  so diagnostics used the default colors
 - Revealing a PostgreSQL object in the sidebar could stop before selecting
   it when the database sizes arrived while its schema was loading
 

@@ -30,6 +30,7 @@ blanco_ui = { path = "../ui", package = "blanco-ui" }
 blanco-core = { path = "../blanco-core" }
 blanco-clipboard = { path = "../clipboard" }
 blanco-terminal = { path = "../terminal" }
+vsx-themes = { path = "../vsx-themes" }
 database = { path = "../database" }
 
 
