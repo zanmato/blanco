@@ -174,6 +174,9 @@ pub struct ConnectionData {
     pub idle_timeout_minutes: Option<u32>,
     /// Secrets asked for each time the connection opens instead of stored.
     pub ask_secrets: Vec<database::SecretKind>,
+    /// The name Redis connections give themselves with `CLIENT SETNAME`.
+    /// `None` uses `Blanco`.
+    pub client_name: Option<String>,
 }
 
 impl std::fmt::Debug for ConnectionData {
@@ -214,6 +217,7 @@ impl std::fmt::Debug for ConnectionData {
             .field("open_default_schema", &self.open_default_schema)
             .field("idle_timeout_minutes", &self.idle_timeout_minutes)
             .field("ask_secrets", &self.ask_secrets)
+            .field("client_name", &self.client_name)
             .finish()
     }
 }
@@ -294,6 +298,7 @@ impl ConnectionData {
             open_default_schema: true,
             idle_timeout_minutes: None,
             ask_secrets: Vec::new(),
+            client_name: None,
         }
     }
 
@@ -338,6 +343,7 @@ impl ConnectionData {
             open_default_schema: true,
             idle_timeout_minutes: None,
             ask_secrets: Vec::new(),
+            client_name: None,
         }
     }
 
@@ -486,7 +492,8 @@ impl ConnectionData {
             config
                 .with_read_only(self.read_only)
                 .with_idle_timeout_minutes(self.idle_timeout_minutes)
-                .with_ask_secrets(self.ask_secrets.clone()),
+                .with_ask_secrets(self.ask_secrets.clone())
+                .with_client_name(self.client_name.clone()),
         )
     }
 }

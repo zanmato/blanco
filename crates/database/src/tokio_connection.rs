@@ -272,6 +272,24 @@ impl Connection for TokioConnection {
             .await
     }
 
+    async fn list_keys(&self, pattern: &str, limit: usize) -> Result<blanco_core::KeyListing> {
+        let inner = Arc::clone(&self.inner);
+        let pattern = pattern.to_string();
+        self.run(async move { inner.list_keys(&pattern, limit).await })
+            .await
+    }
+
+    async fn set_key_ttl(&self, key: &str, ttl: Option<i64>) -> Result<()> {
+        self.guard_read_only(&match ttl {
+            Some(seconds) => format!("EXPIRE {key} {seconds}"),
+            None => format!("PERSIST {key}"),
+        })?;
+        let inner = Arc::clone(&self.inner);
+        let key = key.to_string();
+        self.run(async move { inner.set_key_ttl(&key, ttl).await })
+            .await
+    }
+
     async fn get_tables(&self, schema: Option<&str>) -> Result<Vec<String>> {
         let inner = Arc::clone(&self.inner);
         let schema = schema.map(str::to_string);

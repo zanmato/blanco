@@ -1,6 +1,8 @@
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
-use blanco_core::{Connection, KeyValueResult, QueryResult, RedisType, RedisValue, StatementTimer};
+use blanco_core::{
+    Connection, KeyListing, KeyValueResult, QueryResult, RedisType, RedisValue, StatementTimer,
+};
 use fred::prelude::*;
 use fred::types::{ClusterHash, CustomCommand};
 
@@ -14,15 +16,22 @@ const DEFAULT_DATABASE_COUNT: u8 = 16;
 /// keyspace can't stall the sidebar.
 const SCAN_KEY_CAP: usize = 1000;
 
+/// The `client_name` query parameter of a connection URL is Blanco's, not
+/// the driver's: it is taken off and sent with `CLIENT SETNAME`.
+const CLIENT_NAME_PARAM: &str = "client_name";
+
 pub struct RedisConnection {
     client: Client,
     display_name: String,
+    client_name: Option<String>,
 }
 
 impl RedisConnection {
     /// Build (but do not yet connect) a Redis client from a `redis://` /
     /// `rediss://` URL. Call [`Connection::connect`] to establish the link.
     pub fn from_connection_string(connection_string: &str) -> Result<Self> {
+        let (connection_string, client_name) = take_client_name(connection_string);
+        let connection_string = connection_string.as_str();
         let config = Config::from_url(connection_string)
             .map_err(|e| anyhow!("invalid Redis connection URL: {e}"))?;
         let client = Builder::from_config(config)
@@ -47,6 +56,7 @@ impl RedisConnection {
         Ok(Self {
             client,
             display_name,
+            client_name,
         })
     }
 
@@ -75,9 +85,9 @@ impl RedisConnection {
         self.run_command(&parts).await
     }
 
-    /// Iterate the keyspace with SCAN, returning up to `SCAN_KEY_CAP` keys
-    /// matching `pattern`.
-    async fn scan_keys(&self, pattern: &str) -> Result<Vec<String>> {
+    /// Iterate the keyspace with SCAN, returning up to `limit` keys matching
+    /// `pattern` and whether more matched.
+    async fn scan_keys(&self, pattern: &str, limit: usize) -> Result<KeyListing> {
         let mut cursor = "0".to_string();
         let mut keys = Vec::new();
         loop {
@@ -104,21 +114,47 @@ impl RedisConnection {
                     }
                 }
             }
-            if cursor == "0" || keys.len() >= SCAN_KEY_CAP {
+            if cursor == "0" || keys.len() > limit {
                 break;
             }
         }
-        keys.truncate(SCAN_KEY_CAP);
-        Ok(keys)
+        // A sweep that stopped early, or found more than asked for, leaves
+        // keys behind.
+        let truncated = cursor != "0" || keys.len() > limit;
+        keys.truncate(limit);
+        Ok(KeyListing { keys, truncated })
+    }
+
+    /// Name this client connection for `CLIENT LIST`.
+    async fn set_client_name(&self) {
+        if let Some(name) = &self.client_name
+            && let Err(error) = self
+                .run_command(&["CLIENT".into(), "SETNAME".into(), name.clone()])
+                .await
+        {
+            tracing::warn!("Failed to set the Redis client name: {error:#}");
+        }
     }
 
     /// Read the decoded value of `key`, dispatching on its Redis type.
-    async fn decode_value(&self, key_type: RedisType, key: &str) -> Result<RedisValue> {
+    async fn decode_value(
+        &self,
+        key_type: RedisType,
+        key: &str,
+    ) -> Result<(RedisValue, Option<String>)> {
         let value = match key_type {
             RedisType::String => {
                 let reply = self
                     .run_command(&["GET".to_string(), key.to_string()])
                     .await?;
+                let raw: &[u8] = match &reply {
+                    Value::Bytes(bytes) => bytes,
+                    Value::String(text) => text.as_bytes(),
+                    _ => &[],
+                };
+                if let Some((compression, text)) = decompress(raw) {
+                    return Ok((RedisValue::Str(text), Some(compression.to_string())));
+                }
                 RedisValue::Str(value_to_string(&reply).unwrap_or_default())
             }
             RedisType::List => {
@@ -173,8 +209,67 @@ impl RedisConnection {
             }
             RedisType::None => RedisValue::None,
         };
-        Ok(value)
+        Ok((value, None))
     }
+}
+
+/// Split Blanco's `client_name` parameter off a connection URL.
+fn take_client_name(connection_string: &str) -> (String, Option<String>) {
+    let Ok(mut url) = url::Url::parse(connection_string) else {
+        return (connection_string.to_string(), None);
+    };
+    let mut client_name = None;
+    let others: Vec<(String, String)> = url
+        .query_pairs()
+        .filter_map(|(key, value)| {
+            if key == CLIENT_NAME_PARAM {
+                client_name = Some(value.to_string()).filter(|name| !name.is_empty());
+                None
+            } else {
+                Some((key.to_string(), value.to_string()))
+            }
+        })
+        .collect();
+    if others.is_empty() {
+        url.set_query(None);
+    } else {
+        url.query_pairs_mut().clear().extend_pairs(others);
+    }
+    (url.to_string(), client_name)
+}
+
+/// The value inside a gzip, zstd or lz4 frame, recognised by its magic bytes,
+/// with the compression's name. `None` for anything else, or a frame whose
+/// content is not text.
+fn decompress(bytes: &[u8]) -> Option<(&'static str, String)> {
+    use std::io::Read as _;
+
+    // Decompressed values are capped so a hostile value cannot exhaust memory.
+    const LIMIT: u64 = 64 * 1024 * 1024;
+    let mut out = Vec::new();
+    let compression = if bytes.starts_with(&[0x1f, 0x8b]) {
+        flate2::read::GzDecoder::new(bytes)
+            .take(LIMIT)
+            .read_to_end(&mut out)
+            .ok()?;
+        "gzip"
+    } else if bytes.starts_with(&[0x28, 0xb5, 0x2f, 0xfd]) {
+        zstd::stream::read::Decoder::new(bytes)
+            .ok()?
+            .take(LIMIT)
+            .read_to_end(&mut out)
+            .ok()?;
+        "zstd"
+    } else if bytes.starts_with(&[0x04, 0x22, 0x4d, 0x18]) {
+        lz4_flex::frame::FrameDecoder::new(bytes)
+            .take(LIMIT)
+            .read_to_end(&mut out)
+            .ok()?;
+        "lz4"
+    } else {
+        return None;
+    };
+    Some((compression, String::from_utf8(out).ok()?))
 }
 
 /// Flatten a Redis array reply into display strings, dropping nils.
@@ -238,6 +333,28 @@ impl Connection for RedisConnection {
 
     async fn connect(&mut self, _connection_string: &str) -> Result<()> {
         self.client.init().await.map_err(|e| anyhow!("{e}"))?;
+        self.set_client_name().await;
+        // A reconnect opens a new server connection, which has no name yet.
+        if let Some(name) = self.client_name.clone() {
+            let client = self.client.clone();
+            self.client.on_reconnect(move |_| {
+                let client = client.clone();
+                let name = name.clone();
+                async move {
+                    let custom = CustomCommand::new("CLIENT", ClusterHash::FirstKey, false);
+                    let named: Result<Value, _> = client
+                        .custom(
+                            custom,
+                            vec![Value::from("SETNAME"), Value::from(name.as_str())],
+                        )
+                        .await;
+                    if let Err(error) = named {
+                        tracing::warn!("Failed to set the Redis client name: {error}");
+                    }
+                    Ok(())
+                }
+            });
+        }
         Ok(())
     }
 
@@ -336,7 +453,24 @@ impl Connection for RedisConnection {
     }
 
     async fn get_tables(&self, _schema: Option<&str>) -> Result<Vec<String>> {
-        self.scan_keys("*").await
+        Ok(self.scan_keys("*", SCAN_KEY_CAP).await?.keys)
+    }
+
+    async fn list_keys(&self, pattern: &str, limit: usize) -> Result<KeyListing> {
+        let pattern = if pattern.trim().is_empty() {
+            "*"
+        } else {
+            pattern
+        };
+        self.scan_keys(pattern, limit).await
+    }
+
+    async fn set_key_ttl(&self, key: &str, ttl: Option<i64>) -> Result<()> {
+        let parts = match ttl {
+            Some(seconds) => vec!["EXPIRE".to_string(), key.to_string(), seconds.to_string()],
+            None => vec!["PERSIST".to_string(), key.to_string()],
+        };
+        self.run_command(&parts).await.map(|_| ())
     }
 
     fn supports_schemas(&self) -> bool {
@@ -359,13 +493,144 @@ impl Connection for RedisConnection {
             _ => None,
         };
 
-        let value = self.decode_value(key_type, key).await?;
+        let (value, compression) = self.decode_value(key_type, key).await?;
 
         Ok(KeyValueResult {
             key: key.to_string(),
             key_type,
             ttl,
             value,
+            compression,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn client_name_is_taken_off_the_url() {
+        let (url, name) = take_client_name("redis://localhost:6379/0?client_name=blanco&x=1");
+        assert_eq!(name.as_deref(), Some("blanco"));
+        assert_eq!(url, "redis://localhost:6379/0?x=1");
+        let (url, name) = take_client_name("redis://localhost:6379/0");
+        assert_eq!((url.as_str(), name), ("redis://localhost:6379/0", None));
+    }
+
+    #[test]
+    fn compressed_values_are_recognised() {
+        use std::io::Write as _;
+
+        let mut gzip = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        gzip.write_all(b"hello").unwrap();
+        let gzip = gzip.finish().unwrap();
+        assert_eq!(decompress(&gzip), Some(("gzip", "hello".to_string())));
+
+        let zstd = zstd::encode_all(&b"hello"[..], 0).unwrap();
+        assert_eq!(decompress(&zstd), Some(("zstd", "hello".to_string())));
+
+        let mut lz4 = lz4_flex::frame::FrameEncoder::new(Vec::new());
+        lz4.write_all(b"hello").unwrap();
+        let lz4 = lz4.finish().unwrap();
+        assert_eq!(decompress(&lz4), Some(("lz4", "hello".to_string())));
+
+        assert_eq!(decompress(b"plain text"), None);
+    }
+
+    /// A Redis to test against: `REDIS_TEST_URL`, by default the compose
+    /// server, using database 15. Missing servers skip the test unless
+    /// `BLANCO_RUN_DB_TESTS=1`.
+    async fn test_connection(client_name: Option<&str>) -> Option<RedisConnection> {
+        let url = std::env::var("REDIS_TEST_URL")
+            .unwrap_or_else(|_| "redis://:blanco@127.0.0.1:6400/15".to_string());
+        let url = match client_name {
+            Some(name) => format!("{url}?client_name={name}"),
+            None => url,
+        };
+        let mut connection = RedisConnection::from_connection_string(&url).ok()?;
+        let connected = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            Connection::connect(&mut connection, &url),
+        )
+        .await;
+        match connected {
+            Ok(Ok(())) => Some(connection),
+            _ if std::env::var("BLANCO_RUN_DB_TESTS").as_deref() == Ok("1") => {
+                panic!("Redis unreachable at {url}")
+            }
+            _ => None,
+        }
+    }
+
+    #[tokio::test]
+    async fn keys_listed_by_pattern_and_page() {
+        let Some(redis) = test_connection(None).await else {
+            return;
+        };
+        // Tests share the database, so these keys have their own prefix.
+        let keys = ["list:a:1", "list:a:2", "list:a:3", "list:a:4", "list:b:1"];
+        for key in keys {
+            redis.run_line(&format!("SET {key} x")).await.unwrap();
+        }
+
+        let page = redis.list_keys("list:a:*", 3).await.unwrap();
+        assert_eq!(page.keys.len(), 3);
+        assert!(page.keys.iter().all(|key| key.starts_with("list:a:")));
+        assert!(page.truncated);
+
+        let all = redis.list_keys("list:b:*", 10).await.unwrap();
+        assert_eq!(
+            (all.keys, all.truncated),
+            (vec!["list:b:1".to_string()], false)
+        );
+        redis
+            .run_line(&format!("DEL {}", keys.join(" ")))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn ttl_is_set_and_removed() {
+        let Some(redis) = test_connection(None).await else {
+            return;
+        };
+        redis.run_line("SET ttl:key x").await.unwrap();
+        redis.set_key_ttl("ttl:key", Some(100)).await.unwrap();
+        let ttl = redis.inspect_key(None, "ttl:key").await.unwrap().ttl;
+        assert!(ttl.is_some_and(|ttl| (90..=100).contains(&ttl)), "{ttl:?}");
+        redis.set_key_ttl("ttl:key", None).await.unwrap();
+        assert_eq!(redis.inspect_key(None, "ttl:key").await.unwrap().ttl, None);
+        redis.run_line("DEL ttl:key").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn client_name_is_set_on_connect() {
+        let Some(redis) = test_connection(Some("blanco-test")).await else {
+            return;
+        };
+        let name = redis.run_line("CLIENT GETNAME").await.unwrap();
+        assert_eq!(value_to_string(&name).as_deref(), Some("blanco-test"));
+    }
+
+    #[tokio::test]
+    async fn compressed_strings_are_shown_decompressed() {
+        use std::io::Write as _;
+
+        let Some(redis) = test_connection(None).await else {
+            return;
+        };
+        let mut gzip = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        gzip.write_all(br#"{"user": 1}"#).unwrap();
+        let _: () = redis
+            .client
+            .set("gz:key", gzip.finish().unwrap(), None, None, false)
+            .await
+            .unwrap();
+
+        let inspected = redis.inspect_key(None, "gz:key").await.unwrap();
+        assert_eq!(inspected.compression.as_deref(), Some("gzip"));
+        assert_eq!(inspected.value, RedisValue::Str(r#"{"user": 1}"#.into()));
+        redis.run_line("DEL gz:key").await.unwrap();
     }
 }
