@@ -966,6 +966,7 @@ mod tests {
                 value: value.to_string(),
                 numeric: false,
                 binary: true,
+                geometry: false,
             });
             let connection = &connection;
             async move {

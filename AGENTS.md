@@ -98,6 +98,24 @@ do not disturb them. Any handler that needs a value starts with
 handler again. A new handler that reads `delegate.rows` to write or copy must
 do the same, or it will use previews.
 
+## Geometry values
+
+PostGIS `geometry` and `geography` columns are `ColumnType::Geometry`. The
+Postgres driver decodes their EWKB (hex in the text protocol, bytes in the
+binary one) with `blanco_core::geometry` and the cell carries EWKT
+(`SRID=4326;POINT(18.07 59.33)`), which PostGIS reads back, so writes need
+no special literal. On the simple query protocol the column arrives unnamed
+like hstore, and the hex is decoded once `pg_type` names it
+(`name_column` in `connection/execute.rs`). Curves and surfaces are not
+decoded and stay hex, which PostGIS also reads. The grid shows
+`geometry::display_text` (WKT without the SRID, a point as coordinates);
+copy, export and edit use the EWKT. The expanded editor shows the GeoJSON of
+its text under it (`CellEditState::geometry_preview`), commits are checked
+with `invalid_geometry_edit`, and `geometry::carry_srid` gives WKT typed
+without an SRID the SRID of the value it replaces. The compose PostgreSQL
+runs the PostGIS image and `docker/postgres/init.sql` seeds a `gis` schema
+to try it on.
+
 ## DuckDB
 
 `crates/duckdb` (package `blanco-duckdb`) wraps duckdb-rs, built with

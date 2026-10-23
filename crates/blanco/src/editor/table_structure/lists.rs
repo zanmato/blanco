@@ -850,6 +850,7 @@ fn type_color(column_type: ColumnType, cx: &App) -> Option<Hsla> {
         | ColumnType::Text
         | ColumnType::Boolean
         | ColumnType::Binary
+        | ColumnType::Geometry
         | ColumnType::Unknown => None,
     }
 }

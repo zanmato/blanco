@@ -332,6 +332,7 @@ impl FilterBar {
                     value,
                     numeric: column.column_type.is_numeric(),
                     binary: column.column_type == blanco_core::ColumnType::Binary,
+                    geometry: column.column_type == blanco_core::ColumnType::Geometry,
                 })
             })
             .collect()

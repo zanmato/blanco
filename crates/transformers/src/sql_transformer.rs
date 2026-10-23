@@ -14,6 +14,7 @@ pub(crate) fn should_quote_value(column_type: &ColumnType) -> bool {
             | ColumnType::Array
             | ColumnType::Binary
             | ColumnType::KeyValue
+            | ColumnType::Geometry
             | ColumnType::Unknown
     )
 }

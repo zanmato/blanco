@@ -182,8 +182,9 @@ impl ResultsTableDelegate {
     }
 
     /// How a stored cell value reads in the grid. Date and time values follow
-    /// the display settings; everything else, and every copy or edit path,
-    /// uses the stored text.
+    /// the display settings, and a geometry shows as WKT without its SRID (a
+    /// point as its coordinates); everything else, and every copy or edit
+    /// path, uses the stored text.
     pub(crate) fn display_value(
         &self,
         col_ix: usize,
@@ -202,6 +203,11 @@ impl ResultsTableDelegate {
         }
         if self.column_types.get(col_ix) == Some(&ColumnType::KeyValue)
             && let Some(text) = key_value_display_text(value)
+        {
+            return display_text(&text, settings.show_invisible_characters);
+        }
+        if self.column_types.get(col_ix) == Some(&ColumnType::Geometry)
+            && let Some(text) = blanco_core::geometry::display_text(value)
         {
             return display_text(&text, settings.show_invisible_characters);
         }

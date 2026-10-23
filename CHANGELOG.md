@@ -49,6 +49,11 @@ All notable changes to this project will be documented in this file.
 - Open Tabs in the sidebar rail lists the window's tabs grouped by
   connection. Tabs there switch on click, close with the middle button,
   reorder by dragging and have the same menu as in the tab strip
+- PostGIS geometry and geography values read as WKT instead of hex, and a
+  point as its coordinates. The expanded cell shows the value's WKT with its
+  GeoJSON under it, and an edit takes WKT or EWKT, checked before it is
+  sent. WKT typed over a value keeps that value's SRID. Text filters on a
+  geometry column match its WKT
 
 ### Changes
 
