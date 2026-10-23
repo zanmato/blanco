@@ -2,10 +2,13 @@ use gpui::{
     App, BorderStyle, Bounds, ClipboardItem, Context, Corners, Edges, Element, ElementId,
     FocusHandle, GlobalElementId, HighlightStyle, Hitbox, HitboxBehavior, Hsla, InspectorElementId,
     InteractiveElement, IntoElement, LayoutId, PaintQuad, ParentElement, Pixels, Point, Render,
-    ScrollHandle, SharedString, StatefulInteractiveElement, Styled, StyledText, TextLayout, Window,
-    div, prelude::FluentBuilder as _, px, transparent_black,
+    ScrollHandle, SharedString, StatefulInteractiveElement, Styled, StyledText, Subscription,
+    TextLayout, Window, div, prelude::FluentBuilder as _, px, transparent_black,
 };
-use gpui_base::{TextSelection, TextSelectionHandle, TextSelectionRegistration, TextSelectionRun};
+use gpui_base::{
+    TextSelectionEvent, TextSelectionHandle, TextSelectionProjection, TextSelectionRegistration,
+    TextSelectionRun,
+};
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::highlighter::{HighlightTheme, SyntaxHighlighter};
 use gpui_component::scroll::ScrollableElement as _;
@@ -27,6 +30,10 @@ struct LogEntry {
     text: SharedString,
     highlights: Box<[(Range<usize>, HighlightStyle)]>,
     selection: TextSelectionHandle,
+    /// Re-renders the log when the window's selection changes this entry. A
+    /// drag moves the selection on every pointer move without drawing a frame,
+    /// so without it the selection only showed once the button was released.
+    _render_on_selection_change: Subscription,
 }
 
 /// SQL view entity for displaying executed statements (queries, DDL, etc.) with
@@ -148,11 +155,23 @@ impl SqlView {
             },
             cx,
         );
+        let render_on_selection_change = selection.subscribe(
+            {
+                let view = cx.entity().downgrade();
+                move |event, cx| {
+                    if matches!(event, TextSelectionEvent::SelectionChanged(_)) {
+                        view.update(cx, |_, cx| cx.notify()).ok();
+                    }
+                }
+            },
+            cx,
+        );
         let entry = LogEntry {
             sequence: self.next_sequence,
             text,
             highlights,
             selection,
+            _render_on_selection_change: render_on_selection_change,
         };
         self.next_sequence += 1;
 
@@ -393,7 +412,6 @@ impl Element for SelectableLogEntry {
         cx: &mut App,
     ) {
         let layout = self.styled_text.layout().clone();
-        let selected_text_before = TextSelection::selected_text(window, cx);
         let projection = self.selection.update_runs(
             &[TextSelectionRun::new(
                 self.text.clone(),
@@ -404,8 +422,18 @@ impl Element for SelectableLogEntry {
         );
         // Projecting onto this frame's layout can change what the selection
         // covers (the log scrolled or reflowed under a held drag), which the
-        // entries painted before this one have not seen yet.
-        if selected_text_before != TextSelection::selected_text(window, cx) {
+        // entries painted before this one have not seen yet. Only this entry's
+        // projection can change here, so it is compared with the one painted
+        // last frame: asking for the window's selected text before and after
+        // walks every entry in the log, which made each frame cost the square
+        // of the entry count.
+        let changed = window.with_element_state(
+            global_id.expect("SelectableLogEntry has an element id"),
+            |painted: Option<TextSelectionProjection>, _| {
+                (painted.as_ref() != Some(&projection), projection.clone())
+            },
+        );
+        if changed && projection.ranges().iter().any(Option::is_some) {
             window.refresh();
         }
         for range in projection.ranges().iter().flatten().cloned() {
@@ -486,6 +514,52 @@ mod tests {
                 "SELECT 1;\n-- 1 row"
             );
         });
+    }
+
+    /// The selection has to show while the button is held, not only once it is
+    /// released: each pointer move of a drag must re-render the log.
+    #[gpui::test]
+    fn a_held_drag_re_renders_the_log(cx: &mut TestAppContext) {
+        let (window, view) = cx.update(|cx| {
+            gpui_component::init(cx);
+            let mut view = None;
+            let window = cx
+                .open_window(Default::default(), |window, cx| {
+                    let log = cx.new(|cx| {
+                        let mut log =
+                            SqlView::new(10, cx.theme().highlight_theme.clone(), "sql", cx);
+                        log.append_text(&SqlViewMessage::SqlStatement("SELECT 1".into()), cx);
+                        log.append_text(&SqlViewMessage::Comment("1 row".into()), cx);
+                        log
+                    });
+                    view = Some(log.clone());
+                    cx.new(|cx| gpui_component::Root::new(log, window, cx))
+                })
+                .expect("failed to open window");
+            (window, view.expect("the window builds its view"))
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        cx.run_until_parked();
+
+        let renders = std::rc::Rc::new(std::cell::Cell::new(0));
+        let _observation = cx.update(|_, cx| {
+            let renders = renders.clone();
+            cx.observe(&view, move |_, _| renders.set(renders.get() + 1))
+        });
+
+        cx.simulate_mouse_down(
+            gpui::point(px(17.), px(24.)),
+            MouseButton::Left,
+            Modifiers::default(),
+        );
+        cx.simulate_mouse_move(
+            gpui::point(px(400.), px(46.)),
+            Some(MouseButton::Left),
+            Modifiers::default(),
+        );
+        cx.run_until_parked();
+
+        assert!(renders.get() > 0, "the drag did not re-render the log");
     }
 
     #[test]
