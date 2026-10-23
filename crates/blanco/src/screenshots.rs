@@ -516,12 +516,15 @@ async fn stage_scene(
                 .ok_or_else(|| anyhow::anyhow!("no structure tab"))?;
             structure.update_in(cx, |tab, window, cx| {
                 tab.stage_column(
-                    ColumnOperation::Add(ColumnSpec {
-                        name: "label".to_string(),
-                        data_type: "TEXT".to_string(),
-                        nullable: true,
-                        ..ColumnSpec::default()
-                    }),
+                    ColumnOperation::Add {
+                        column: ColumnSpec {
+                            name: "label".to_string(),
+                            data_type: "TEXT".to_string(),
+                            nullable: true,
+                            ..ColumnSpec::default()
+                        },
+                        position: None,
+                    },
                     window,
                     cx,
                 );

@@ -11,16 +11,15 @@
 //! `connect` is intentionally not implemented: connections are connected by
 //! their factory before being wrapped, and the wrapper is then handed out as
 //! immutable shared state.
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use blanco_core::{
-    BatchFailure, BatchOutcome, ColumnInfo, Connection, DatabaseType, FunctionSignatureInfo,
-    KeyValueResult, QueryResult, StatementAccess, TableParent,
     connection_trait::{
         ColumnType, DatabaseSchemaResult, ForeignKeyConstraint, IndexInfo, ObjectKind,
         QueryableEntity,
     },
-    write_guard,
+    write_guard, BatchFailure, BatchOutcome, ColumnInfo, Connection, DatabaseType,
+    FunctionSignatureInfo, KeyValueResult, QueryResult, StatementAccess, TableParent,
 };
 use futures::Stream;
 use std::future::Future;

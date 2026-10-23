@@ -5,8 +5,8 @@
 
 use app_database::{AppDatabase, VirtualForeignKey};
 use blanco_core::ddl::{
-    ColumnOperation, ColumnSpec, DdlError, ForeignKeyOperation, IndexOperation, NewTable,
-    TableChange, create_table_sql,
+    ColumnOperation, ColumnPosition, ColumnSpec, DdlError, ForeignKeyOperation, IndexOperation,
+    NewTable, TableChange, create_table_sql,
 };
 use blanco_core::{
     ColumnInfo, ConnectionContext, ForeignKeyConstraint, IndexInfo, ObjectKind, TableInfo,
@@ -35,8 +35,7 @@ use self::lists::{
     ColumnsTableDelegate, ForeignKeysTableDelegate, IndexesTableDelegate, order_indexes,
 };
 use self::staging::{
-    ChangeKind, LoadedStructure, PendingChange, RowMark, RowState, StagedStructure,
-    StructureChange, column_spec,
+    ChangeKind, LoadedStructure, PendingChange, RowMark, RowState, StagedStructure, StructureChange,
 };
 use crate::result_ext::ResultExt as _;
 use crate::status_bar::ActivityReporter;
@@ -298,13 +297,16 @@ impl TableStructureTab {
         tab.creating = Some(name);
         let (key_type, attributes) = dialect.new_table_key();
         tab.stage(
-            StructureChange::Column(ColumnOperation::Add(ColumnSpec {
-                name: "id".to_string(),
-                data_type: key_type.to_string(),
-                attributes: attributes.map(str::to_string),
-                primary_key: true,
-                ..ColumnSpec::default()
-            })),
+            StructureChange::Column(ColumnOperation::Add {
+                column: ColumnSpec {
+                    name: "id".to_string(),
+                    data_type: key_type.to_string(),
+                    attributes: attributes.map(str::to_string),
+                    primary_key: true,
+                    ..ColumnSpec::default()
+                },
+                position: None,
+            }),
             window,
             cx,
         );
@@ -329,14 +331,23 @@ impl TableStructureTab {
 
     /// The table the pending changes describe, for a table being created.
     /// Editing a column still to be added replaces its addition, so every
-    /// column, index and key appears once.
+    /// column, index and key appears once. The columns come in the order the
+    /// replay lists them, which their positions and moves decide.
     fn new_table_definition(&self) -> NewTable {
-        let mut definition = NewTable::default();
+        let replayed = staging::replay(self.loaded(), self.pending.iter().map(|p| &p.change));
+        let structure = replayed.structure;
+        let mut definition = NewTable {
+            columns: structure
+                .column_specs
+                .into_iter()
+                .zip(&structure.column_marks)
+                .filter(|(_, mark)| mark.is_live())
+                .map(|(spec, _)| spec)
+                .collect(),
+            ..NewTable::default()
+        };
         for pending in &self.pending {
             match &pending.change {
-                StructureChange::Column(ColumnOperation::Add(spec)) => {
-                    definition.columns.push(spec.clone())
-                }
                 StructureChange::Index(IndexOperation::Create(spec)) => {
                     definition.indexes.push(spec.clone())
                 }
@@ -370,6 +381,12 @@ impl TableStructureTab {
         self.context.dialect().supports_create_table_ddl() && !self.is_creating()
     }
 
+    /// Whether a column can be placed among the others: by the backend, or
+    /// by the order of a table's `CREATE TABLE`.
+    fn places_columns(&self) -> bool {
+        self.context.dialect().supports_column_positions() || self.is_creating()
+    }
+
     /// Whether structure changes are offered: the backend must have them,
     /// the connection must be writable and no Apply may be running.
     fn can_edit_structure(&self) -> bool {
@@ -379,6 +396,7 @@ impl TableStructureTab {
     fn loaded(&self) -> LoadedStructure<'_> {
         LoadedStructure {
             columns: &self.columns,
+            column_definitions: &self.table_info.column_definitions,
             indexes: &self.indexes,
             foreign_keys: &self.foreign_keys,
             table_comment: self.table_info.comment.as_deref(),
@@ -635,11 +653,30 @@ impl TableStructureTab {
         if change_ix >= self.pending.len() {
             return false;
         }
+        let renamed = match (&self.pending[change_ix].change, &change) {
+            (
+                StructureChange::Column(ColumnOperation::Add { column: from, .. }),
+                StructureChange::Column(ColumnOperation::Add { column: to, .. }),
+            ) if from.name != to.name => Some((from.name.clone(), to.name.clone())),
+            _ => None,
+        };
         let Some(staged) = self.pending_change(change, window, cx) else {
             return false;
         };
         let mut pending = self.pending.clone();
         pending[change_ix] = staged;
+        // The later changes that name a renamed addition follow it.
+        if let Some((from, to)) = renamed {
+            for ix in change_ix + 1..pending.len() {
+                let mut change = pending[ix].change.clone();
+                if change.rename_added_column(&from, &to) {
+                    let Some(staged) = self.pending_change(change, window, cx) else {
+                        return false;
+                    };
+                    pending[ix] = staged;
+                }
+            }
+        }
         self.try_pending(pending, window, cx)
     }
 
@@ -678,10 +715,16 @@ impl TableStructureTab {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        let mut pending = pending;
         let replayed = staging::replay(self.loaded(), pending.iter().map(|p| &p.change));
-        if let Some((ix, reason)) = replayed.rejected.first() {
+        let rejected = replayed
+            .rejected
+            .first()
+            .cloned()
+            .or_else(|| self.refresh_moves(&mut pending, replayed.refreshed).err());
+        if let Some((ix, reason)) = rejected {
             let label = pending
-                .get(*ix)
+                .get(ix)
                 .map(|pending| pending.change.label())
                 .unwrap_or_default();
             self.notify_error(format!("{label}: {reason}"), window, cx);
@@ -701,6 +744,33 @@ impl TableStructureTab {
         }
         self.restage(window, cx);
         true
+    }
+
+    /// Give the moves the replay found restating an outdated column the
+    /// column as it is now, and their statements with it. Fails with the
+    /// index of a move the backend refuses now.
+    fn refresh_moves(
+        &self,
+        pending: &mut [PendingChange],
+        refreshed: Vec<(usize, StructureChange)>,
+    ) -> Result<(), (usize, String)> {
+        for (ix, change) in refreshed {
+            let statements = if self.is_creating() {
+                Vec::new()
+            } else {
+                change
+                    .statements(
+                        self.context.db_type,
+                        self.context.schema_name.as_deref(),
+                        &self.table_name,
+                    )
+                    .map_err(|error| (ix, error.to_string()))?
+            };
+            if let Some(slot) = pending.get_mut(ix) {
+                *slot = PendingChange { change, statements };
+            }
+        }
+        Ok(())
     }
 
     /// Stage a column change as the side panel would.
@@ -788,6 +858,25 @@ impl TableStructureTab {
             // the first one with the change indices shifted.
             replayed = staging::replay(self.loaded(), self.pending.iter().map(|p| &p.change));
         }
+        let mut pending = std::mem::take(&mut self.pending);
+        let refreshed = std::mem::take(&mut replayed.refreshed);
+        if let Err((ix, reason)) = self.refresh_moves(&mut pending, refreshed) {
+            let undone = pending.remove(ix);
+            window.push_notification(
+                (
+                    NotificationType::Warning,
+                    format!(
+                        "Undid a change that no longer applies: {} ({reason})",
+                        undone.change.describe()
+                    ),
+                ),
+                cx,
+            );
+            self.pending = pending;
+            self.restage(window, cx);
+            return;
+        }
+        self.pending = pending;
         let comment_was_staged = !self.staged.table_mark.changes.is_empty();
         self.staged = replayed.structure;
         if comment_was_staged && self.staged.table_mark.changes.is_empty() {
@@ -802,6 +891,7 @@ impl TableStructureTab {
     /// its contents.
     fn show_staged(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let editable = self.can_edit_structure();
+        let movable = editable && self.places_columns();
         let staged = &self.staged;
         self.columns_table_state.update(cx, |table, cx| {
             let delegate = table.delegate_mut();
@@ -809,6 +899,7 @@ impl TableStructureTab {
                 staged.columns.clone(),
                 staged.column_marks.clone(),
                 editable,
+                movable,
             );
             delegate.fit_columns(window, cx);
             table.refresh(cx);
@@ -860,7 +951,7 @@ impl TableStructureTab {
         {
             return;
         }
-        let Some(column) = self.staged.columns.get(row) else {
+        let Some(spec) = self.staged.column_specs.get(row).cloned() else {
             self.panel = None;
             cx.notify();
             return;
@@ -872,10 +963,11 @@ impl TableStructureTab {
             .is_none_or(RowMark::is_live);
         let form = (live && self.can_edit_structure()).then(|| {
             let dialect = self.context.dialect();
-            let spec = column_spec(column, &self.table_info.column_definitions);
             let user_types = self.user_types.clone();
             let creating = self.is_creating();
-            cx.new(|cx| ColumnForm::new(dialect, Some(spec), user_types, creating, window, cx))
+            cx.new(|cx| {
+                ColumnForm::new(dialect, Some(spec), user_types, creating, None, window, cx)
+            })
         });
         self.panel = Some(Panel::Column { row, form });
         cx.notify();
@@ -899,7 +991,11 @@ impl TableStructureTab {
         let dialect = self.context.dialect();
         let user_types = self.user_types.clone();
         let creating = self.is_creating();
-        let form = cx.new(|cx| ColumnForm::new(dialect, None, user_types, creating, window, cx));
+        let positions = self
+            .places_columns()
+            .then(|| self.staged.live_column_names());
+        let form = cx
+            .new(|cx| ColumnForm::new(dialect, None, user_types, creating, positions, window, cx));
         let input = form.read(cx).first_input();
         input.update(cx, |input, cx| input.focus(window, cx));
         self.columns_table_state
@@ -1056,8 +1152,13 @@ impl TableStructureTab {
                 let Some(operation) = form.read(cx).operation(cx) else {
                     return;
                 };
-                if self.stage(StructureChange::Column(operation), window, cx) {
-                    let row = self.staged.columns.len().saturating_sub(1);
+                let name = match &operation {
+                    ColumnOperation::Add { column, .. } => column.name.clone(),
+                    _ => String::new(),
+                };
+                if self.stage(StructureChange::Column(operation), window, cx)
+                    && let Some(row) = self.staged.live_column(&name)
+                {
                     self.show_column(row, true, window, cx);
                     self.select_column_row(row, cx);
                 }
@@ -1080,21 +1181,26 @@ impl TableStructureTab {
                     let add_ix = mark.changes.iter().map(|(ix, _)| *ix).find(|ix| {
                         matches!(
                             self.pending.get(*ix).map(|pending| &pending.change),
-                            Some(StructureChange::Column(ColumnOperation::Add(_)))
+                            Some(StructureChange::Column(ColumnOperation::Add { .. }))
                         )
                     });
                     let mut spec = form.spec(cx);
-                    if let Some(add_ix) = add_ix {
+                    if let Some(add_ix) = add_ix
+                        && let Some(StructureChange::Column(ColumnOperation::Add {
+                            column: added,
+                            position,
+                        })) = self.pending.get(add_ix).map(|pending| &pending.change)
+                    {
                         // The form shows no MySQL attributes, so the
                         // addition keeps its own (the new key's AUTO_INCREMENT).
-                        if let Some(StructureChange::Column(ColumnOperation::Add(added))) =
-                            self.pending.get(add_ix).map(|pending| &pending.change)
-                        {
-                            spec.attributes = added.attributes.clone();
-                        }
+                        spec.attributes = added.attributes.clone();
+                        let position = position.clone();
                         self.replace_change(
                             add_ix,
-                            StructureChange::Column(ColumnOperation::Add(spec)),
+                            StructureChange::Column(ColumnOperation::Add {
+                                column: spec,
+                                position,
+                            }),
                             window,
                             cx,
                         );
@@ -1137,6 +1243,52 @@ impl TableStructureTab {
                 table.scroll_to_row(row, cx);
             }
         });
+    }
+
+    /// Move the staged column `row` into `gap`, the place before the staged
+    /// column of that index (the end for the last). It follows the nearest
+    /// column above the gap that will still be there.
+    pub fn move_column(
+        &mut self,
+        row: usize,
+        gap: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.places_columns() || gap == row || gap == row + 1 {
+            return;
+        }
+        let Some(spec) = self.staged.column_specs.get(row).cloned() else {
+            return;
+        };
+        let position = (0..gap.min(self.staged.columns.len()))
+            .rev()
+            .filter(|&ix| ix != row)
+            .find(|&ix| self.staged.column_marks[ix].is_live())
+            .map(|ix| ColumnPosition::After(self.staged.columns[ix].name.clone()))
+            .unwrap_or(ColumnPosition::First);
+        let shown = match self.panel {
+            Some(Panel::Column { row, .. }) => self.staged.columns.get(row).map(|c| c.name.clone()),
+            _ => None,
+        };
+        let name = spec.name.clone();
+        let change = StructureChange::Column(ColumnOperation::Move {
+            column: spec,
+            position,
+        });
+        if !self.stage(change, window, cx) {
+            return;
+        }
+        // Rows shift with the move, so the panel and selection follow the
+        // columns by name.
+        if let Some(shown) = shown
+            && let Some(row) = self.staged.live_column(&shown)
+        {
+            self.show_column(row, true, window, cx);
+        }
+        if let Some(row) = self.staged.live_column(&name) {
+            self.select_column_row(row, cx);
+        }
     }
 
     pub fn drop_column(&mut self, row: usize, window: &mut Window, cx: &mut Context<Self>) {

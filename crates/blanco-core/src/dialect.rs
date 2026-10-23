@@ -370,6 +370,13 @@ impl Dialect {
             && server_version_num.is_some_and(|version| version >= 150_000)
     }
 
+    /// Whether a column can be added at, or moved to, a chosen place among
+    /// the table's columns (`FIRST`, `AFTER`). The others only append, and
+    /// reorder by rebuilding the table.
+    pub fn supports_column_positions(&self) -> bool {
+        matches!(self.0, DatabaseType::MySQL | DatabaseType::ClickHouse)
+    }
+
     /// Whether an index may cover only the rows matching a `WHERE` condition.
     pub fn supports_partial_indexes(&self) -> bool {
         matches!(

@@ -6,14 +6,17 @@ use std::cmp::Ordering;
 use app_database::VirtualForeignKey;
 use blanco_core::{ColumnInfo, ColumnType, Dialect, ForeignKeyConstraint, IndexInfo};
 use gpui::{
-    App, Context, Div, Hsla, IntoElement, ParentElement, SharedString, Styled, TextRun, WeakEntity,
-    Window, div, prelude::FluentBuilder as _, px,
+    App, AppContext as _, Context, Div, EntityId, Hsla, InteractiveElement as _, IntoElement,
+    ParentElement, Render, SharedString, Stateful, StatefulInteractiveElement as _, Styled,
+    TextRun, WeakEntity, Window, div, prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
-    ActiveTheme as _,
+    ActiveTheme as _, Icon, Sizable as _,
     menu::{PopupMenu, PopupMenuItem},
     table::{Column, ColumnSort, TableDelegate, TableState},
 };
+
+use blanco_ui::IconName;
 
 use super::TableStructureTab;
 use super::staging::{RowMark, RowState};
@@ -32,7 +35,33 @@ pub struct ColumnsTableDelegate {
     sort: Option<(usize, ColumnSort)>,
     column_defs: Vec<Column>,
     editable: bool,
+    /// Rows can be dragged to another place, which the backend, or a table
+    /// still to be created, allows.
+    movable: bool,
     tab: WeakEntity<TableStructureTab>,
+}
+
+/// A column row being dragged to another place.
+#[derive(Clone)]
+pub(super) struct DraggedColumn {
+    tab: EntityId,
+    column_ix: usize,
+    name: SharedString,
+}
+
+impl Render for DraggedColumn {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .px_3()
+            .py_1()
+            .text_sm()
+            .font_family(cx.theme().mono_font_family.clone())
+            .rounded(cx.theme().radius)
+            .bg(cx.theme().secondary)
+            .border_1()
+            .border_color(cx.theme().border)
+            .child(self.name.clone())
+    }
 }
 
 impl ColumnsTableDelegate {
@@ -85,8 +114,15 @@ impl ColumnsTableDelegate {
             sort: None,
             column_defs,
             editable: false,
+            movable: false,
             tab,
         }
+    }
+
+    /// Whether rows can be dragged now. A sorted or filtered grid does not
+    /// show the table's order, so dropping between its rows says nothing.
+    fn rows_draggable(&self) -> bool {
+        self.movable && self.sort.is_none() && self.filter.trim().is_empty()
     }
 
     /// The staged column a displayed row shows, as an index into the tab's
@@ -105,10 +141,12 @@ impl ColumnsTableDelegate {
         columns: Vec<ColumnInfo>,
         marks: Vec<RowMark>,
         editable: bool,
+        movable: bool,
     ) {
         self.columns = columns;
         self.marks = marks;
         self.editable = editable;
+        self.movable = movable;
         self.rows = column_rows(&self.columns, &self.filter, self.sort);
     }
 
@@ -122,6 +160,12 @@ impl ColumnsTableDelegate {
             })
             .collect();
         fit_widths(&mut self.column_defs, &cells, true, window, cx);
+        // Room for the drag handle beside the ordinal, which the text leaves out.
+        if self.movable
+            && let Some(ordinal) = self.column_defs.first_mut()
+        {
+            ordinal.width += px(16.);
+        }
     }
 
     pub(super) fn set_filter(&mut self, filter: String) {
@@ -326,6 +370,45 @@ impl TableDelegate for ColumnsTableDelegate {
             .child(col.name.clone())
     }
 
+    fn render_tr(
+        &mut self,
+        row_ix: usize,
+        _window: &mut Window,
+        _cx: &mut Context<TableState<Self>>,
+    ) -> Stateful<Div> {
+        let row = div().id(("row", row_ix));
+        let Some(&column_ix) = self.rows.get(row_ix).filter(|_| self.rows_draggable()) else {
+            return row;
+        };
+        let tab = self.tab.clone();
+        let tab_id = tab.entity_id();
+        // A row dragged downwards lands after the one it is dropped on.
+        row.drag_over::<DraggedColumn>(move |style, dragged, _, cx| {
+            if dragged.tab != tab_id || dragged.column_ix == column_ix {
+                return style;
+            }
+            if dragged.column_ix < column_ix {
+                style.border_b_2()
+            } else {
+                style.border_t_2()
+            }
+            .border_color(cx.theme().drag_border)
+        })
+        .on_drop(move |dragged: &DraggedColumn, window, cx| {
+            if dragged.tab != tab_id {
+                return;
+            }
+            let gap = if dragged.column_ix < column_ix {
+                column_ix + 1
+            } else {
+                column_ix
+            };
+            let row = dragged.column_ix;
+            tab.update(cx, |tab, cx| tab.move_column(row, gap, window, cx))
+                .log_err();
+        })
+    }
+
     fn render_td(
         &mut self,
         row_ix: usize,
@@ -352,10 +435,42 @@ impl TableDelegate for ColumnsTableDelegate {
             });
 
         // A pending change's tint says more than the type's colour.
-        staged_cell(value, state, cx).when_some(
+        let cell = staged_cell(value, state, cx).when_some(
             type_color.filter(|_| matches!(state, RowState::Unchanged | RowState::Modified)),
             |cell, color| cell.text_color(color),
-        )
+        );
+        // The ordinal cell is the handle that drags a row to another place.
+        let handle = (col_ix == 0 && state != RowState::Dropped && self.rows_draggable())
+            .then(|| {
+                self.rows
+                    .get(row_ix)
+                    .and_then(|&ix| Some((ix, self.columns.get(ix)?)))
+            })
+            .flatten();
+        let Some((column_ix, column)) = handle else {
+            return cell.into_any_element();
+        };
+        let dragged = DraggedColumn {
+            tab: self.tab.entity_id(),
+            column_ix,
+            name: column.name.clone().into(),
+        };
+        div()
+            .id(("column-drag", row_ix))
+            .size_full()
+            .cursor_grab()
+            .child(
+                cell.justify_between().gap_1().child(
+                    Icon::new(IconName::GripVertical)
+                        .xsmall()
+                        .text_color(cx.theme().muted_foreground),
+                ),
+            )
+            .on_drag(dragged, |dragged, _, _, cx| {
+                cx.stop_propagation();
+                cx.new(|_| dragged.clone())
+            })
+            .into_any_element()
     }
 }
 

@@ -1643,9 +1643,9 @@ fn test_explain_estimates_and_analyzes_per_backend() {
 #[test]
 fn test_column_and_index_ddl_round_trip() {
     use blanco_core::ddl::{
-        ColumnOperation, ColumnSpec, DdlError, ForeignKeyOperation, IndexOperation, IndexSpec,
-        NewTable, ReferentialAction, TableChange, column_operation_sql, create_table_sql,
-        foreign_key_operation_sql, index_operation_sql, table_change_sql,
+        ColumnOperation, ColumnPosition, ColumnSpec, DdlError, ForeignKeyOperation, IndexOperation,
+        IndexSpec, NewTable, ReferentialAction, TableChange, column_operation_sql,
+        create_table_sql, foreign_key_operation_sql, index_operation_sql, table_change_sql,
     };
     use blanco_core::{ColumnInfo, IndexInfo, WriteOperation};
     use database::ConnectionConfig;
@@ -1818,18 +1818,21 @@ fn test_column_and_index_ddl_round_trip() {
             .unwrap_or_else(|error| panic!("{label}: create: {error:#}"));
 
         // Add a column.
-        let add = ColumnOperation::Add(ColumnSpec {
-            name: "score".to_string(),
-            data_type: if db_type == DatabaseType::ClickHouse {
-                "Int32".to_string()
-            } else {
-                "integer".to_string()
+        let add = ColumnOperation::Add {
+            column: ColumnSpec {
+                name: "score".to_string(),
+                data_type: if db_type == DatabaseType::ClickHouse {
+                    "Int32".to_string()
+                } else {
+                    "integer".to_string()
+                },
+                nullable: false,
+                default: case.add_default.map(str::to_string),
+                comment: None,
+                ..ColumnSpec::default()
             },
-            nullable: false,
-            default: case.add_default.map(str::to_string),
-            comment: None,
-            ..ColumnSpec::default()
-        });
+            position: None,
+        };
         run(build_column(&add).unwrap_or_else(|error| panic!("{label}: {error}")))
             .unwrap_or_else(|error| panic!("{label}: add column: {error:#}"));
         let added = columns()
@@ -1964,6 +1967,69 @@ fn test_column_and_index_ddl_round_trip() {
             runtime
                 .block_on(connection.execute_write("DROP TABLE blanco_ddl_attrs", database, &[]))
                 .unwrap_or_else(|error| panic!("{label}: drop: {error:#}"));
+        }
+
+        // Place a column first, then move it and another one around.
+        if db_type.dialect().supports_column_positions() {
+            let names =
+                || -> Vec<String> { columns().into_iter().map(|column| column.name).collect() };
+            let rank = ColumnSpec {
+                name: "rank".to_string(),
+                data_type: if db_type == DatabaseType::ClickHouse {
+                    "Int32".to_string()
+                } else {
+                    "integer".to_string()
+                },
+                nullable: true,
+                ..ColumnSpec::default()
+            };
+            let add_first = ColumnOperation::Add {
+                column: rank.clone(),
+                position: Some(ColumnPosition::First),
+            };
+            run(build_column(&add_first).unwrap_or_else(|error| panic!("{label}: {error}")))
+                .unwrap_or_else(|error| panic!("{label}: add first: {error:#}"));
+            assert_eq!(names(), ["rank", "id", "score"], "{label}");
+
+            let move_rank = ColumnOperation::Move {
+                column: rank,
+                position: ColumnPosition::After("score".to_string()),
+            };
+            run(build_column(&move_rank).unwrap_or_else(|error| panic!("{label}: {error}")))
+                .unwrap_or_else(|error| panic!("{label}: move after: {error:#}"));
+            assert_eq!(names(), ["id", "score", "rank"], "{label}");
+
+            // Moving restates the column, which must keep its default and
+            // comment.
+            let before = score_spec();
+            let move_score = ColumnOperation::Move {
+                column: before.clone(),
+                position: ColumnPosition::First,
+            };
+            run(build_column(&move_score).unwrap_or_else(|error| panic!("{label}: {error}")))
+                .unwrap_or_else(|error| panic!("{label}: move first: {error:#}"));
+            assert_eq!(names(), ["score", "id", "rank"], "{label}");
+            let after = score_spec();
+            assert_eq!(after.comment, before.comment, "{label}");
+            assert_eq!(after.default, before.default, "{label}");
+            assert!(!after.nullable, "{label}");
+
+            run(build_column(&ColumnOperation::Drop {
+                name: "rank".to_string(),
+            })
+            .unwrap_or_else(|error| panic!("{label}: {error}")))
+            .unwrap_or_else(|error| panic!("{label}: drop rank: {error:#}"));
+        } else {
+            assert!(
+                matches!(
+                    build_column(&ColumnOperation::Move {
+                        column: score_spec(),
+                        position: ColumnPosition::First,
+                    }),
+                    Err(DdlError::Unsupported(_))
+                ),
+                "{label}"
+            );
         }
 
         // A unique index that counts NULLs as equal, where the server has it.

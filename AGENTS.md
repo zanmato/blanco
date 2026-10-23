@@ -340,6 +340,17 @@ PostgreSQL, CockroachDB and DuckDB, `COMMENT COLUMN` and `MODIFY COMMENT` on Cli
 the `MS_Description` extended property on SQL Server (one `IF EXISTS` statement picks
 add, update or drop). SQLite has no comments (`Dialect::supports_comments`).
 
+Columns are placed and moved where `Dialect::supports_column_positions` (MySQL, ClickHouse),
+or in any table being created, whose `CREATE TABLE` lists them in the staged order.
+`ColumnOperation::Add` takes a `ColumnPosition` and `ColumnOperation::Move` moves a column,
+which MySQL does by restating it (`MODIFY COLUMN ... AFTER`) and ClickHouse with its type
+alone. A move carries the column it restates, so the replay keeps every column's spec
+(`StagedStructure::column_specs`) and hands back moves whose column an edit or undo changed
+since (`Replay::refreshed`), which get their statements built again. The columns grid drags a
+row by its ordinal cell (`DraggedColumn`) while it is neither sorted nor filtered. Renaming a
+column still to be added carries the later changes that name it along
+(`StructureChange::rename_added_column`).
+
 `IndexSpec` adds a method (`Dialect::index_methods`, ClickHouse's skipping index types), a
 partial index condition (`supports_partial_indexes`) and NULLS NOT DISTINCT, which needs
 PostgreSQL 15: the tab reads `Connection::server_version_num` and asks

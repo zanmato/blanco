@@ -57,6 +57,15 @@ A change the database can't make is refused when you save it. SQLite, for
 example, can't change a column's type, nullability or default, or add a
 foreign key to an existing table.
 
+### Column order
+
+On MySQL, MariaDB and ClickHouse a column can go anywhere among the others.
+A new column's **Position** puts it first, after a chosen column or at the
+end. Drag a column by its number to move it, which stages a move like any
+other change. Dragging is off while the list is sorted or filtered, since it
+then doesn't show the table's order. The other databases only add columns at
+the end and can't move them, so they offer neither.
+
 ### Creating a table
 
 **New Table…** on a connection, database, schema or Tables folder opens the
@@ -65,7 +74,8 @@ top. It starts with an `id` column the database numbers itself where it can
 (an identity column on PostgreSQL, `AUTO_INCREMENT` on MySQL and MariaDB).
 
 Add columns, indexes and foreign keys as above. A column can be marked as
-part of the primary key here. The bar at the bottom shows the `CREATE TABLE`
+part of the primary key here, and on every database the columns can be
+placed and dragged into the order the table should have. The bar at the bottom shows the `CREATE TABLE`
 statement as it grows, and **Create Table** runs it. The tab then shows the
 new table like any other. Foreign keys are declared in the `CREATE TABLE`
 itself, so SQLite and DuckDB get them too, and a ClickHouse table is ordered

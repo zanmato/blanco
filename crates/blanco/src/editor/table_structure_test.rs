@@ -6,7 +6,8 @@ use crate::editor::TableStructureParams;
 use crate::test_harness::TestHarness;
 use blanco_core::ConnectionContext;
 use blanco_core::ddl::{
-    ColumnOperation, ColumnSpec, ForeignKeyOperation, IndexOperation, IndexSpec, ReferentialAction,
+    ColumnOperation, ColumnPosition, ColumnSpec, ForeignKeyOperation, IndexOperation, IndexSpec,
+    ReferentialAction,
 };
 use database::DatabaseType;
 
@@ -197,7 +198,10 @@ async fn structure_changes_wait_for_apply_and_run_together(cx: &mut TestAppConte
     };
     tab.update_in(&mut cx, |tab, window, cx| {
         tab.stage(
-            StructureChange::Column(ColumnOperation::Add(age.clone())),
+            StructureChange::Column(ColumnOperation::Add {
+                column: age.clone(),
+                position: None,
+            }),
             window,
             cx,
         );
@@ -309,7 +313,10 @@ async fn structure_changes_wait_for_apply_and_run_together(cx: &mut TestAppConte
 
     tab.update_in(&mut cx, |tab, window, cx| {
         tab.stage(
-            StructureChange::Column(ColumnOperation::Add(age)),
+            StructureChange::Column(ColumnOperation::Add {
+                column: age,
+                position: None,
+            }),
             window,
             cx,
         );
@@ -548,11 +555,14 @@ async fn a_new_table_is_designed_then_created_in_one_statement(cx: &mut TestAppC
             name.update(cx, |name, cx| name.set_value("orders", window, cx));
         }
         tab.stage(
-            StructureChange::Column(ColumnOperation::Add(ColumnSpec {
-                name: "customer_id".to_string(),
-                data_type: "integer".to_string(),
-                ..ColumnSpec::default()
-            })),
+            StructureChange::Column(ColumnOperation::Add {
+                column: ColumnSpec {
+                    name: "customer_id".to_string(),
+                    data_type: "integer".to_string(),
+                    ..ColumnSpec::default()
+                },
+                position: None,
+            }),
             window,
             cx,
         );
@@ -609,5 +619,111 @@ async fn a_new_table_is_designed_then_created_in_one_statement(cx: &mut TestAppC
         );
         assert_eq!(tab.foreign_keys.len(), 1);
         assert_eq!(tab.foreign_keys[0].referenced_table, "customers");
+    });
+}
+
+#[gpui::test]
+async fn a_new_tables_columns_are_placed_and_dragged(cx: &mut TestAppContext) {
+    let harness = TestHarness::new(cx);
+    let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+    cx.executor().allow_parking();
+
+    execute(&harness, "CREATE TABLE settled (id integer)", &mut cx);
+    let tab = harness
+        .editor_panel
+        .update_in(&mut cx, |panel, window, cx| {
+            panel.create_new_table_tab(context(&harness), window, cx)
+        });
+    tab.update_in(&mut cx, |tab, window, cx| tab.reload(window, cx));
+    wait_until(&mut cx, "connection details", |cx| {
+        tab.read_with(cx, |tab, _| !tab.loading)
+    })
+    .await;
+
+    let column = |name: &str| ColumnSpec {
+        name: name.to_string(),
+        data_type: "text".to_string(),
+        nullable: true,
+        ..ColumnSpec::default()
+    };
+    tab.update_in(&mut cx, |tab, window, cx| {
+        if let Some(name) = &tab.creating {
+            name.update(cx, |name, cx| name.set_value("notes", window, cx));
+        }
+        for (name, position) in [
+            ("body", None),
+            ("title", Some(ColumnPosition::After("id".to_string()))),
+        ] {
+            assert!(tab.stage(
+                StructureChange::Column(ColumnOperation::Add {
+                    column: column(name),
+                    position,
+                }),
+                window,
+                cx,
+            ));
+        }
+        assert!(tab.stage(
+            StructureChange::Index(IndexOperation::Create(IndexSpec {
+                name: "notes_body_idx".to_string(),
+                columns: vec!["body".to_string()],
+                ..IndexSpec::default()
+            })),
+            window,
+            cx,
+        ));
+        // Dragging body (the last row) above id makes it the first column.
+        tab.move_column(2, 0, window, cx);
+    });
+    tab.read_with(&cx, |tab: &TableStructureTab, _| {
+        assert_eq!(tab.staged.live_column_names(), ["body", "id", "title"]);
+        let names: Vec<String> = tab
+            .new_table_definition()
+            .columns
+            .into_iter()
+            .map(|column| column.name)
+            .collect();
+        assert_eq!(names, ["body", "id", "title"]);
+    });
+
+    // Renaming body, still an addition, carries the move and the index along.
+    tab.update_in(&mut cx, |tab, window, cx| {
+        let add_ix = tab
+            .pending
+            .iter()
+            .position(|pending| {
+                matches!(
+                    &pending.change,
+                    StructureChange::Column(ColumnOperation::Add { column, .. }) if column.name == "body"
+                )
+            })
+            .expect("body's addition");
+        assert!(tab.replace_change(
+            add_ix,
+            StructureChange::Column(ColumnOperation::Add {
+                column: column("content"),
+                position: None,
+            }),
+            window,
+            cx,
+        ));
+    });
+    tab.read_with(&cx, |tab: &TableStructureTab, _| {
+        assert_eq!(tab.staged.live_column_names(), ["content", "id", "title"]);
+        assert_eq!(tab.staged.indexes[0].column_names, ["content"]);
+    });
+
+    tab.update_in(&mut cx, |tab, window, cx| tab.apply_changes(window, cx));
+    wait_until(&mut cx, "created table", |cx| {
+        tab.read_with(cx, |tab, _| {
+            !tab.is_creating() && !tab.applying && !tab.loading && !tab.columns.is_empty()
+        })
+    })
+    .await;
+    tab.read_with(&cx, |tab: &TableStructureTab, _| {
+        let names: Vec<&str> = tab.columns.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["content", "id", "title"]);
+        // SQLite cannot move the columns of a table it has.
+        assert!(!tab.places_columns());
     });
 }

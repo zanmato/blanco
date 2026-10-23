@@ -128,9 +128,37 @@ impl ColumnSpec {
     }
 }
 
+/// Where a column goes among the table's columns.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ColumnPosition {
+    First,
+    After(String),
+}
+
+impl ColumnPosition {
+    fn sql(&self, db_type: DatabaseType) -> String {
+        match self {
+            ColumnPosition::First => "FIRST".to_string(),
+            ColumnPosition::After(name) => {
+                format!("AFTER {}", db_type.dialect().quote_identifier(name.trim()))
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ColumnOperation {
-    Add(ColumnSpec),
+    /// Add a column, after the others unless `position` says where.
+    Add {
+        column: ColumnSpec,
+        position: Option<ColumnPosition>,
+    },
+    /// Move the column `column` describes. MySQL moves a column only by
+    /// restating it, so the move carries its whole definition.
+    Move {
+        column: ColumnSpec,
+        position: ColumnPosition,
+    },
     Rename {
         from: String,
         to: String,
@@ -150,7 +178,8 @@ pub enum ColumnOperation {
 impl ColumnOperation {
     pub fn label(&self) -> &'static str {
         match self {
-            ColumnOperation::Add(_) => "Add column",
+            ColumnOperation::Add { .. } => "Add column",
+            ColumnOperation::Move { .. } => "Move column",
             ColumnOperation::Rename { .. } => "Rename column",
             ColumnOperation::Drop { .. } => "Drop column",
             ColumnOperation::Alter { .. } => "Alter column",
@@ -308,14 +337,7 @@ fn column_definition(db_type: DatabaseType, spec: &ColumnSpec) -> String {
     definition.push(' ');
     let data_type = spec.data_type.trim();
     match db_type {
-        DatabaseType::ClickHouse => {
-            let already_nullable = data_type.to_ascii_lowercase().starts_with("nullable(");
-            if spec.nullable && !already_nullable {
-                definition.push_str(&format!("Nullable({data_type})"));
-            } else {
-                definition.push_str(data_type);
-            }
-        }
+        DatabaseType::ClickHouse => definition.push_str(&clickhouse_type(spec)),
         DatabaseType::MsSql => {
             definition.push_str(data_type);
             definition.push_str(if spec.nullable { " NULL" } else { " NOT NULL" });
@@ -348,6 +370,24 @@ fn column_definition(db_type: DatabaseType, spec: &ColumnSpec) -> String {
         definition.push_str(&format!(" COMMENT {}", dialect.string_literal(comment)));
     }
     definition
+}
+
+/// ClickHouse spells a nullable column's type `Nullable(T)`.
+fn clickhouse_type(spec: &ColumnSpec) -> String {
+    let data_type = spec.data_type.trim();
+    let already_nullable = data_type.to_ascii_lowercase().starts_with("nullable(");
+    if spec.nullable && !already_nullable {
+        format!("Nullable({data_type})")
+    } else {
+        data_type.to_string()
+    }
+}
+
+fn unsupported_positions(db_type: DatabaseType) -> DdlError {
+    DdlError::Unsupported(format!(
+        "{} adds columns only after the others and cannot move them",
+        db_type.as_str()
+    ))
 }
 
 fn unsupported_comments(db_type: DatabaseType) -> DdlError {
@@ -499,12 +539,22 @@ pub fn column_operation_sql(
     let quoted = |name: &str| dialect.quote_identifier(name.trim());
 
     match operation {
-        ColumnOperation::Add(spec) => {
+        ColumnOperation::Add {
+            column: spec,
+            position,
+        } => {
             validate_spec(spec)?;
             let comment = spec.trimmed_comment();
             if comment.is_some() && !dialect.supports_comments() {
                 return Err(unsupported_comments(db_type));
             }
+            if position.is_some() && !dialect.supports_column_positions() {
+                return Err(unsupported_positions(db_type));
+            }
+            let placement = position
+                .as_ref()
+                .map(|position| format!(" {}", position.sql(db_type)))
+                .unwrap_or_default();
             let mut statements = Vec::new();
             if db_type == DatabaseType::DuckDb && !spec.nullable {
                 // DuckDB adds no column with a constraint, so the NOT NULL
@@ -526,7 +576,7 @@ pub fn column_operation_sql(
                 statements.push(match db_type {
                     // T-SQL has no COLUMN keyword in ADD.
                     DatabaseType::MsSql => format!("ALTER TABLE {target} ADD {definition}"),
-                    _ => format!("ALTER TABLE {target} ADD COLUMN {definition}"),
+                    _ => format!("ALTER TABLE {target} ADD COLUMN {definition}{placement}"),
                 });
             }
             if comment.is_some()
@@ -537,6 +587,42 @@ pub fn column_operation_sql(
                 )?);
             }
             Ok(statements)
+        }
+        ColumnOperation::Move {
+            column: spec,
+            position,
+        } => {
+            validate_spec(spec)?;
+            if let ColumnPosition::After(name) = position {
+                require_name(name, "preceding column")?;
+                if name.trim() == spec.name.trim() {
+                    return Err(DdlError::Invalid(
+                        "a column cannot follow itself".to_string(),
+                    ));
+                }
+            }
+            let placement = position.sql(db_type);
+            match db_type {
+                DatabaseType::MySQL => {
+                    if spec.generated {
+                        return Err(DdlError::Unsupported(
+                            "MySQL moves a generated column only with its expression; move it in a query".to_string(),
+                        ));
+                    }
+                    Ok(vec![format!(
+                        "ALTER TABLE {target} MODIFY COLUMN {} {placement}",
+                        column_definition(db_type, spec)
+                    )])
+                }
+                // ClickHouse keeps the default, codec, TTL and comment of a
+                // column modified with its type alone.
+                DatabaseType::ClickHouse => Ok(vec![format!(
+                    "ALTER TABLE {target} MODIFY COLUMN {} {} {placement}",
+                    quoted(&spec.name),
+                    clickhouse_type(spec)
+                )]),
+                _ => Err(unsupported_positions(db_type)),
+            }
         }
         ColumnOperation::Rename { from, to } => {
             require_name(from, "column")?;
@@ -1206,8 +1292,109 @@ mod tests {
     }
 
     #[test]
+    fn column_positions_per_backend() {
+        let first = ColumnOperation::Add {
+            column: spec("age", "int", true, None),
+            position: Some(ColumnPosition::First),
+        };
+        assert_eq!(
+            column_operation_sql(DatabaseType::MySQL, None, "user", &first),
+            Ok(vec![
+                "ALTER TABLE `user` ADD COLUMN `age` int FIRST".to_string()
+            ])
+        );
+        let after = ColumnOperation::Add {
+            column: ColumnSpec {
+                comment: Some("Years".to_string()),
+                ..spec("age", "UInt8", false, None)
+            },
+            position: Some(ColumnPosition::After("name".to_string())),
+        };
+        assert_eq!(
+            column_operation_sql(DatabaseType::ClickHouse, None, "user", &after),
+            Ok(vec![
+                "ALTER TABLE `user` ADD COLUMN `age` UInt8 COMMENT 'Years' AFTER `name`"
+                    .to_string()
+            ])
+        );
+        for db_type in [
+            DatabaseType::PostgreSQL,
+            DatabaseType::CockroachDb,
+            DatabaseType::SQLite,
+            DatabaseType::MsSql,
+            DatabaseType::DuckDb,
+        ] {
+            assert!(
+                matches!(
+                    column_operation_sql(db_type, None, "user", &first),
+                    Err(DdlError::Unsupported(_))
+                ),
+                "{db_type:?}"
+            );
+        }
+
+        // MySQL restates the column, attributes and comment included.
+        let id = ColumnSpec {
+            attributes: Some("AUTO_INCREMENT".to_string()),
+            comment: Some("Key".to_string()),
+            ..spec("id", "bigint unsigned", false, None)
+        };
+        let move_id = ColumnOperation::Move {
+            column: id.clone(),
+            position: ColumnPosition::After("email".to_string()),
+        };
+        assert_eq!(
+            column_operation_sql(DatabaseType::MySQL, Some("app"), "user", &move_id),
+            Ok(vec![
+                "ALTER TABLE `app`.`user` MODIFY COLUMN `id` bigint unsigned NOT NULL AUTO_INCREMENT COMMENT 'Key' AFTER `email`"
+                    .to_string()
+            ])
+        );
+        // ClickHouse keeps everything but the type, which it must be given.
+        let move_note = ColumnOperation::Move {
+            column: ColumnSpec {
+                default: Some("''".to_string()),
+                ..spec("note", "String", true, None)
+            },
+            position: ColumnPosition::First,
+        };
+        assert_eq!(
+            column_operation_sql(DatabaseType::ClickHouse, None, "t", &move_note),
+            Ok(vec![
+                "ALTER TABLE `t` MODIFY COLUMN `note` Nullable(String) FIRST".to_string()
+            ])
+        );
+        assert!(matches!(
+            column_operation_sql(DatabaseType::PostgreSQL, None, "t", &move_note),
+            Err(DdlError::Unsupported(_))
+        ));
+        let generated = ColumnOperation::Move {
+            column: ColumnSpec {
+                generated: true,
+                ..id.clone()
+            },
+            position: ColumnPosition::First,
+        };
+        assert!(matches!(
+            column_operation_sql(DatabaseType::MySQL, None, "t", &generated),
+            Err(DdlError::Unsupported(_))
+        ));
+        let after_itself = ColumnOperation::Move {
+            column: id,
+            position: ColumnPosition::After("id".to_string()),
+        };
+        assert!(matches!(
+            column_operation_sql(DatabaseType::MySQL, None, "t", &after_itself),
+            Err(DdlError::Invalid(_))
+        ));
+    }
+
+    #[test]
     fn add_column_per_backend() {
-        let add = ColumnOperation::Add(spec("age", "integer", false, Some("0")));
+        let add = ColumnOperation::Add {
+            column: spec("age", "integer", false, Some("0")),
+            position: None,
+        };
         let sql = |db_type| column_operation_sql(db_type, Some("app"), "user", &add);
         assert_eq!(
             sql(DatabaseType::PostgreSQL),
@@ -1228,7 +1415,10 @@ mod tests {
                 "ALTER TABLE [app].[user] ADD [age] integer NOT NULL DEFAULT 0".to_string()
             ])
         );
-        let nullable = ColumnOperation::Add(spec("note", "String", true, None));
+        let nullable = ColumnOperation::Add {
+            column: spec("note", "String", true, None),
+            position: None,
+        };
         assert_eq!(
             column_operation_sql(DatabaseType::ClickHouse, None, "t", &nullable),
             Ok(vec![
@@ -1250,7 +1440,10 @@ mod tests {
                 DatabaseType::PostgreSQL,
                 None,
                 "t",
-                &ColumnOperation::Add(spec("", "int", true, None))
+                &ColumnOperation::Add {
+                    column: spec("", "int", true, None),
+                    position: None,
+                }
             ),
             Err(DdlError::Invalid(_))
         ));
@@ -1430,7 +1623,10 @@ mod tests {
             comment: comment.map(str::to_string),
             ..spec("code", "text", true, None)
         };
-        let add = ColumnOperation::Add(commented(Some("ISO 4217's code")));
+        let add = ColumnOperation::Add {
+            column: commented(Some("ISO 4217's code")),
+            position: None,
+        };
         assert_eq!(
             column_operation_sql(DatabaseType::PostgreSQL, Some("app"), "t", &add),
             Ok(vec![

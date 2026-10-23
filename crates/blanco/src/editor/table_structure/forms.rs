@@ -6,7 +6,8 @@ use std::rc::Rc;
 use anyhow::Result;
 use app_database::VirtualForeignKey;
 use blanco_core::ddl::{
-    ColumnOperation, ColumnSpec, ForeignKeyOperation, IndexOperation, IndexSpec, ReferentialAction,
+    ColumnOperation, ColumnPosition, ColumnSpec, ForeignKeyOperation, IndexOperation, IndexSpec,
+    ReferentialAction,
 };
 use blanco_core::{ConnectionContext, Dialect};
 use gpui::{
@@ -45,14 +46,21 @@ pub(crate) struct ColumnForm {
     /// changed in a query.
     offers_primary_key: bool,
     primary_key: bool,
+    /// Where a new column goes, offered where the backend can place it: at
+    /// the end, first, or after one of `position_columns`.
+    position: Option<Entity<SelectState<Vec<String>>>>,
+    position_columns: Vec<String>,
 }
 
 impl ColumnForm {
+    /// `positions` lists the columns a new column may follow, `None` where
+    /// it can only be added after them all.
     pub(crate) fn new(
         dialect: Dialect,
         original: Option<ColumnSpec>,
         user_types: Vec<String>,
         offers_primary_key: bool,
+        positions: Option<Vec<String>>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -94,8 +102,18 @@ impl ColumnForm {
             )));
             editor
         });
+        let position_columns = positions.clone().unwrap_or_default();
+        let position = positions.map(|columns| {
+            let labels = ["At the end".to_string(), "First".to_string()]
+                .into_iter()
+                .chain(columns.iter().map(|column| format!("After {column}")))
+                .collect::<Vec<_>>();
+            cx.new(|cx| SelectState::new(labels, Some(IndexPath::new(0)), window, cx))
+        });
         Self {
             dialect,
+            position,
+            position_columns,
             nullable: original.as_ref().is_none_or(|spec| spec.nullable),
             offers_primary_key,
             primary_key: original.as_ref().is_some_and(|spec| spec.primary_key),
@@ -151,12 +169,28 @@ impl ColumnForm {
         }
     }
 
+    /// Where the new column goes, `None` for after the others.
+    fn position(&self, cx: &App) -> Option<ColumnPosition> {
+        let row = self.position.as_ref()?.read(cx).selected_index(cx)?.row;
+        match row {
+            0 => None,
+            1 => Some(ColumnPosition::First),
+            row => self
+                .position_columns
+                .get(row - 2)
+                .map(|column| ColumnPosition::After(column.clone())),
+        }
+    }
+
     /// The change the form describes, `None` when it changes nothing. A
     /// change of the name alone is a rename, which every backend can make.
     pub(crate) fn operation(&self, cx: &App) -> Option<ColumnOperation> {
         let spec = self.spec(cx);
         match &self.original {
-            None => Some(ColumnOperation::Add(spec)),
+            None => Some(ColumnOperation::Add {
+                column: spec,
+                position: self.position(cx),
+            }),
             Some(original) if *original == spec => None,
             Some(original)
                 if ColumnSpec {
@@ -248,6 +282,9 @@ impl Render for ColumnForm {
             )
             .when(self.dialect.supports_comments(), |this| {
                 this.child(labeled("Comment", Input::new(&self.comment).small()))
+            })
+            .when_some(self.position.clone(), |this, position| {
+                this.child(labeled("Position", Select::new(&position).small()))
             })
     }
 }
@@ -916,7 +953,7 @@ pub(super) fn field_label(label: &'static str) -> impl IntoElement {
     div().text_xs().child(label)
 }
 
-fn labeled(label: &'static str, input: Input) -> impl IntoElement {
+fn labeled(label: &'static str, input: impl IntoElement) -> impl IntoElement {
     v_flex().gap_1().child(field_label(label)).child(input)
 }
 
