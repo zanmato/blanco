@@ -330,12 +330,10 @@ impl EditorPanel {
             None => item.group("Other"),
         };
 
-        let connection_suffix = tab.connection_tab().map(|tab| {
-            (
-                tab.context.connection_name.clone(),
-                tab.context.environment_type,
-            )
-        });
+        // Every tab on a connection names it, whatever kind of tab it is.
+        let connection_suffix = context
+            .as_ref()
+            .map(|context| (context.connection_name.clone(), context.environment_type));
 
         item.suffix(
             h_flex()

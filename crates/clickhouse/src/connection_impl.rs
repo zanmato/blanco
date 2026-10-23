@@ -348,16 +348,84 @@ impl Connection for ClickhouseConnection {
                 let expr = row.pop().flatten().unwrap_or_default();
                 let algorithm = row.pop().flatten().unwrap_or_else(|| "skip".to_string());
                 let name = row.pop().flatten().unwrap_or_default();
+                // A skipping index covers an expression, which is a column
+                // name in the common case.
                 IndexInfo {
                     name,
                     algorithm,
                     is_unique: false,
-                    column_names: vec![],
-                    condition: if expr.is_empty() { None } else { Some(expr) },
+                    column_names: if expr.is_empty() { vec![] } else { vec![expr] },
+                    condition: None,
                     comment: None,
+                    nulls_not_distinct: false,
                 }
             })
             .collect())
+    }
+
+    async fn table_info(
+        &self,
+        schema: Option<&str>,
+        table_name: &str,
+    ) -> Result<blanco_core::TableInfo> {
+        let db = schema.unwrap_or(&self.database).replace('\'', "''");
+        let table = table_name.replace('\'', "''");
+        let sql = format!(
+            "SELECT comment, toString(total_rows), toString(total_bytes), engine, \
+             toString(metadata_modification_time), sorting_key, partition_key \
+             FROM system.tables WHERE database = '{db}' AND name = '{table}'"
+        );
+        let tsv = self.raw_query_tsv(&sql, None).await?;
+        let row = tsv
+            .rows
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("Table '{db}.{table}' not found"))?;
+        let get = |ix: usize| {
+            row.get(ix)
+                .cloned()
+                .flatten()
+                .filter(|value| !value.is_empty())
+        };
+        let number = |ix: usize| get(ix).and_then(|value| value.parse::<u64>().ok());
+        let mut info = blanco_core::TableInfo {
+            comment: get(0),
+            estimated_rows: number(1),
+            data_bytes: number(2),
+            ..Default::default()
+        };
+        for (label, value) in [
+            ("Engine", get(3)),
+            ("Sorting key", get(5)),
+            ("Partition key", get(6)),
+            ("Definition changed", get(4)),
+        ] {
+            if let Some(value) = value {
+                info.options.push((label.to_string(), value));
+            }
+        }
+        // Every insert, merge and mutation writes a new part, so the newest
+        // part tells when the data last changed.
+        let parts = self
+            .raw_query_tsv(
+                &format!(
+                    "SELECT toString(maxOrNull(modification_time)) FROM system.parts \
+                     WHERE database = '{db}' AND table = '{table}' AND active"
+                ),
+                None,
+            )
+            .await?;
+        info.last_modified = parts
+            .rows
+            .into_iter()
+            .next()
+            .and_then(|row| row.into_iter().next().flatten())
+            .filter(|at| !at.is_empty())
+            .map(|at| blanco_core::LastModified {
+                at,
+                note: "when the newest data part was written".to_string(),
+            });
+        Ok(info)
     }
 
     async fn table_ddl(&self, schema: Option<&str>, table_name: &str) -> Result<String> {
@@ -369,11 +437,42 @@ impl Connection for ClickhouseConnection {
             table_name.replace('`', "``")
         );
         let tsv = self.raw_query_tsv(&sql, None).await?;
-        tsv.rows
+        let ddl = tsv
+            .rows
             .into_iter()
             .next()
             .and_then(|mut row| row.pop().flatten())
-            .ok_or_else(|| anyhow::anyhow!("Table '{}.{}' not found", db, table_name))
+            .ok_or_else(|| anyhow::anyhow!("Table '{}.{}' not found", db, table_name))?;
+
+        let dialect = blanco_core::DatabaseType::ClickHouse.dialect();
+        let object = format!(
+            "{}.{}",
+            dialect.quote_identifier(db),
+            dialect.quote_identifier(table_name)
+        );
+        let grants_query = format!(
+            "SELECT coalesce(user_name, role_name), grant_option,
+                    arrayStringConcat(arraySort(groupArray(toString(access_type))), ', ')
+             FROM system.grants
+             WHERE database = {} AND table = {} AND column IS NULL AND NOT is_partial_revoke
+             GROUP BY user_name, role_name, grant_option
+             ORDER BY 1, 2",
+            dialect.string_literal(db),
+            dialect.string_literal(table_name)
+        );
+        // Other users' grants are visible only with SHOW USERS, and a
+        // refused read is no reason to withhold the CREATE statement.
+        let grants = match self.raw_query_tsv(&grants_query, None).await {
+            Ok(result) => grant_statements(result.rows, &object),
+            Err(error) => {
+                tracing::debug!("Leaving the grants on {object} out of its DDL: {error:#}");
+                Vec::new()
+            }
+        };
+        if grants.is_empty() {
+            return Ok(ddl);
+        }
+        Ok(format!("{ddl};\n\n{}", grants.join("\n")))
     }
 
     async fn get_database_schema_paginated(
@@ -471,6 +570,28 @@ impl Connection for ClickhouseConnection {
         );
         self.execute_query(&sql, None, None).await
     }
+}
+
+/// GRANT statements from rows of (grantee, grant option, privileges).
+fn grant_statements(rows: Vec<Vec<Option<String>>>, object: &str) -> Vec<String> {
+    let dialect = blanco_core::DatabaseType::ClickHouse.dialect();
+    rows.into_iter()
+        .filter_map(|row| {
+            let mut cells = row.into_iter();
+            let grantee = cells.next().flatten()?;
+            let grant_option = cells.next().flatten().as_deref() == Some("1");
+            let privileges = cells.next().flatten()?;
+            let option = if grant_option {
+                " WITH GRANT OPTION"
+            } else {
+                ""
+            };
+            Some(format!(
+                "GRANT {privileges} ON {object} TO {}{option};",
+                dialect.quote_identifier(&grantee)
+            ))
+        })
+        .collect()
 }
 
 fn parse_rows_affected(body: &str) -> u64 {
@@ -646,6 +767,34 @@ mod split_tests {
         assert_eq!(
             split_sql_statements("SELECT 'it''s; fine'; SELECT 2"),
             vec!["SELECT 'it''s; fine'".to_string(), "SELECT 2".to_string()]
+        );
+    }
+}
+
+#[cfg(test)]
+mod grant_tests {
+    use super::grant_statements;
+
+    #[test]
+    fn grants_name_the_grantee_and_keep_the_grant_option() {
+        let rows = vec![
+            vec![
+                Some("reader".to_string()),
+                Some("0".to_string()),
+                Some("INSERT, SELECT".to_string()),
+            ],
+            vec![
+                Some("admin`s".to_string()),
+                Some("1".to_string()),
+                Some("SELECT".to_string()),
+            ],
+        ];
+        assert_eq!(
+            grant_statements(rows, "`blanco`.`events`"),
+            vec![
+                "GRANT INSERT, SELECT ON `blanco`.`events` TO `reader`;".to_string(),
+                "GRANT SELECT ON `blanco`.`events` TO `admin``s` WITH GRANT OPTION;".to_string(),
+            ]
         );
     }
 }

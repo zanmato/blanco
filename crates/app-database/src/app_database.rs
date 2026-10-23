@@ -7,6 +7,7 @@ mod schema;
 mod settings;
 mod snippets;
 mod types;
+mod virtual_foreign_keys;
 mod windows;
 
 pub use connections::LegacyConnectionCredentials;
@@ -15,6 +16,7 @@ pub use types::{
     ConnectionData, EditorKind, EnvironmentType, QueryHistoryData, QueryTabData, SnippetData,
     WindowData, WindowGeometry,
 };
+pub use virtual_foreign_keys::VirtualForeignKey;
 
 use gpui::{App, Global};
 use sqlx::ConnectOptions;

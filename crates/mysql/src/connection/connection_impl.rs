@@ -716,6 +716,99 @@ impl Connection for MysqlConnection {
         Ok(ddl)
     }
 
+    async fn table_info(
+        &self,
+        _schema: Option<&str>,
+        table_name: &str,
+    ) -> Result<blanco_core::TableInfo, anyhow::Error> {
+        let database = self
+            .initial_database
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No database specified"))?;
+        let pool = self.get_or_create_pool(database).await?;
+        let query = "
+            SELECT NULLIF(TABLE_COMMENT, ''),
+                   CAST(TABLE_ROWS AS CHAR),
+                   CAST(DATA_LENGTH AS CHAR),
+                   CAST(INDEX_LENGTH AS CHAR),
+                   CAST(DATE_FORMAT(CREATE_TIME, '%Y-%m-%d %H:%i:%s') AS CHAR),
+                   CAST(DATE_FORMAT(UPDATE_TIME, '%Y-%m-%d %H:%i:%s') AS CHAR),
+                   ENGINE,
+                   TABLE_COLLATION,
+                   CAST(AUTO_INCREMENT AS CHAR),
+                   ROW_FORMAT
+            FROM information_schema.TABLES
+            WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
+        ";
+        let row = sqlx::query(query)
+            .bind(database)
+            .bind(table_name)
+            .fetch_optional(&pool)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Table '{database}.{table_name}' not found"))?;
+        let get = |ix: usize| {
+            row.try_get::<Option<String>, _>(ix)
+                .ok()
+                .flatten()
+                .filter(|value| !value.is_empty())
+        };
+        let number = |ix: usize| get(ix).and_then(|value| value.parse::<u64>().ok());
+        let engine = get(6);
+        // InnoDB keeps the update time in memory only, so it starts out
+        // empty after a restart and covers the time since.
+        let note = if engine
+            .as_deref()
+            .is_some_and(|engine| engine.eq_ignore_ascii_case("InnoDB"))
+        {
+            "since the server last started"
+        } else {
+            "from the table's files"
+        };
+        let mut info = blanco_core::TableInfo {
+            comment: get(0),
+            estimated_rows: number(1),
+            data_bytes: number(2),
+            index_bytes: number(3),
+            created: get(4),
+            last_modified: get(5).map(|at| blanco_core::LastModified {
+                at,
+                note: note.to_string(),
+            }),
+            ..Default::default()
+        };
+        for (label, value) in [
+            ("Engine", engine),
+            ("Collation", get(7)),
+            ("Next auto increment", get(8)),
+            ("Row format", get(9)),
+        ] {
+            if let Some(value) = value {
+                info.options.push((label.to_string(), value));
+            }
+        }
+
+        // CHANGE COLUMN restates a whole column, so the structure tab needs
+        // the full type and the attributes DATA_TYPE leaves out.
+        let definitions = sqlx::query(
+            "SELECT COLUMN_NAME, CAST(COLUMN_TYPE AS CHAR), CAST(EXTRA AS CHAR)
+             FROM information_schema.COLUMNS
+             WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
+             ORDER BY ORDINAL_POSITION",
+        )
+        .bind(database)
+        .bind(table_name)
+        .fetch_all(&pool)
+        .await?;
+        for row in definitions {
+            let name: String = row.try_get(0)?;
+            let column_type: String = row.try_get(1)?;
+            let extra: String = row.try_get::<Option<String>, _>(2)?.unwrap_or_default();
+            info.column_definitions
+                .push(column_definition(name, column_type, &extra));
+        }
+        Ok(info)
+    }
+
     async fn table_ddl(
         &self,
         _schema: Option<&str>,
@@ -736,7 +829,28 @@ impl Connection for MysqlConnection {
         let ddl: String = row
             .try_get::<String, _>(1)
             .map_err(|e| anyhow::anyhow!("DDL column not found: {}", e))?;
-        Ok(ddl)
+
+        let object = {
+            let dialect = blanco_core::DatabaseType::MySQL.dialect();
+            format!(
+                "{}.{}",
+                dialect.quote_identifier(database),
+                dialect.quote_identifier(table_name)
+            )
+        };
+        // TABLE_PRIVILEGES lists only the grants the user may see, and a
+        // refused read is no reason to withhold the CREATE statement.
+        let grants = match table_grants(&pool, database, table_name).await {
+            Ok(rows) => grant_statements(rows, &object),
+            Err(error) => {
+                tracing::debug!("Leaving the grants on {object} out of its DDL: {error:#}");
+                Vec::new()
+            }
+        };
+        if grants.is_empty() {
+            return Ok(ddl);
+        }
+        Ok(format!("{ddl};\n\n{}", grants.join("\n")))
     }
 
     async fn get_queryable_entities(
@@ -1100,12 +1214,55 @@ impl Connection for MysqlConnection {
                 column_names,
                 condition,
                 comment,
+                nulls_not_distinct: false,
             });
         }
 
         tracing::debug!("Found {} indexes for table: {}", indexes.len(), table_name);
         Ok(indexes)
     }
+}
+
+/// (grantee, grantable, privileges) for each grantee of a table, with the
+/// privileges that share a grant option together.
+async fn table_grants(
+    pool: &sqlx::MySqlPool,
+    database: &str,
+    table_name: &str,
+) -> Result<Vec<(String, bool, String)>> {
+    let rows = sqlx::query(
+        "SELECT GRANTEE, IS_GRANTABLE,
+                CAST(GROUP_CONCAT(PRIVILEGE_TYPE ORDER BY PRIVILEGE_TYPE SEPARATOR ', ') AS CHAR)
+         FROM information_schema.TABLE_PRIVILEGES
+         WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
+         GROUP BY GRANTEE, IS_GRANTABLE
+         ORDER BY GRANTEE, IS_GRANTABLE",
+    )
+    .bind(database)
+    .bind(table_name)
+    .fetch_all(pool)
+    .await?;
+    rows.iter()
+        .map(|row| {
+            let grantee: String = row.try_get(0)?;
+            let grantable: String = row.try_get(1)?;
+            let privileges: String = row.try_get(2)?;
+            Ok((grantee, grantable == "YES", privileges))
+        })
+        .collect()
+}
+
+fn grant_statements(grants: Vec<(String, bool, String)>, object: &str) -> Vec<String> {
+    grants
+        .into_iter()
+        .map(|(grantee, grantable, privileges)| {
+            // MariaDB lists a role as an account with an empty host, which
+            // as written would name an anonymous host instead.
+            let grantee = grantee.strip_suffix("@''").unwrap_or(&grantee);
+            let option = if grantable { " WITH GRANT OPTION" } else { "" };
+            format!("GRANT {privileges} ON {object} TO {grantee}{option};")
+        })
+        .collect()
 }
 
 /// Per-statement accumulator used by `execute_script` to preserve result-set
@@ -1159,5 +1316,52 @@ impl MysqlStmtAcc {
             connection_id: None,
             table_columns: None,
         }
+    }
+}
+
+/// A column's definition from its `COLUMN_TYPE` and `EXTRA`. MySQL marks a
+/// default that is an expression `DEFAULT_GENERATED`, which is no clause of
+/// its own, and a generated column `VIRTUAL GENERATED` or `STORED GENERATED`.
+fn column_definition(
+    name: String,
+    column_type: String,
+    extra: &str,
+) -> blanco_core::ColumnDefinition {
+    let generated = extra.contains("GENERATED") && !extra.contains("DEFAULT_GENERATED");
+    let attributes = extra
+        .split_whitespace()
+        .filter(|word| *word != "DEFAULT_GENERATED")
+        .collect::<Vec<_>>()
+        .join(" ");
+    blanco_core::ColumnDefinition {
+        name,
+        column_type,
+        attributes: (!generated && !attributes.is_empty()).then_some(attributes),
+        generated,
+    }
+}
+
+#[cfg(test)]
+mod column_definition_tests {
+    use super::column_definition;
+
+    #[test]
+    fn extra_becomes_attributes_or_marks_a_generated_column() {
+        let definition = |extra: &str| column_definition("c".into(), "int".into(), extra);
+        assert_eq!(
+            definition("auto_increment").attributes.as_deref(),
+            Some("auto_increment")
+        );
+        assert_eq!(
+            definition("DEFAULT_GENERATED on update CURRENT_TIMESTAMP")
+                .attributes
+                .as_deref(),
+            Some("on update CURRENT_TIMESTAMP")
+        );
+        assert_eq!(definition("DEFAULT_GENERATED").attributes, None);
+        assert!(!definition("DEFAULT_GENERATED").generated);
+        let virtual_column = definition("VIRTUAL GENERATED");
+        assert!(virtual_column.generated);
+        assert_eq!(virtual_column.attributes, None);
     }
 }

@@ -359,26 +359,9 @@ impl MssqlConnection {
     }
 
     pub fn map_mssql_type(type_name: &str) -> ColumnType {
-        let lower = type_name.to_lowercase();
-        let bare = lower.split('(').next().unwrap_or(&lower).trim();
-
-        match bare {
-            "bit" => ColumnType::Boolean,
-            "tinyint" | "smallint" | "int" | "bigint" => ColumnType::Integer,
-            "real" | "float" | "decimal" | "numeric" | "money" | "smallmoney" => {
-                ColumnType::Numeric
-            }
-            "date" | "time" | "datetime" | "datetime2" | "smalldatetime" | "datetimeoffset" => {
-                ColumnType::DateTime
-            }
-            "uniqueidentifier" => ColumnType::Uuid,
-            "varbinary" | "binary" | "image" => ColumnType::Binary,
-            "text" | "ntext" | "varchar" | "nvarchar" | "char" | "nchar" | "xml" => {
-                ColumnType::Text
-            }
-            "json" => ColumnType::Json,
-            _ => ColumnType::Unknown,
-        }
+        blanco_core::DatabaseType::MsSql
+            .dialect()
+            .column_type(type_name)
     }
 
     fn map_tiberius_column_type(ct: tiberius::ColumnType) -> ColumnType {
@@ -982,6 +965,63 @@ impl Connection for MssqlConnection {
         Ok(entities)
     }
 
+    async fn table_info(
+        &self,
+        schema: Option<&str>,
+        table_name: &str,
+    ) -> Result<blanco_core::TableInfo> {
+        let sql = schema::table_info_sql(table_name, schema);
+        let result = self
+            .execute_query(&sql, self.initial_database.as_deref(), None)
+            .await?;
+        let row = result
+            .rows
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("Table '{table_name}' not found"))?;
+        let get = |ix: usize| {
+            row.get(ix)
+                .cloned()
+                .flatten()
+                .filter(|value| !value.is_empty())
+        };
+        let number = |ix: usize| get(ix).and_then(|value| value.parse::<u64>().ok());
+        let mut info = blanco_core::TableInfo {
+            comment: get(0),
+            estimated_rows: number(1),
+            data_bytes: number(2),
+            index_bytes: number(3),
+            created: get(4),
+            ..Default::default()
+        };
+        // The index usage statistics need VIEW SERVER STATE, which a user
+        // may lack. The rest of the information stands without them.
+        let usage = self
+            .execute_query(
+                &schema::table_last_update_sql(table_name, schema),
+                self.initial_database.as_deref(),
+                None,
+            )
+            .await;
+        match usage {
+            Ok(usage) => {
+                info.last_modified = usage
+                    .rows
+                    .into_iter()
+                    .next()
+                    .and_then(|row| row.into_iter().next().flatten())
+                    .map(|at| blanco_core::LastModified {
+                        at,
+                        note: "since the server last started".to_string(),
+                    });
+            }
+            Err(error) => {
+                tracing::debug!("Reading when {table_name} was last updated failed: {error:#}")
+            }
+        }
+        Ok(info)
+    }
+
     async fn get_columns_for_table(
         &self,
         table_name: &str,
@@ -1055,8 +1095,9 @@ impl Connection for MssqlConnection {
                     } else {
                         column_names_str.split(',').map(String::from).collect()
                     },
-                    condition: None,
+                    condition: get(4).filter(|condition| !condition.is_empty()),
                     comment: None,
+                    nulls_not_distinct: false,
                 }
             })
             .collect())

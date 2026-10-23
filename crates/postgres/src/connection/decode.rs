@@ -132,60 +132,9 @@ impl PostgresConnection {
     /// them through the string decoder, which is fast and avoids a
     /// "unknown column type" warning per row.
     pub(super) fn map_postgres_type(type_name: &str) -> ColumnType {
-        let lower = type_name.to_lowercase();
-        match lower.as_str() {
-            // Integers (signed + serial)
-            "smallint" | "int2" | "smallserial" | "int" | "int4" | "integer" | "serial"
-            | "bigint" | "int8" | "bigserial" => ColumnType::Integer,
-            // PostgreSQL object identifier integers
-            "oid" | "xid" | "xid8" | "cid" | "tid" => ColumnType::Integer,
-            // Numerics
-            "real" | "float4" | "double precision" | "float8" | "numeric" | "decimal" | "money" => {
-                ColumnType::Numeric
-            }
-            "boolean" | "bool" => ColumnType::Boolean,
-            // Character / text family (note: "char" is the 1-byte type, char is bpchar)
-            "text" | "varchar" | "character varying" | "char" | "\"char\"" | "bpchar"
-            | "character" | "name" => ColumnType::Text,
-            // Date / time
-            "timestamp"
-            | "timestamp without time zone"
-            | "timestamptz"
-            | "timestamp with time zone"
-            | "date"
-            | "time"
-            | "time without time zone"
-            | "timetz"
-            | "time with time zone"
-            | "interval" => ColumnType::DateTime,
-            "uuid" => ColumnType::Uuid,
-            "json" | "jsonb" | "jsonpath" => ColumnType::Json,
-            // An extension type without a fixed OID, known by its name.
-            "hstore" => ColumnType::KeyValue,
-            "bytea" => ColumnType::Binary,
-            "array" => ColumnType::Array,
-            _ if lower.ends_with("[]") => ColumnType::Array,
-            // Network address types: come back as text
-            "inet" | "cidr" | "macaddr" | "macaddr8" => ColumnType::Text,
-            // Bit strings: text representation is "1010..."
-            "bit" | "varbit" | "bit varying" => ColumnType::Text,
-            // Geometric types: rendered as text like "(1,2),(3,4)"
-            "point" | "line" | "lseg" | "box" | "path" | "polygon" | "circle" => ColumnType::Text,
-            // Full-text search
-            "tsvector" | "tsquery" | "gtsvector" => ColumnType::Text,
-            // Ranges and multiranges (built-in)
-            "int4range" | "int8range" | "numrange" | "daterange" | "tsrange" | "tstzrange"
-            | "int4multirange" | "int8multirange" | "nummultirange" | "datemultirange"
-            | "tsmultirange" | "tstzmultirange" => ColumnType::Text,
-            // System catalog identifier aliases (regclass, regtype, etc.)
-            "regclass" | "regcollation" | "regconfig" | "regdictionary" | "regnamespace"
-            | "regoper" | "regoperator" | "regproc" | "regprocedure" | "regrole" | "regtype" => {
-                ColumnType::Text
-            }
-            // Misc text-renderable
-            "xml" | "pg_lsn" | "aclitem" | "pg_snapshot" | "txid_snapshot" => ColumnType::Text,
-            _ => ColumnType::Unknown,
-        }
+        blanco_core::DatabaseType::PostgreSQL
+            .dialect()
+            .column_type(type_name)
     }
 
     /// Handle array types with proper base type detection

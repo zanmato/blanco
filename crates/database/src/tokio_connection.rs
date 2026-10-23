@@ -11,15 +11,16 @@
 //! `connect` is intentionally not implemented: connections are connected by
 //! their factory before being wrapped, and the wrapper is then handed out as
 //! immutable shared state.
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use blanco_core::{
+    BatchFailure, BatchOutcome, ColumnInfo, Connection, DatabaseType, FunctionSignatureInfo,
+    KeyValueResult, QueryResult, StatementAccess, TableParent,
     connection_trait::{
         ColumnType, DatabaseSchemaResult, ForeignKeyConstraint, IndexInfo, ObjectKind,
         QueryableEntity,
     },
-    write_guard, BatchFailure, BatchOutcome, ColumnInfo, Connection, DatabaseType,
-    FunctionSignatureInfo, KeyValueResult, QueryResult, StatementAccess, TableParent,
+    write_guard,
 };
 use futures::Stream;
 use std::future::Future;
@@ -384,6 +385,24 @@ impl Connection for TokioConnection {
         let schema = schema.map(str::to_string);
         let name = name.to_string();
         self.run(async move { inner.object_ddl(kind, schema.as_deref(), &name).await })
+            .await
+    }
+
+    async fn table_info(
+        &self,
+        schema: Option<&str>,
+        table_name: &str,
+    ) -> Result<blanco_core::TableInfo> {
+        let inner = Arc::clone(&self.inner);
+        let schema = schema.map(str::to_string);
+        let table_name = table_name.to_string();
+        self.run(async move { inner.table_info(schema.as_deref(), &table_name).await })
+            .await
+    }
+
+    async fn server_version_num(&self) -> Result<Option<u32>> {
+        let inner = Arc::clone(&self.inner);
+        self.run(async move { inner.server_version_num().await })
             .await
     }
 

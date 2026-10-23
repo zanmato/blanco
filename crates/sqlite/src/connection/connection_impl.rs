@@ -602,6 +602,7 @@ impl Connection for SqliteConnection {
                     column_names,
                     condition: None, // SQLite partial index WHERE clause not easily accessible
                     comment: None,
+                    nulls_not_distinct: false,
                 };
                 indexes.push(index_info);
             }

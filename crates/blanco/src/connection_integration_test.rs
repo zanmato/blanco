@@ -1643,8 +1643,9 @@ fn test_explain_estimates_and_analyzes_per_backend() {
 #[test]
 fn test_column_and_index_ddl_round_trip() {
     use blanco_core::ddl::{
-        ColumnOperation, ColumnSpec, DdlError, ForeignKeyOperation, IndexOperation,
-        ReferentialAction, column_operation_sql, foreign_key_operation_sql, index_operation_sql,
+        ColumnOperation, ColumnSpec, DdlError, ForeignKeyOperation, IndexOperation, IndexSpec,
+        NewTable, ReferentialAction, TableChange, column_operation_sql, create_table_sql,
+        foreign_key_operation_sql, index_operation_sql, table_change_sql,
     };
     use blanco_core::{ColumnInfo, IndexInfo, WriteOperation};
     use database::ConnectionConfig;
@@ -1826,6 +1827,8 @@ fn test_column_and_index_ddl_round_trip() {
             },
             nullable: false,
             default: case.add_default.map(str::to_string),
+            comment: None,
+            ..ColumnSpec::default()
         });
         run(build_column(&add).unwrap_or_else(|error| panic!("{label}: {error}")))
             .unwrap_or_else(|error| panic!("{label}: add column: {error:#}"));
@@ -1842,11 +1845,11 @@ fn test_column_and_index_ddl_round_trip() {
         }
 
         // Create an index on it.
-        let create_index = IndexOperation::Create {
+        let create_index = IndexOperation::Create(IndexSpec {
             name: "blanco_ddl_test_score_idx".to_string(),
             columns: vec!["score".to_string()],
-            unique: false,
-        };
+            ..IndexSpec::default()
+        });
         run(build_index(&create_index).unwrap_or_else(|error| panic!("{label}: {error}")))
             .unwrap_or_else(|error| panic!("{label}: create index: {error:#}"));
         assert!(
@@ -1857,10 +1860,160 @@ fn test_column_and_index_ddl_round_trip() {
             indexes()
         );
 
+        // Comments on the column and the table, read back through the
+        // column listing and the table information.
+        let table_info = || {
+            runtime
+                .block_on(connection.table_info(case.schema, "blanco_ddl_test"))
+                .unwrap_or_else(|error| panic!("{label}: table info: {error:#}"))
+        };
+        let score_spec = || {
+            let added = columns()
+                .into_iter()
+                .find(|column| column.name == "score")
+                .unwrap_or_else(|| panic!("{label}: added column missing"));
+            ColumnSpec {
+                name: added.name.clone(),
+                data_type: added.display_type(),
+                nullable: added.is_nullable,
+                default: added.default_value.clone(),
+                comment: added.comment,
+                ..ColumnSpec::default()
+            }
+        };
+        if db_type.dialect().supports_comments() {
+            let uncommented = score_spec();
+            let comment = ColumnOperation::Alter {
+                from: uncommented.clone(),
+                to: ColumnSpec {
+                    comment: Some("Points it's worth".to_string()),
+                    ..uncommented
+                },
+            };
+            run(build_column(&comment).unwrap_or_else(|error| panic!("{label}: {error}")))
+                .unwrap_or_else(|error| panic!("{label}: comment column: {error:#}"));
+            assert_eq!(
+                score_spec().comment.as_deref(),
+                Some("Points it's worth"),
+                "{label}: column comment"
+            );
+            run(table_change_sql(
+                db_type,
+                case.schema,
+                "blanco_ddl_test",
+                &TableChange::Comment(Some("Scratch table".to_string())),
+            )
+            .unwrap_or_else(|error| panic!("{label}: {error}")))
+            .unwrap_or_else(|error| panic!("{label}: comment table: {error:#}"));
+            assert_eq!(
+                table_info().comment.as_deref(),
+                Some("Scratch table"),
+                "{label}: table comment"
+            );
+        } else {
+            assert_eq!(table_info().comment, None, "{label}");
+        }
+
+        // MySQL restates a column to comment it, which must keep what its
+        // reported type alone would lose.
+        if db_type == DatabaseType::MySQL {
+            runtime
+                .block_on(connection.execute_write(
+                    "CREATE TABLE blanco_ddl_attrs (id int unsigned NOT NULL AUTO_INCREMENT PRIMARY KEY)",
+                    database,
+                    &[],
+                ))
+                .unwrap_or_else(|error| panic!("{label}: create: {error:#}"));
+            let definition = || {
+                runtime
+                    .block_on(connection.table_info(case.schema, "blanco_ddl_attrs"))
+                    .unwrap_or_else(|error| panic!("{label}: table info: {error:#}"))
+                    .column_definitions
+                    .into_iter()
+                    .find(|definition| definition.name == "id")
+                    .unwrap_or_else(|| panic!("{label}: no definition of id"))
+            };
+            let before = definition();
+            let from = ColumnSpec {
+                name: "id".to_string(),
+                data_type: before.column_type.clone(),
+                nullable: false,
+                attributes: before.attributes.clone(),
+                ..ColumnSpec::default()
+            };
+            let comment = ColumnOperation::Alter {
+                to: ColumnSpec {
+                    comment: Some("Row id".to_string()),
+                    ..from.clone()
+                },
+                from,
+            };
+            run(
+                column_operation_sql(db_type, case.schema, "blanco_ddl_attrs", &comment)
+                    .unwrap_or_else(|error| panic!("{label}: {error}")),
+            )
+            .unwrap_or_else(|error| panic!("{label}: comment id: {error:#}"));
+            let after = definition();
+            assert_eq!(after.column_type, before.column_type, "{label}");
+            assert!(after.column_type.contains("unsigned"), "{label}: {after:?}");
+            assert_eq!(
+                after.attributes.as_deref(),
+                Some("auto_increment"),
+                "{label}"
+            );
+            runtime
+                .block_on(connection.execute_write("DROP TABLE blanco_ddl_attrs", database, &[]))
+                .unwrap_or_else(|error| panic!("{label}: drop: {error:#}"));
+        }
+
+        // A unique index that counts NULLs as equal, where the server has it.
+        let server_version_num = runtime
+            .block_on(connection.server_version_num())
+            .unwrap_or_else(|error| panic!("{label}: server version: {error:#}"));
+        if db_type
+            .dialect()
+            .supports_nulls_not_distinct(server_version_num)
+        {
+            let unique = IndexOperation::Create(IndexSpec {
+                name: "blanco_ddl_test_score_key".to_string(),
+                columns: vec!["score".to_string()],
+                unique: true,
+                nulls_not_distinct: true,
+                ..IndexSpec::default()
+            });
+            run(build_index(&unique).unwrap_or_else(|error| panic!("{label}: {error}")))
+                .unwrap_or_else(|error| panic!("{label}: create unique index: {error:#}"));
+            let listed = indexes()
+                .into_iter()
+                .find(|index| index.name == "blanco_ddl_test_score_key")
+                .unwrap_or_else(|| panic!("{label}: unique index missing"));
+            assert!(
+                listed.is_unique && listed.nulls_not_distinct,
+                "{label}: {listed:?}"
+            );
+            run(build_index(&IndexOperation::Drop {
+                name: "blanco_ddl_test_score_key".to_string(),
+            })
+            .unwrap_or_else(|error| panic!("{label}: {error}")))
+            .unwrap_or_else(|error| panic!("{label}: drop unique index: {error:#}"));
+        }
+
         // Alter: rename and widen.
+        let added = columns()
+            .into_iter()
+            .find(|column| column.name == "score")
+            .unwrap_or_else(|| panic!("{label}: added column missing"));
+        let added_spec = ColumnSpec {
+            name: added.name.clone(),
+            data_type: added.display_type(),
+            nullable: added.is_nullable,
+            default: added.default_value.clone(),
+            comment: added.comment.clone(),
+            ..ColumnSpec::default()
+        };
         let alter = ColumnOperation::Alter {
-            name: "score".to_string(),
-            spec: ColumnSpec {
+            from: added_spec,
+            to: ColumnSpec {
                 name: "points".to_string(),
                 data_type: if db_type == DatabaseType::ClickHouse {
                     "Int64".to_string()
@@ -1869,6 +2022,8 @@ fn test_column_and_index_ddl_round_trip() {
                 },
                 nullable: true,
                 default: None,
+                comment: None,
+                ..ColumnSpec::default()
             },
         };
         match build_column(&alter) {
@@ -2056,6 +2211,77 @@ fn test_column_and_index_ddl_round_trip() {
         runtime
             .block_on(connection.execute_write("DROP TABLE blanco_ddl_test", database, &[]))
             .unwrap_or_else(|error| panic!("{label}: drop: {error:#}"));
+
+        // A table created in one statement, as the new table tab does: the
+        // backend's numbered key, a commented column and an index.
+        runtime
+            .block_on(connection.execute_write(
+                "DROP TABLE IF EXISTS blanco_ddl_created",
+                database,
+                &[],
+            ))
+            .unwrap_or_else(|error| panic!("{label}: drop leftover: {error:#}"));
+        let (key_type, attributes) = db_type.dialect().new_table_key();
+        let new_table = NewTable {
+            columns: vec![
+                ColumnSpec {
+                    name: "id".to_string(),
+                    data_type: key_type.to_string(),
+                    attributes: attributes.map(str::to_string),
+                    primary_key: true,
+                    ..ColumnSpec::default()
+                },
+                ColumnSpec {
+                    name: "label".to_string(),
+                    data_type: if db_type == DatabaseType::ClickHouse {
+                        "String".to_string()
+                    } else {
+                        "varchar(40)".to_string()
+                    },
+                    nullable: true,
+                    comment: db_type
+                        .dialect()
+                        .supports_comments()
+                        .then(|| "Shown to people".to_string()),
+                    ..ColumnSpec::default()
+                },
+            ],
+            indexes: vec![IndexSpec {
+                name: "blanco_ddl_created_label_idx".to_string(),
+                columns: vec!["label".to_string()],
+                ..IndexSpec::default()
+            }],
+            foreign_keys: Vec::new(),
+        };
+        run(
+            create_table_sql(db_type, case.schema, "blanco_ddl_created", &new_table)
+                .unwrap_or_else(|error| panic!("{label}: {error}")),
+        )
+        .unwrap_or_else(|error| panic!("{label}: create table: {error:#}"));
+        let created = runtime
+            .block_on(connection.get_columns_for_table("blanco_ddl_created", case.schema))
+            .unwrap_or_else(|error| panic!("{label}: columns: {error:#}"));
+        let names: Vec<&str> = created.iter().map(|column| column.name.as_str()).collect();
+        assert_eq!(names, ["id", "label"], "{label}");
+        assert!(created[0].is_primary_key, "{label}: id should be the key");
+        if db_type.dialect().supports_comments() {
+            assert_eq!(
+                created[1].comment.as_deref(),
+                Some("Shown to people"),
+                "{label}"
+            );
+        }
+        assert!(
+            runtime
+                .block_on(connection.get_indexes_for_table("blanco_ddl_created", case.schema))
+                .unwrap_or_else(|error| panic!("{label}: indexes: {error:#}"))
+                .iter()
+                .any(|index| index.name == "blanco_ddl_created_label_idx"),
+            "{label}: index missing"
+        );
+        runtime
+            .block_on(connection.execute_write("DROP TABLE blanco_ddl_created", database, &[]))
+            .unwrap_or_else(|error| panic!("{label}: drop created: {error:#}"));
     }
 }
 
@@ -3214,4 +3440,403 @@ fn test_cockroachdb_catalog_differences() {
     run("DROP MATERIALIZED VIEW blanco_crdb_counts; \
          DROP VIEW blanco_crdb_names; \
          DROP TABLE blanco_crdb_keyless");
+}
+
+/// The create statement of a table carries what the CREATE alone leaves
+/// out: comments, inheritance, partitioning, storage parameters, triggers
+/// and grants. The PostgreSQL DDL is run again in another schema, which must
+/// give the same DDL back.
+#[test]
+fn test_table_ddl_includes_comments_partitions_triggers_and_grants() {
+    use blanco_core::ObjectKind;
+    use database::ConnectionConfig;
+
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let service = DatabaseService::new(runtime.handle().clone());
+    let connect = |case: &DriverCase, id: i64, username: &str, password: &str| {
+        let config = ConnectionConfig::new(
+            id,
+            case.name.to_string(),
+            case.db_type,
+            case.host.clone(),
+            case.port.parse().expect("port"),
+            case.database.clone(),
+            username.to_string(),
+            Some(password.to_string()),
+        );
+        let connection = runtime.block_on(async {
+            service.add_connection_config(config.clone()).await;
+            let connection = service
+                .get_or_create_connection(config.id, Some(case.database.as_str()))
+                .await?;
+            connection.ping().await?;
+            anyhow::Ok(connection)
+        });
+        match connection {
+            Ok(connection) => Some(connection),
+            Err(error) if strict() => panic!("{}: server unreachable: {error:#}", case.label),
+            Err(error) => {
+                eprintln!(
+                    "skip {}: server unreachable ({error:#}). Set BLANCO_RUN_DB_TESTS=1 to require.",
+                    case.label
+                );
+                None
+            }
+        }
+    };
+    let assert_contains = |label: &str, ddl: &str, expected: &str| {
+        assert!(
+            ddl.contains(expected),
+            "{label}: expected {expected:?} in\n{ddl}"
+        );
+    };
+    let assert_lacks = |label: &str, ddl: &str, unexpected: &str| {
+        assert!(
+            !ddl.contains(unexpected),
+            "{label}: did not expect {unexpected:?} in\n{ddl}"
+        );
+    };
+
+    let postgres = postgres_case();
+    if let Some(connection) = connect(&postgres, 9501, &postgres.username, &postgres.password) {
+        let database = Some(postgres.database.as_str());
+        let run = |sql: &str| {
+            runtime
+                .block_on(connection.execute_script(sql, database))
+                .unwrap_or_else(|error| panic!("{sql}: {error:#}"))
+        };
+        let table_ddl = |schema: &str, table: &str| {
+            runtime
+                .block_on(connection.table_ddl(Some(schema), table))
+                .unwrap_or_else(|error| panic!("{schema}.{table}: {error:#}"))
+        };
+        let function_ddl = |schema: &str| {
+            runtime
+                .block_on(connection.object_ddl(ObjectKind::Function, Some(schema), "touch"))
+                .unwrap_or_else(|error| panic!("{schema}.touch: {error:#}"))
+        };
+        let cleanup = "DROP SCHEMA IF EXISTS blanco_ddl_probe CASCADE; \
+             DROP SCHEMA IF EXISTS blanco_ddl_copy CASCADE; \
+             DROP ROLE IF EXISTS blanco_ddl_reader";
+        run(cleanup);
+        run("CREATE ROLE blanco_ddl_reader");
+        run("CREATE SCHEMA blanco_ddl_probe");
+        run(
+            "CREATE FUNCTION blanco_ddl_probe.touch() RETURNS trigger LANGUAGE plpgsql \
+             AS $$BEGIN RETURN NEW; END$$",
+        );
+        run("REVOKE EXECUTE ON FUNCTION blanco_ddl_probe.touch() FROM PUBLIC");
+        run("GRANT EXECUTE ON FUNCTION blanco_ddl_probe.touch() TO blanco_ddl_reader");
+        run("CREATE TABLE blanco_ddl_probe.base (
+                 id integer PRIMARY KEY,
+                 label text NOT NULL DEFAULT 'x',
+                 CONSTRAINT label_short CHECK (length(label) < 50)
+             ) WITH (fillfactor = 70)");
+        run("COMMENT ON TABLE blanco_ddl_probe.base IS 'Base''s rows'");
+        run("COMMENT ON COLUMN blanco_ddl_probe.base.label IS 'Shown name'");
+        run("CREATE INDEX base_label ON blanco_ddl_probe.base (label)");
+        run(
+            "CREATE TRIGGER base_touch BEFORE UPDATE ON blanco_ddl_probe.base \
+             FOR EACH ROW EXECUTE FUNCTION blanco_ddl_probe.touch()",
+        );
+        run("GRANT SELECT, INSERT ON blanco_ddl_probe.base TO blanco_ddl_reader");
+        run("GRANT UPDATE ON blanco_ddl_probe.base TO blanco_ddl_reader WITH GRANT OPTION");
+        run(
+            "CREATE TABLE blanco_ddl_probe.child (extra integer CHECK (extra > 0)) \
+             INHERITS (blanco_ddl_probe.base)",
+        );
+        run("CREATE TABLE blanco_ddl_probe.measurements (
+                 id integer,
+                 taken date NOT NULL,
+                 PRIMARY KEY (id, taken)
+             ) PARTITION BY RANGE (taken)");
+        run("CREATE INDEX measurements_taken ON blanco_ddl_probe.measurements (taken)");
+        run(
+            "CREATE TRIGGER measurements_touch BEFORE UPDATE ON blanco_ddl_probe.measurements \
+             FOR EACH ROW EXECUTE FUNCTION blanco_ddl_probe.touch()",
+        );
+        run("CREATE TABLE blanco_ddl_probe.measurements_2026 \
+             PARTITION OF blanco_ddl_probe.measurements \
+             FOR VALUES FROM ('2026-01-01') TO ('2027-01-01')");
+        run(
+            "CREATE VIEW blanco_ddl_probe.base_labels AS SELECT id, label FROM blanco_ddl_probe.base",
+        );
+        run("COMMENT ON VIEW blanco_ddl_probe.base_labels IS 'Labels only'");
+
+        let label = "PostgreSQL base";
+        let base = table_ddl("blanco_ddl_probe", "base");
+        assert_contains(label, &base, "WITH (fillfactor=70);");
+        assert_contains(
+            label,
+            &base,
+            "COMMENT ON TABLE \"blanco_ddl_probe\".\"base\" IS 'Base''s rows';",
+        );
+        assert_contains(
+            label,
+            &base,
+            "COMMENT ON COLUMN \"blanco_ddl_probe\".\"base\".\"label\" IS 'Shown name';",
+        );
+        assert_contains(
+            label,
+            &base,
+            "CREATE INDEX base_label ON blanco_ddl_probe.base",
+        );
+        assert_contains(
+            label,
+            &base,
+            "CREATE TRIGGER base_touch BEFORE UPDATE ON blanco_ddl_probe.base",
+        );
+        assert_contains(
+            label,
+            &base,
+            "GRANT INSERT, SELECT ON TABLE \"blanco_ddl_probe\".\"base\" TO blanco_ddl_reader;",
+        );
+        assert_contains(
+            label,
+            &base,
+            "GRANT UPDATE ON TABLE \"blanco_ddl_probe\".\"base\" TO blanco_ddl_reader WITH GRANT OPTION;",
+        );
+        assert_lacks(label, &base, &format!("TO {};", postgres.username));
+
+        let label = "PostgreSQL child";
+        let child = table_ddl("blanco_ddl_probe", "child");
+        assert_contains(label, &child, "INHERITS (blanco_ddl_probe.base);");
+        assert_contains(label, &child, "\"extra\" integer");
+        assert_lacks(label, &child, "\"label\" text");
+        assert_lacks(label, &child, "label_short");
+
+        let label = "PostgreSQL partitioned table";
+        let measurements = table_ddl("blanco_ddl_probe", "measurements");
+        assert_contains(label, &measurements, "PARTITION BY RANGE (taken);");
+        assert_contains(
+            label,
+            &measurements,
+            "CREATE INDEX measurements_taken ON blanco_ddl_probe.measurements",
+        );
+        assert_contains(label, &measurements, "CREATE TRIGGER measurements_touch");
+
+        let label = "PostgreSQL partition";
+        let partition = table_ddl("blanco_ddl_probe", "measurements_2026");
+        assert_contains(
+            label,
+            &partition,
+            "CREATE TABLE \"blanco_ddl_probe\".\"measurements_2026\" \
+             PARTITION OF blanco_ddl_probe.measurements\n\
+             FOR VALUES FROM ('2026-01-01') TO ('2027-01-01');",
+        );
+        assert_lacks(label, &partition, "\"taken\" date");
+        assert_lacks(label, &partition, "CREATE INDEX");
+        assert_lacks(label, &partition, "CREATE TRIGGER");
+
+        let label = "PostgreSQL view";
+        let view = table_ddl("blanco_ddl_probe", "base_labels");
+        assert_contains(
+            label,
+            &view,
+            "CREATE VIEW \"blanco_ddl_probe\".\"base_labels\" AS\n",
+        );
+        assert_contains(
+            label,
+            &view,
+            "COMMENT ON VIEW \"blanco_ddl_probe\".\"base_labels\" IS 'Labels only';",
+        );
+
+        let label = "PostgreSQL function";
+        let function = function_ddl("blanco_ddl_probe");
+        assert_contains(
+            label,
+            &function,
+            "REVOKE EXECUTE ON FUNCTION blanco_ddl_probe.touch() FROM PUBLIC;",
+        );
+        assert_contains(
+            label,
+            &function,
+            "GRANT EXECUTE ON FUNCTION blanco_ddl_probe.touch() TO blanco_ddl_reader;",
+        );
+
+        // Recreating everything in another schema must give the same DDL.
+        let in_copy = |ddl: &str| ddl.replace("blanco_ddl_probe", "blanco_ddl_copy");
+        run("CREATE SCHEMA blanco_ddl_copy");
+        run(&in_copy(&function));
+        for ddl in [&base, &child, &measurements, &partition, &view] {
+            run(&in_copy(ddl));
+        }
+        assert_eq!(function_ddl("blanco_ddl_copy"), in_copy(&function));
+        for (table, ddl) in [
+            ("base", &base),
+            ("child", &child),
+            ("measurements", &measurements),
+            ("measurements_2026", &partition),
+            ("base_labels", &view),
+        ] {
+            assert_eq!(table_ddl("blanco_ddl_copy", table), in_copy(ddl), "{table}");
+        }
+        run(cleanup);
+    }
+
+    let cockroach = cockroach_case();
+    if let Some(connection) = connect(&cockroach, 9502, &cockroach.username, &cockroach.password) {
+        let database = Some(cockroach.database.as_str());
+        let run = |sql: &str| {
+            runtime
+                .block_on(connection.execute_script(sql, database))
+                .unwrap_or_else(|error| panic!("{sql}: {error:#}"))
+        };
+        let table_ddl = |table: &str| {
+            runtime
+                .block_on(connection.table_ddl(Some("public"), table))
+                .unwrap_or_else(|error| panic!("CockroachDB {table}: {error:#}"))
+        };
+        let cleanup = "DROP VIEW IF EXISTS blanco_ddl_labels; \
+             DROP TABLE IF EXISTS blanco_ddl_base; \
+             DROP FUNCTION IF EXISTS blanco_ddl_touch; \
+             DROP ROLE IF EXISTS blanco_ddl_reader";
+        run(cleanup);
+        run("CREATE ROLE blanco_ddl_reader");
+        run(
+            "CREATE FUNCTION blanco_ddl_touch() RETURNS trigger LANGUAGE plpgsql \
+             AS $$BEGIN RETURN NEW; END$$",
+        );
+        run("CREATE TABLE blanco_ddl_base (id integer PRIMARY KEY, label text NOT NULL)");
+        run("COMMENT ON TABLE blanco_ddl_base IS 'Base rows'");
+        run("COMMENT ON COLUMN blanco_ddl_base.label IS 'Shown name'");
+        run(
+            "CREATE TRIGGER blanco_ddl_base_touch BEFORE UPDATE ON blanco_ddl_base \
+             FOR EACH ROW EXECUTE FUNCTION blanco_ddl_touch()",
+        );
+        run("GRANT SELECT, INSERT ON blanco_ddl_base TO blanco_ddl_reader");
+        run("CREATE VIEW blanco_ddl_labels AS SELECT label FROM blanco_ddl_base");
+
+        let label = "CockroachDB table";
+        let base = table_ddl("blanco_ddl_base");
+        assert_contains(
+            label,
+            &base,
+            "COMMENT ON TABLE \"public\".\"blanco_ddl_base\" IS 'Base rows';",
+        );
+        assert_contains(
+            label,
+            &base,
+            "COMMENT ON COLUMN \"public\".\"blanco_ddl_base\".\"label\" IS 'Shown name';",
+        );
+        assert_contains(label, &base, "CREATE TRIGGER blanco_ddl_base_touch");
+        assert_contains(
+            label,
+            &base,
+            "GRANT INSERT, SELECT ON TABLE \"public\".\"blanco_ddl_base\" TO blanco_ddl_reader;",
+        );
+        assert_lacks(label, &base, "TO admin");
+        assert_lacks(label, &base, "_not_null");
+        assert_lacks(label, &base, "TO root");
+        let view = table_ddl("blanco_ddl_labels");
+        assert_contains(
+            "CockroachDB view",
+            &view,
+            "CREATE VIEW \"public\".\"blanco_ddl_labels\" AS\n",
+        );
+        run(cleanup);
+    }
+
+    // Granting takes an account with GRANT OPTION, which the compose user
+    // lacks, so the grants are made as root. The compose user may not read
+    // other accounts' grants, and still gets the CREATE statement.
+    let mysql = mysql_case();
+    let root_user = env_or("MYSQL", "ROOT_USER", "root");
+    let root_password = env_or("MYSQL", "ROOT_PASSWORD", "blanco");
+    if let Some(connection) = connect(&mysql, 9503, &root_user, &root_password) {
+        let database = Some(mysql.database.as_str());
+        let run = |sql: &str| {
+            runtime
+                .block_on(connection.execute_script(sql, database))
+                .unwrap_or_else(|error| panic!("{sql}: {error:#}"))
+        };
+        let cleanup = "DROP TABLE IF EXISTS blanco_ddl_grants; \
+             DROP USER IF EXISTS 'blanco_ddl_reader'@'%'; \
+             DROP ROLE IF EXISTS blanco_ddl_role";
+        run(cleanup);
+        run("CREATE TABLE blanco_ddl_grants (id integer PRIMARY KEY)");
+        run("CREATE USER 'blanco_ddl_reader'@'%'");
+        run("CREATE ROLE blanco_ddl_role");
+        run(
+            "GRANT SELECT, INSERT ON blanco_ddl_grants TO 'blanco_ddl_reader'@'%' \
+             WITH GRANT OPTION",
+        );
+        run("GRANT UPDATE ON blanco_ddl_grants TO blanco_ddl_role");
+
+        let label = "MySQL";
+        let ddl = runtime
+            .block_on(connection.table_ddl(None, "blanco_ddl_grants"))
+            .unwrap_or_else(|error| panic!("{label}: {error:#}"));
+        let object = format!("`{}`.`blanco_ddl_grants`", mysql.database);
+        assert!(ddl.starts_with("CREATE TABLE"), "{label}: {ddl}");
+        assert_contains(
+            label,
+            &ddl,
+            &format!(
+                "GRANT INSERT, SELECT ON {object} TO 'blanco_ddl_reader'@'%' WITH GRANT OPTION;"
+            ),
+        );
+        assert_contains(
+            label,
+            &ddl,
+            &format!("GRANT UPDATE ON {object} TO 'blanco_ddl_role';"),
+        );
+
+        if let Some(unprivileged) = connect(&mysql, 9504, &mysql.username, &mysql.password) {
+            let ddl = runtime
+                .block_on(unprivileged.table_ddl(None, "blanco_ddl_grants"))
+                .unwrap_or_else(|error| panic!("{label} as {}: {error:#}", mysql.username));
+            assert!(ddl.starts_with("CREATE TABLE"), "{label}: {ddl}");
+        }
+        run(cleanup);
+    }
+
+    let clickhouse = clickhouse_case();
+    if let Some(connection) = connect(
+        &clickhouse,
+        9505,
+        &clickhouse.username,
+        &clickhouse.password,
+    ) {
+        let database = Some(clickhouse.database.as_str());
+        let run = |sql: &str| runtime.block_on(connection.execute_script(sql, database));
+        let label = "ClickHouse";
+        run("DROP TABLE IF EXISTS blanco_ddl_grants")
+            .unwrap_or_else(|error| panic!("{label}: {error:#}"));
+        run("CREATE TABLE blanco_ddl_grants (id Int32) ENGINE = MergeTree ORDER BY id")
+            .unwrap_or_else(|error| panic!("{label}: {error:#}"));
+        // The compose user has no access management, so the grant is
+        // checked only where roles can be created.
+        let granted = match run("CREATE ROLE IF NOT EXISTS blanco_ddl_reader") {
+            Ok(_) => {
+                run("GRANT SELECT, INSERT ON blanco_ddl_grants TO blanco_ddl_reader")
+                    .unwrap_or_else(|error| panic!("{label}: {error:#}"));
+                true
+            }
+            Err(error) => {
+                eprintln!("{label}: grants not checked, roles cannot be created ({error:#})");
+                false
+            }
+        };
+        let ddl = runtime
+            .block_on(connection.table_ddl(None, "blanco_ddl_grants"))
+            .unwrap_or_else(|error| panic!("{label}: {error:#}"));
+        assert!(ddl.starts_with("CREATE TABLE"), "{label}: {ddl}");
+        if granted {
+            assert_contains(
+                label,
+                &ddl,
+                &format!(
+                    "GRANT INSERT, SELECT ON `{}`.`blanco_ddl_grants` TO `blanco_ddl_reader`;",
+                    clickhouse.database
+                ),
+            );
+            run("DROP ROLE IF EXISTS blanco_ddl_reader")
+                .unwrap_or_else(|error| panic!("{label}: {error:#}"));
+        } else {
+            assert_lacks(label, &ddl, "GRANT");
+        }
+        run("DROP TABLE IF EXISTS blanco_ddl_grants")
+            .unwrap_or_else(|error| panic!("{label}: {error:#}"));
+    }
 }

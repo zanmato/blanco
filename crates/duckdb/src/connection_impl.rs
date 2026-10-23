@@ -229,6 +229,35 @@ impl Connection for DuckdbConnection {
         Ok(comments)
     }
 
+    async fn table_info(
+        &self,
+        schema: Option<&str>,
+        table_name: &str,
+    ) -> Result<blanco_core::TableInfo> {
+        let rows = self
+            .catalog_rows(
+                "SELECT comment, estimated_size::VARCHAR FROM duckdb_tables()
+                 WHERE database_name = current_database() AND schema_name = ? AND table_name = ?",
+                vec![schema_or_main(schema), table_name.to_string()],
+            )
+            .await?;
+        let row = rows
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("Table '{table_name}' not found"))?;
+        let get = |ix: usize| {
+            row.get(ix)
+                .cloned()
+                .flatten()
+                .filter(|value| !value.is_empty())
+        };
+        Ok(blanco_core::TableInfo {
+            comment: get(0),
+            estimated_rows: get(1).and_then(|value| value.parse().ok()),
+            ..Default::default()
+        })
+    }
+
     async fn table_ddl(&self, schema: Option<&str>, table_name: &str) -> Result<String> {
         let rows = self
             .catalog_rows(
@@ -365,6 +394,7 @@ impl Connection for DuckdbConnection {
                     column_names: index_columns(row.get(2).cloned().flatten().as_deref()),
                     condition: None,
                     comment: None,
+                    nulls_not_distinct: false,
                 })
             })
             .collect())

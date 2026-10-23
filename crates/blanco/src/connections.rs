@@ -218,6 +218,8 @@ pub struct TreeItemMetadata {
     /// The partitions or inheritance children nested under this table, `None`
     /// for every node without them.
     pub child_tables: Option<ChildTables>,
+    /// The object type a category folder groups, `None` for other nodes.
+    pub category: Option<data_loading::DatabaseItemType>,
 }
 
 /// What a table node holds when other tables are nested under it.
@@ -1661,6 +1663,7 @@ mod tests {
             relative_size: None,
             comment: None,
             child_tables: None,
+            category: None,
         }
     }
 

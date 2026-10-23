@@ -11,7 +11,7 @@ use std::time::Duration;
 use app_database::{
     AppDatabase, ConnectionData, EditorKind, QueryTabData, SnippetData, WindowGeometry,
 };
-use blanco_core::ddl::{ColumnOperation, ColumnSpec, IndexOperation};
+use blanco_core::ddl::{ColumnOperation, ColumnSpec, IndexOperation, IndexSpec};
 use blanco_core::{ConnectionContext, DatabaseType};
 use gpui::{App, AppContext, AsyncWindowContext, Entity, Window};
 use tokio::runtime::Handle;
@@ -520,20 +520,21 @@ async fn stage_scene(
                         name: "label".to_string(),
                         data_type: "TEXT".to_string(),
                         nullable: true,
-                        default: None,
+                        ..ColumnSpec::default()
                     }),
                     window,
                     cx,
                 );
                 tab.stage_index(
-                    IndexOperation::Create {
+                    IndexOperation::Create(IndexSpec {
                         name: "albums_label_idx".to_string(),
                         columns: vec!["label".to_string()],
-                        unique: false,
-                    },
+                        ..IndexSpec::default()
+                    }),
                     window,
                     cx,
                 );
+                tab.show_last_column(window, cx);
             })?;
         }
         Scene::Filter => {
@@ -806,7 +807,7 @@ fn demo_context() -> ConnectionContext {
         db_type: DatabaseType::SQLite,
         database_name: "main".to_string(),
         schema_name: None,
-        environment_type: None,
+        environment_type: Some(blanco_core::EnvironmentType::DEV),
     }
 }
 

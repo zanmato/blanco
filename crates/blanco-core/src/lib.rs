@@ -22,11 +22,12 @@ pub mod write_guard;
 
 // Re-export main types for convenience
 pub use connection_trait::{
-    BatchFailure, BatchOutcome, ColumnInfo, ColumnType, Connection, ConnectionFactory,
-    DatabaseSchemaResult, EntityType, ForeignKeyConstraint, ForeignKeyInfo, FunctionSignatureInfo,
-    InboundForeignKey, IndexInfo, KeyValueResult, ObjectComments, ObjectKind, PaginationInfo,
-    QueryResult, QueryTiming, QueryableEntity, RedisType, RedisValue, ResultPayload,
-    StatementTimer, TableMetadata, TableParent, TableSchemaInfo, WriteOperation, sizes_from_rows,
+    BatchFailure, BatchOutcome, ColumnDefinition, ColumnInfo, ColumnType, Connection,
+    ConnectionFactory, DatabaseSchemaResult, EntityType, ForeignKeyConstraint, ForeignKeyInfo,
+    FunctionSignatureInfo, InboundForeignKey, IndexInfo, KeyValueResult, LastModified,
+    ObjectComments, ObjectKind, PaginationInfo, QueryResult, QueryTiming, QueryableEntity,
+    RedisType, RedisValue, ResultPayload, StatementTimer, TableInfo, TableMetadata, TableParent,
+    TableSchemaInfo, WriteOperation, sizes_from_rows,
 };
 
 pub use connection_context::{
@@ -36,8 +37,8 @@ pub use connection_context::{
 pub use database_service::{ConnectionStatus, DatabaseService};
 pub use database_type::{DatabaseType, ParamStyles};
 pub use dialect::{
-    ClientTools, Dialect, ExplainMode, ServerSession, ServerVariant, SqlGrammar, UpsertStyle,
-    ValuesQueryStyle,
+    ClientTools, DataTypeName, Dialect, ExplainMode, ServerSession, ServerVariant, SqlGrammar,
+    UpsertStyle, ValuesQueryStyle,
 };
 pub use table_extractor::TableExtractor;
 pub use table_filter::{FilterCondition, FilterJoin, FilterOperator};

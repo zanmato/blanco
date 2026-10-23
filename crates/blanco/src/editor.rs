@@ -738,6 +738,24 @@ impl EditorPanel {
         weak
     }
 
+    /// Open a structure tab for a table not created yet, in the database
+    /// and schema of `context`.
+    pub fn create_new_table_tab(
+        &mut self,
+        context: blanco_core::ConnectionContext,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<TableStructureTab> {
+        let tab = cx.new(|cx| TableStructureTab::new_table(context, window, cx));
+        // The tab names itself once the table is created.
+        cx.observe(&tab, |_, _, cx| cx.notify()).detach();
+        self.tabs.push(TabType::TableStructure(tab.clone()));
+        self.active_tab_ix = self.tabs.len() - 1;
+        self.scroll_tabbar_to_the_end(window, cx);
+        cx.notify();
+        tab
+    }
+
     pub fn create_object_ddl_tab(
         &mut self,
         params: ObjectDdlParams,
@@ -1664,7 +1682,7 @@ impl EditorPanel {
     }
 
     /// The active tab when it is a table's structure.
-    #[cfg(feature = "screenshots")]
+    #[cfg(any(test, feature = "screenshots"))]
     pub(crate) fn active_structure_tab(&self) -> Option<Entity<TableStructureTab>> {
         match self.tabs.get(self.active_tab_ix) {
             Some(TabType::TableStructure(tab)) => Some(tab.clone()),

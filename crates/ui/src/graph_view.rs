@@ -91,6 +91,8 @@ pub struct GraphEdge {
     pub from_field_index: usize,
     pub to_node: String,
     pub to_field_index: usize,
+    /// Drawn dashed, for a reference that only the app knows about.
+    pub dashed: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -243,6 +245,7 @@ struct EdgeRenderData {
     /// Screen-space (pre-origin) poly-line, ready to stroke.
     points: Vec<Point<Pixels>>,
     is_highlighted: bool,
+    dashed: bool,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -667,6 +670,11 @@ impl GraphView {
                 EdgeRenderData {
                     points,
                     is_highlighted: edge.is_highlighted,
+                    dashed: self
+                        .model
+                        .edges
+                        .get(edge.edge_ix)
+                        .is_some_and(|edge| edge.dashed),
                 }
             })
             .collect()
@@ -950,7 +958,11 @@ impl Render for GraphView {
                         edge_color
                     };
 
-                    if let Some(path) = build_rounded_path(&waypoints, radius, stroke_width) {
+                    // Dashes scale with zoom like the corners do.
+                    let dashes = edge.dashed.then(|| [px(6. * zoom), px(4. * zoom)]);
+                    if let Some(path) =
+                        build_rounded_path(&waypoints, radius, stroke_width, dashes.as_ref())
+                    {
                         window.paint_path(path, color);
                     }
                 }
@@ -1404,6 +1416,7 @@ fn build_rounded_path(
     pts: &[Point<Pixels>],
     radius: f32,
     width: Pixels,
+    dashes: Option<&[Pixels; 2]>,
 ) -> Option<gpui::Path<Pixels>> {
     if pts.len() < 2 {
         return None;
@@ -1419,6 +1432,9 @@ fn build_rounded_path(
     };
 
     let mut builder = PathBuilder::stroke(width);
+    if let Some(dashes) = dashes {
+        builder = builder.dash_array(dashes);
+    }
     builder.move_to(pts[0]);
 
     for i in 1..pts.len() - 1 {
@@ -1750,6 +1766,7 @@ mod tests {
             from_field_index: 0,
             to_node: to.to_string(),
             to_field_index: 0,
+            dashed: false,
         }
     }
 

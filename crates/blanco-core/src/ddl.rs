@@ -93,14 +93,39 @@ pub fn table_operation_sql(
     }
 }
 
-/// A column as the user described it in the structure tab's dialog.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// A column as the user described it in the structure tab.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ColumnSpec {
     pub name: String,
     pub data_type: String,
     pub nullable: bool,
     /// Raw default expression (`0`, `'n/a'`, `now()`), `None` for no default.
     pub default: Option<String>,
+    pub comment: Option<String>,
+    /// Clauses MySQL keeps beside the type that restating the column must
+    /// repeat (`auto_increment`, `on update current_timestamp()`).
+    pub attributes: Option<String>,
+    /// A generated column. MySQL cannot restate one without its expression.
+    pub generated: bool,
+    /// Part of the primary key of a table being created. Changing the key
+    /// of an existing table is left to a query.
+    pub primary_key: bool,
+}
+
+impl ColumnSpec {
+    fn trimmed_default(&self) -> Option<&str> {
+        self.default
+            .as_deref()
+            .map(str::trim)
+            .filter(|default| !default.is_empty())
+    }
+
+    fn trimmed_comment(&self) -> Option<&str> {
+        self.comment
+            .as_deref()
+            .map(str::trim)
+            .filter(|comment| !comment.is_empty())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -113,10 +138,12 @@ pub enum ColumnOperation {
     Drop {
         name: String,
     },
-    /// Change type, nullability and/or default of the column called `name`.
+    /// Change the column described by `from` into `to`. Only what differs
+    /// is changed, so a backend that cannot change one property in place
+    /// still takes a change to the others.
     Alter {
-        name: String,
-        spec: ColumnSpec,
+        from: ColumnSpec,
+        to: ColumnSpec,
     },
 }
 
@@ -131,23 +158,48 @@ impl ColumnOperation {
     }
 }
 
+/// An index as the user described it in the structure tab.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct IndexSpec {
+    pub name: String,
+    pub columns: Vec<String>,
+    pub unique: bool,
+    /// A unique index that counts NULLs as equal, so at most one row may
+    /// leave its columns NULL (PostgreSQL 15 and later).
+    pub nulls_not_distinct: bool,
+    /// The access method (`gin`) or, on ClickHouse, the skipping index type.
+    /// `None` takes the backend's default.
+    pub method: Option<String>,
+    /// The `WHERE` condition of a partial index.
+    pub condition: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IndexOperation {
-    Create {
-        name: String,
-        columns: Vec<String>,
-        unique: bool,
-    },
-    Drop {
-        name: String,
-    },
+    Create(IndexSpec),
+    Drop { name: String },
 }
 
 impl IndexOperation {
     pub fn label(&self) -> &'static str {
         match self {
-            IndexOperation::Create { .. } => "Create index",
+            IndexOperation::Create(_) => "Create index",
             IndexOperation::Drop { .. } => "Drop index",
+        }
+    }
+}
+
+/// A change to the table itself rather than to one of its columns.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TableChange {
+    /// Set the table's comment, or remove it with `None`.
+    Comment(Option<String>),
+}
+
+impl TableChange {
+    pub fn label(&self) -> &'static str {
+        match self {
+            TableChange::Comment(_) => "Change table comment",
         }
     }
 }
@@ -275,15 +327,155 @@ fn column_definition(db_type: DatabaseType, spec: &ColumnSpec) -> String {
             }
         }
     }
-    if let Some(default) = spec
-        .default
-        .as_deref()
-        .map(str::trim)
-        .filter(|d| !d.is_empty())
-    {
+    if let Some(default) = spec.trimmed_default() {
         definition.push_str(&format!(" DEFAULT {default}"));
     }
+    if db_type == DatabaseType::MySQL
+        && let Some(attributes) = spec
+            .attributes
+            .as_deref()
+            .map(str::trim)
+            .filter(|attributes| !attributes.is_empty())
+    {
+        definition.push(' ');
+        definition.push_str(attributes);
+    }
+    // MySQL and ClickHouse keep a column's comment in its definition, and
+    // MySQL's CHANGE COLUMN drops a comment the definition leaves out.
+    if matches!(db_type, DatabaseType::MySQL | DatabaseType::ClickHouse)
+        && let Some(comment) = spec.trimmed_comment()
+    {
+        definition.push_str(&format!(" COMMENT {}", dialect.string_literal(comment)));
+    }
     definition
+}
+
+fn unsupported_comments(db_type: DatabaseType) -> DdlError {
+    DdlError::Unsupported(format!("{} has no comments", db_type.as_str()))
+}
+
+/// `N'text'`, T-SQL's Unicode string literal.
+fn mssql_literal(value: &str) -> String {
+    format!("N'{}'", value.replace('\'', "''"))
+}
+
+/// SQL Server keeps comments as `MS_Description` extended properties, which
+/// are added, updated and dropped by separate procedures. One `IF` statement
+/// picks the procedure from whether the property exists.
+fn mssql_description_sql(
+    schema: Option<&str>,
+    table: &str,
+    column: Option<&str>,
+    comment: Option<&str>,
+) -> String {
+    let dialect = DatabaseType::MsSql.dialect();
+    let schema = schema.filter(|schema| !schema.is_empty()).unwrap_or("dbo");
+    let object = mssql_literal(&dialect.quote_qualified(Some(schema), table));
+    let mut levels = format!(
+        "@level0type = N'SCHEMA', @level0name = {}, @level1type = N'TABLE', @level1name = {}",
+        mssql_literal(schema),
+        mssql_literal(table)
+    );
+    let minor_id = match column {
+        Some(column) => {
+            levels.push_str(&format!(
+                ", @level2type = N'COLUMN', @level2name = {}",
+                mssql_literal(column)
+            ));
+            format!(
+                "COLUMNPROPERTY(OBJECT_ID({object}), {}, 'ColumnId')",
+                mssql_literal(column)
+            )
+        }
+        None => "0".to_string(),
+    };
+    let exists = format!(
+        "EXISTS (SELECT 1 FROM sys.extended_properties WHERE class = 1 AND name = N'MS_Description' AND major_id = OBJECT_ID({object}) AND minor_id = {minor_id})"
+    );
+    match comment {
+        Some(comment) => {
+            let value = mssql_literal(comment);
+            format!(
+                "IF {exists} EXEC sp_updateextendedproperty @name = N'MS_Description', @value = {value}, {levels} ELSE EXEC sp_addextendedproperty @name = N'MS_Description', @value = {value}, {levels}"
+            )
+        }
+        None => {
+            format!("IF {exists} EXEC sp_dropextendedproperty @name = N'MS_Description', {levels}")
+        }
+    }
+}
+
+/// The statement that sets (or with `None` removes) the comment of
+/// `column`, for the backends that comment a column apart from its
+/// definition. MySQL restates the whole definition instead.
+fn column_comment_sql(
+    db_type: DatabaseType,
+    schema: Option<&str>,
+    table: &str,
+    column: &str,
+    comment: Option<&str>,
+) -> Result<String, DdlError> {
+    let dialect = db_type.dialect();
+    let column = column.trim();
+    match db_type {
+        DatabaseType::PostgreSQL | DatabaseType::CockroachDb | DatabaseType::DuckDb => Ok(format!(
+            "COMMENT ON COLUMN {}.{} IS {}",
+            dialect.quote_qualified(schema, table),
+            dialect.quote_identifier(column),
+            comment.map_or("NULL".to_string(), |comment| dialect
+                .string_literal(comment))
+        )),
+        DatabaseType::ClickHouse => Ok(format!(
+            "ALTER TABLE {} COMMENT COLUMN {} {}",
+            dialect.quote_qualified(schema, table),
+            dialect.quote_identifier(column),
+            dialect.string_literal(comment.unwrap_or_default())
+        )),
+        DatabaseType::MsSql => Ok(mssql_description_sql(schema, table, Some(column), comment)),
+        DatabaseType::MySQL | DatabaseType::SQLite | DatabaseType::Redis => {
+            Err(unsupported_comments(db_type))
+        }
+    }
+}
+
+/// Statements for a change to the table itself.
+pub fn table_change_sql(
+    db_type: DatabaseType,
+    schema: Option<&str>,
+    table: &str,
+    change: &TableChange,
+) -> Result<Vec<String>, DdlError> {
+    let dialect = db_type.dialect();
+    let target = dialect.quote_qualified(schema, table);
+    match change {
+        TableChange::Comment(comment) => {
+            let comment = comment
+                .as_deref()
+                .map(str::trim)
+                .filter(|comment| !comment.is_empty());
+            Ok(vec![match db_type {
+                DatabaseType::PostgreSQL | DatabaseType::CockroachDb | DatabaseType::DuckDb => {
+                    format!(
+                        "COMMENT ON TABLE {target} IS {}",
+                        comment.map_or("NULL".to_string(), |comment| dialect
+                            .string_literal(comment))
+                    )
+                }
+                DatabaseType::MySQL => format!(
+                    "ALTER TABLE {target} COMMENT = {}",
+                    dialect.string_literal(comment.unwrap_or_default())
+                ),
+                DatabaseType::ClickHouse => format!(
+                    "ALTER TABLE {target} MODIFY COMMENT {}",
+                    dialect.string_literal(comment.unwrap_or_default())
+                ),
+                DatabaseType::MsSql => mssql_description_sql(schema, table, None, comment),
+                DatabaseType::SQLite | DatabaseType::Redis => {
+                    return Err(unsupported_comments(db_type));
+                }
+            }])
+        }
+    }
 }
 
 /// Statements for `operation` on `table`. More than one statement is returned
@@ -309,6 +501,11 @@ pub fn column_operation_sql(
     match operation {
         ColumnOperation::Add(spec) => {
             validate_spec(spec)?;
+            let comment = spec.trimmed_comment();
+            if comment.is_some() && !dialect.supports_comments() {
+                return Err(unsupported_comments(db_type));
+            }
+            let mut statements = Vec::new();
             if db_type == DatabaseType::DuckDb && !spec.nullable {
                 // DuckDB adds no column with a constraint, so the NOT NULL
                 // follows once the column exists (its default fills it).
@@ -316,23 +513,30 @@ pub fn column_operation_sql(
                     nullable: true,
                     ..spec.clone()
                 };
-                return Ok(vec![
-                    format!(
-                        "ALTER TABLE {target} ADD COLUMN {}",
-                        column_definition(db_type, &nullable)
-                    ),
-                    format!(
-                        "ALTER TABLE {target} ALTER COLUMN {} SET NOT NULL",
-                        quoted(&spec.name)
-                    ),
-                ]);
+                statements.push(format!(
+                    "ALTER TABLE {target} ADD COLUMN {}",
+                    column_definition(db_type, &nullable)
+                ));
+                statements.push(format!(
+                    "ALTER TABLE {target} ALTER COLUMN {} SET NOT NULL",
+                    quoted(&spec.name)
+                ));
+            } else {
+                let definition = column_definition(db_type, spec);
+                statements.push(match db_type {
+                    // T-SQL has no COLUMN keyword in ADD.
+                    DatabaseType::MsSql => format!("ALTER TABLE {target} ADD {definition}"),
+                    _ => format!("ALTER TABLE {target} ADD COLUMN {definition}"),
+                });
             }
-            let definition = column_definition(db_type, spec);
-            Ok(vec![match db_type {
-                // T-SQL has no COLUMN keyword in ADD.
-                DatabaseType::MsSql => format!("ALTER TABLE {target} ADD {definition}"),
-                _ => format!("ALTER TABLE {target} ADD COLUMN {definition}"),
-            }])
+            if comment.is_some()
+                && !matches!(db_type, DatabaseType::MySQL | DatabaseType::ClickHouse)
+            {
+                statements.push(column_comment_sql(
+                    db_type, schema, table, &spec.name, comment,
+                )?);
+            }
+            Ok(statements)
         }
         ColumnOperation::Rename { from, to } => {
             require_name(from, "column")?;
@@ -346,108 +550,158 @@ pub fn column_operation_sql(
                 quoted(name)
             )])
         }
-        ColumnOperation::Alter { name, spec } => {
-            require_name(name, "column")?;
-            validate_spec(spec)?;
-            let renamed = name.trim() != spec.name.trim();
+        ColumnOperation::Alter { from, to } => {
+            validate_spec(from)?;
+            validate_spec(to)?;
+            let renamed = from.name.trim() != to.name.trim();
+            let type_changed = from.data_type.trim() != to.data_type.trim();
+            let null_changed = from.nullable != to.nullable;
+            let default_changed = from.trimmed_default() != to.trimmed_default();
+            let comment_changed = from.trimmed_comment() != to.trimmed_comment();
+            let definition_changed = type_changed || null_changed || default_changed;
+            if !(renamed || definition_changed || comment_changed) {
+                return Err(DdlError::Invalid("the column is unchanged".to_string()));
+            }
+            if comment_changed && !dialect.supports_comments() {
+                return Err(unsupported_comments(db_type));
+            }
+            let column = quoted(&to.name);
+            let rename = || rename_column_sql(db_type, schema, table, &from.name, &to.name);
+            let comment =
+                || column_comment_sql(db_type, schema, table, &to.name, to.trimmed_comment());
             let mut statements = Vec::new();
             match db_type {
                 DatabaseType::PostgreSQL | DatabaseType::CockroachDb => {
                     if renamed {
-                        statements
-                            .push(rename_column_sql(db_type, schema, table, name, &spec.name));
+                        statements.push(rename());
                     }
-                    let column = quoted(&spec.name);
-                    let null_clause = if spec.nullable {
-                        "DROP NOT NULL"
-                    } else {
-                        "SET NOT NULL"
-                    };
-                    let default_clause = match spec.default.as_deref().map(str::trim) {
-                        Some(default) if !default.is_empty() => format!("SET DEFAULT {default}"),
-                        _ => "DROP DEFAULT".to_string(),
-                    };
-                    statements.push(format!(
-                        "ALTER TABLE {target} ALTER COLUMN {column} TYPE {}, ALTER COLUMN {column} {null_clause}, ALTER COLUMN {column} {default_clause}",
-                        spec.data_type.trim()
-                    ));
+                    let mut actions = Vec::new();
+                    if type_changed {
+                        actions.push(format!(
+                            "ALTER COLUMN {column} TYPE {}",
+                            to.data_type.trim()
+                        ));
+                    }
+                    if null_changed {
+                        actions.push(format!(
+                            "ALTER COLUMN {column} {}",
+                            if to.nullable {
+                                "DROP NOT NULL"
+                            } else {
+                                "SET NOT NULL"
+                            }
+                        ));
+                    }
+                    if default_changed {
+                        actions.push(match to.trimmed_default() {
+                            Some(default) => format!("ALTER COLUMN {column} SET DEFAULT {default}"),
+                            None => format!("ALTER COLUMN {column} DROP DEFAULT"),
+                        });
+                    }
+                    if !actions.is_empty() {
+                        statements.push(format!("ALTER TABLE {target} {}", actions.join(", ")));
+                    }
+                    if comment_changed {
+                        statements.push(comment()?);
+                    }
                 }
                 DatabaseType::DuckDb => {
                     // DuckDB takes one action per ALTER TABLE.
                     if renamed {
-                        statements
-                            .push(rename_column_sql(db_type, schema, table, name, &spec.name));
+                        statements.push(rename());
                     }
-                    let column = quoted(&spec.name);
-                    statements.push(format!(
-                        "ALTER TABLE {target} ALTER COLUMN {column} TYPE {}",
-                        spec.data_type.trim()
-                    ));
-                    statements.push(format!(
-                        "ALTER TABLE {target} ALTER COLUMN {column} {}",
-                        if spec.nullable {
-                            "DROP NOT NULL"
-                        } else {
-                            "SET NOT NULL"
-                        }
-                    ));
-                    statements.push(match spec.default.as_deref().map(str::trim) {
-                        Some(default) if !default.is_empty() => {
-                            format!(
+                    if type_changed {
+                        statements.push(format!(
+                            "ALTER TABLE {target} ALTER COLUMN {column} TYPE {}",
+                            to.data_type.trim()
+                        ));
+                    }
+                    if null_changed {
+                        statements.push(format!(
+                            "ALTER TABLE {target} ALTER COLUMN {column} {}",
+                            if to.nullable {
+                                "DROP NOT NULL"
+                            } else {
+                                "SET NOT NULL"
+                            }
+                        ));
+                    }
+                    if default_changed {
+                        statements.push(match to.trimmed_default() {
+                            Some(default) => format!(
                                 "ALTER TABLE {target} ALTER COLUMN {column} SET DEFAULT {default}"
-                            )
-                        }
-                        _ => format!("ALTER TABLE {target} ALTER COLUMN {column} DROP DEFAULT"),
-                    });
+                            ),
+                            None => {
+                                format!("ALTER TABLE {target} ALTER COLUMN {column} DROP DEFAULT")
+                            }
+                        });
+                    }
+                    if comment_changed {
+                        statements.push(comment()?);
+                    }
                 }
                 DatabaseType::MySQL => {
-                    // CHANGE COLUMN carries the (possibly new) name along with
-                    // the full definition, so one statement covers everything.
-                    statements.push(format!(
-                        "ALTER TABLE {target} CHANGE COLUMN {} {}",
-                        quoted(name),
-                        column_definition(db_type, spec)
-                    ));
+                    if from.generated && (definition_changed || comment_changed) {
+                        return Err(DdlError::Unsupported(
+                            "MySQL changes a generated column only with its expression; change it in a query".to_string(),
+                        ));
+                    }
+                    if definition_changed || comment_changed {
+                        // CHANGE COLUMN restates the whole definition with the
+                        // (possibly new) name, so one statement covers it all.
+                        statements.push(format!(
+                            "ALTER TABLE {target} CHANGE COLUMN {} {}",
+                            quoted(&from.name),
+                            column_definition(db_type, to)
+                        ));
+                    } else {
+                        statements.push(rename());
+                    }
                 }
                 DatabaseType::MsSql => {
-                    if spec
-                        .default
-                        .as_deref()
-                        .map(str::trim)
-                        .is_some_and(|d| !d.is_empty())
-                    {
+                    if default_changed {
                         return Err(DdlError::Unsupported(
                             "SQL Server stores defaults as named constraints; change the default in a query instead".to_string(),
                         ));
                     }
                     if renamed {
-                        statements
-                            .push(rename_column_sql(db_type, schema, table, name, &spec.name));
+                        statements.push(rename());
                     }
-                    statements.push(format!(
-                        "ALTER TABLE {target} ALTER COLUMN {} {} {}",
-                        quoted(&spec.name),
-                        spec.data_type.trim(),
-                        if spec.nullable { "NULL" } else { "NOT NULL" }
-                    ));
+                    if type_changed || null_changed {
+                        statements.push(format!(
+                            "ALTER TABLE {target} ALTER COLUMN {column} {} {}",
+                            to.data_type.trim(),
+                            if to.nullable { "NULL" } else { "NOT NULL" }
+                        ));
+                    }
+                    if comment_changed {
+                        statements.push(comment()?);
+                    }
                 }
                 DatabaseType::ClickHouse => {
                     if renamed {
-                        statements
-                            .push(rename_column_sql(db_type, schema, table, name, &spec.name));
+                        statements.push(rename());
                     }
-                    statements.push(format!(
-                        "ALTER TABLE {target} MODIFY COLUMN {}",
-                        column_definition(db_type, spec)
-                    ));
+                    if definition_changed {
+                        // The definition carries the comment along.
+                        statements.push(format!(
+                            "ALTER TABLE {target} MODIFY COLUMN {}",
+                            column_definition(db_type, to)
+                        ));
+                    } else if comment_changed {
+                        statements.push(comment()?);
+                    }
                 }
                 DatabaseType::SQLite => {
                     // A rebuild from ColumnInfo would silently drop CHECK and
                     // UNIQUE constraints, triggers and partial indexes, so the
                     // only safe in-place change is the rename.
-                    return Err(DdlError::Unsupported(
-                        "SQLite cannot change a column's type, nullability or default in place; recreate the table in a query".to_string(),
-                    ));
+                    if definition_changed {
+                        return Err(DdlError::Unsupported(
+                            "SQLite cannot change a column's type, nullability or default in place; recreate the table in a query".to_string(),
+                        ));
+                    }
+                    statements.push(rename());
                 }
                 DatabaseType::Redis => {
                     return Err(DdlError::Unsupported("Redis has no columns".to_string()));
@@ -507,26 +761,58 @@ pub fn index_operation_sql(
     }
     let target = dialect.quote_qualified(schema, table);
     match operation {
-        IndexOperation::Create {
-            name,
-            columns,
-            unique,
-        } => {
-            require_name(name, "index")?;
-            if columns.is_empty() {
+        IndexOperation::Create(spec) => {
+            require_name(&spec.name, "index")?;
+            if spec.columns.is_empty() {
                 return Err(DdlError::Invalid(
                     "an index needs at least one column".to_string(),
                 ));
             }
-            let column_list = columns
+            let method = spec
+                .method
+                .as_deref()
+                .map(str::trim)
+                .filter(|method| !method.is_empty());
+            let condition = spec
+                .condition
+                .as_deref()
+                .map(str::trim)
+                .filter(|condition| !condition.is_empty());
+            if spec.nulls_not_distinct {
+                if !dialect.has_nulls_not_distinct() {
+                    return Err(DdlError::Unsupported(format!(
+                        "{} has no NULLS NOT DISTINCT",
+                        db_type.as_str()
+                    )));
+                }
+                if !spec.unique {
+                    return Err(DdlError::Invalid(
+                        "NULLS NOT DISTINCT applies to unique indexes only".to_string(),
+                    ));
+                }
+            }
+            if condition.is_some() && !dialect.supports_partial_indexes() {
+                return Err(DdlError::Unsupported(format!(
+                    "{} has no partial indexes",
+                    db_type.as_str()
+                )));
+            }
+            if method.is_some() && dialect.index_methods().is_empty() {
+                return Err(DdlError::Unsupported(format!(
+                    "{} takes no index method",
+                    db_type.as_str()
+                )));
+            }
+            let column_list = spec
+                .columns
                 .iter()
                 .map(|column| dialect.quote_identifier(column.trim()))
                 .collect::<Vec<_>>()
                 .join(", ");
-            let index_name = dialect.quote_identifier(name.trim());
+            let index_name = dialect.quote_identifier(spec.name.trim());
             Ok(vec![match db_type {
                 DatabaseType::ClickHouse => {
-                    if *unique {
+                    if spec.unique {
                         return Err(DdlError::Unsupported(
                             "ClickHouse has no unique indexes".to_string(),
                         ));
@@ -534,13 +820,27 @@ pub fn index_operation_sql(
                     // Only data-skipping indexes can be added after the fact;
                     // minmax is the cheapest general-purpose one.
                     format!(
-                        "ALTER TABLE {target} ADD INDEX {index_name} ({column_list}) TYPE minmax GRANULARITY 1"
+                        "ALTER TABLE {target} ADD INDEX {index_name} ({column_list}) TYPE {} GRANULARITY 1",
+                        method.unwrap_or("minmax")
                     )
                 }
-                _ => format!(
-                    "CREATE {}INDEX {index_name} ON {target} ({column_list})",
-                    if *unique { "UNIQUE " } else { "" }
-                ),
+                _ => {
+                    let mut sql = format!(
+                        "CREATE {}INDEX {index_name} ON {target}",
+                        if spec.unique { "UNIQUE " } else { "" }
+                    );
+                    if let Some(method) = method {
+                        sql.push_str(&format!(" USING {method}"));
+                    }
+                    sql.push_str(&format!(" ({column_list})"));
+                    if spec.nulls_not_distinct {
+                        sql.push_str(" NULLS NOT DISTINCT");
+                    }
+                    if let Some(condition) = condition {
+                        sql.push_str(&format!(" WHERE {condition}"));
+                    }
+                    sql
+                }
             }])
         }
         IndexOperation::Drop { name } => {
@@ -569,6 +869,192 @@ pub fn index_operation_sql(
     }
 }
 
+/// `[CONSTRAINT name] FOREIGN KEY (...) REFERENCES ... [ON ...]`, the part
+/// of a key both `ALTER TABLE ... ADD` and `CREATE TABLE` spell alike. A
+/// referenced table without a schema is in the table's own.
+fn foreign_key_clause(
+    db_type: DatabaseType,
+    schema: Option<&str>,
+    operation: &ForeignKeyOperation,
+) -> Result<String, DdlError> {
+    let ForeignKeyOperation::Create {
+        name,
+        columns,
+        referenced_schema,
+        referenced_table,
+        referenced_columns,
+        on_update,
+        on_delete,
+    } = operation
+    else {
+        return Err(DdlError::Invalid("not a new foreign key".to_string()));
+    };
+    let dialect = db_type.dialect();
+    let column_list = |columns: &[String]| {
+        columns
+            .iter()
+            .map(|column| dialect.quote_identifier(column.trim()))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    require_name(referenced_table, "referenced table")?;
+    if columns.is_empty() {
+        return Err(DdlError::Invalid(
+            "a foreign key needs at least one column".to_string(),
+        ));
+    }
+    if columns.len() != referenced_columns.len() {
+        return Err(DdlError::Invalid(
+            "each column needs one referenced column".to_string(),
+        ));
+    }
+    if columns
+        .iter()
+        .chain(referenced_columns)
+        .any(|column| column.trim().is_empty())
+    {
+        return Err(DdlError::Invalid(
+            "column name must not be empty".to_string(),
+        ));
+    }
+    if db_type == DatabaseType::MsSql
+        && (*on_update == ReferentialAction::Restrict || *on_delete == ReferentialAction::Restrict)
+    {
+        return Err(DdlError::Unsupported(
+            "SQL Server has no RESTRICT; NO ACTION refuses the change the same way".to_string(),
+        ));
+    }
+    let mut sql = String::new();
+    if let Some(name) = name.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
+        sql.push_str(&format!("CONSTRAINT {} ", dialect.quote_identifier(name)));
+    }
+    let referenced_schema = referenced_schema
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .or(schema);
+    sql.push_str(&format!(
+        "FOREIGN KEY ({}) REFERENCES {} ({})",
+        column_list(columns),
+        dialect.quote_qualified(referenced_schema, referenced_table.trim()),
+        column_list(referenced_columns)
+    ));
+    // NO ACTION is every backend's default, so leave it out.
+    for (clause, action) in [("UPDATE", on_update), ("DELETE", on_delete)] {
+        if *action != ReferentialAction::NoAction {
+            sql.push_str(&format!(" ON {clause} {}", action.sql()));
+        }
+    }
+    Ok(sql)
+}
+
+/// A table to create: its columns in order, the primary key from the
+/// columns marked as part of it, then its indexes and foreign keys.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct NewTable {
+    pub columns: Vec<ColumnSpec>,
+    pub indexes: Vec<IndexSpec>,
+    /// `ForeignKeyOperation::Create` each.
+    pub foreign_keys: Vec<ForeignKeyOperation>,
+}
+
+/// The statements that create `table`: the `CREATE TABLE` with its columns,
+/// primary key and foreign keys, then its indexes and the column comments
+/// the backend keeps apart. Foreign keys are declared inline because SQLite
+/// and DuckDB cannot add one later. ClickHouse orders a MergeTree table by
+/// its primary key, or by nothing without one.
+pub fn create_table_sql(
+    db_type: DatabaseType,
+    schema: Option<&str>,
+    table: &str,
+    new_table: &NewTable,
+) -> Result<Vec<String>, DdlError> {
+    let dialect = db_type.dialect();
+    if !dialect.supports_column_ddl() {
+        return Err(DdlError::Unsupported(format!(
+            "{} has no tables to create",
+            db_type.as_str()
+        )));
+    }
+    require_name(table, "table")?;
+    if new_table.columns.is_empty() {
+        return Err(DdlError::Invalid(
+            "a table needs at least one column".to_string(),
+        ));
+    }
+    let mut names = std::collections::HashSet::new();
+    for spec in &new_table.columns {
+        validate_spec(spec)?;
+        if !names.insert(spec.name.trim().to_lowercase()) {
+            return Err(DdlError::Invalid(format!(
+                "column \"{}\" is listed twice",
+                spec.name.trim()
+            )));
+        }
+        if spec.trimmed_comment().is_some() && !dialect.supports_comments() {
+            return Err(unsupported_comments(db_type));
+        }
+    }
+    if !new_table.foreign_keys.is_empty() && !dialect.supports_foreign_keys() {
+        return Err(DdlError::Unsupported(format!(
+            "{} has no foreign keys",
+            db_type.as_str()
+        )));
+    }
+
+    let target = dialect.quote_qualified(schema, table);
+    let primary_key: Vec<String> = new_table
+        .columns
+        .iter()
+        .filter(|spec| spec.primary_key)
+        .map(|spec| dialect.quote_identifier(spec.name.trim()))
+        .collect();
+    let mut lines: Vec<String> = new_table
+        .columns
+        .iter()
+        .map(|spec| column_definition(db_type, spec))
+        .collect();
+    if !primary_key.is_empty() && db_type != DatabaseType::ClickHouse {
+        lines.push(format!("PRIMARY KEY ({})", primary_key.join(", ")));
+    }
+    for foreign_key in &new_table.foreign_keys {
+        lines.push(foreign_key_clause(db_type, schema, foreign_key)?);
+    }
+    let mut create = format!("CREATE TABLE {target} (\n    {}\n)", lines.join(",\n    "));
+    if db_type == DatabaseType::ClickHouse {
+        let order_by = if primary_key.is_empty() {
+            "tuple()".to_string()
+        } else {
+            format!("({})", primary_key.join(", "))
+        };
+        create.push_str(&format!("\nENGINE = MergeTree\nORDER BY {order_by}"));
+    }
+
+    let mut statements = vec![create];
+    for index in &new_table.indexes {
+        statements.extend(index_operation_sql(
+            db_type,
+            schema,
+            table,
+            &IndexOperation::Create(index.clone()),
+        )?);
+    }
+    if !matches!(db_type, DatabaseType::MySQL | DatabaseType::ClickHouse) {
+        for spec in &new_table.columns {
+            if let Some(comment) = spec.trimmed_comment() {
+                statements.push(column_comment_sql(
+                    db_type,
+                    schema,
+                    table,
+                    &spec.name,
+                    Some(comment),
+                )?);
+            }
+        }
+    }
+    Ok(statements)
+}
+
 /// Statements for `operation` on the foreign keys of `table`.
 pub fn foreign_key_operation_sql(
     db_type: DatabaseType,
@@ -587,75 +1073,11 @@ pub fn foreign_key_operation_sql(
         }));
     }
     let target = dialect.quote_qualified(schema, table);
-    let column_list = |columns: &[String]| {
-        columns
-            .iter()
-            .map(|column| dialect.quote_identifier(column.trim()))
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
     match operation {
-        ForeignKeyOperation::Create {
-            name,
-            columns,
-            referenced_schema,
-            referenced_table,
-            referenced_columns,
-            on_update,
-            on_delete,
-        } => {
-            require_name(referenced_table, "referenced table")?;
-            if columns.is_empty() {
-                return Err(DdlError::Invalid(
-                    "a foreign key needs at least one column".to_string(),
-                ));
-            }
-            if columns.len() != referenced_columns.len() {
-                return Err(DdlError::Invalid(
-                    "each column needs one referenced column".to_string(),
-                ));
-            }
-            if columns
-                .iter()
-                .chain(referenced_columns)
-                .any(|column| column.trim().is_empty())
-            {
-                return Err(DdlError::Invalid(
-                    "column name must not be empty".to_string(),
-                ));
-            }
-            if db_type == DatabaseType::MsSql
-                && (*on_update == ReferentialAction::Restrict
-                    || *on_delete == ReferentialAction::Restrict)
-            {
-                return Err(DdlError::Unsupported(
-                    "SQL Server has no RESTRICT; NO ACTION refuses the change the same way"
-                        .to_string(),
-                ));
-            }
-            let mut sql = format!("ALTER TABLE {target} ADD ");
-            if let Some(name) = name.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
-                sql.push_str(&format!("CONSTRAINT {} ", dialect.quote_identifier(name)));
-            }
-            let referenced_schema = referenced_schema
-                .as_deref()
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .or(schema);
-            sql.push_str(&format!(
-                "FOREIGN KEY ({}) REFERENCES {} ({})",
-                column_list(columns),
-                dialect.quote_qualified(referenced_schema, referenced_table.trim()),
-                column_list(referenced_columns)
-            ));
-            // NO ACTION is every backend's default, so leave it out.
-            for (clause, action) in [("UPDATE", on_update), ("DELETE", on_delete)] {
-                if *action != ReferentialAction::NoAction {
-                    sql.push_str(&format!(" ON {clause} {}", action.sql()));
-                }
-            }
-            Ok(vec![sql])
-        }
+        ForeignKeyOperation::Create { .. } => Ok(vec![format!(
+            "ALTER TABLE {target} ADD {}",
+            foreign_key_clause(db_type, schema, operation)?
+        )]),
         ForeignKeyOperation::Drop { name } => {
             require_name(name, "foreign key")?;
             let name = dialect.quote_identifier(name.trim());
@@ -779,6 +1201,7 @@ mod tests {
             data_type: data_type.to_string(),
             nullable,
             default: default.map(str::to_string),
+            ..ColumnSpec::default()
         }
     }
 
@@ -863,8 +1286,8 @@ mod tests {
     #[test]
     fn alter_column_per_backend() {
         let alter = ColumnOperation::Alter {
-            name: "qty".to_string(),
-            spec: spec("quantity", "bigint", true, None),
+            from: spec("qty", "int", false, Some("0")),
+            to: spec("quantity", "bigint", true, None),
         };
         assert_eq!(
             column_operation_sql(DatabaseType::PostgreSQL, None, "t", &alter),
@@ -880,46 +1303,230 @@ mod tests {
             ])
         );
         assert_eq!(
-            column_operation_sql(DatabaseType::MsSql, Some("dbo"), "t", &alter),
-            Ok(vec![
-                "EXEC sp_rename 'dbo.t.qty', 'quantity', 'COLUMN'".to_string(),
-                "ALTER TABLE [dbo].[t] ALTER COLUMN [quantity] bigint NULL".to_string(),
-            ])
-        );
-        assert_eq!(
             column_operation_sql(DatabaseType::ClickHouse, None, "t", &alter),
             Ok(vec![
                 "ALTER TABLE `t` RENAME COLUMN `qty` TO `quantity`".to_string(),
                 "ALTER TABLE `t` MODIFY COLUMN `quantity` Nullable(bigint)".to_string(),
             ])
         );
+        // SQL Server keeps a default as a named constraint.
         assert!(matches!(
-            column_operation_sql(DatabaseType::SQLite, None, "t", &alter),
+            column_operation_sql(DatabaseType::MsSql, Some("dbo"), "t", &alter),
             Err(DdlError::Unsupported(_))
         ));
-        let with_default = ColumnOperation::Alter {
-            name: "qty".to_string(),
-            spec: spec("qty", "int", false, Some("1")),
+        let widen = ColumnOperation::Alter {
+            from: spec("qty", "int", false, None),
+            to: spec("quantity", "bigint", true, None),
         };
         assert_eq!(
-            column_operation_sql(DatabaseType::PostgreSQL, None, "t", &with_default),
+            column_operation_sql(DatabaseType::MsSql, Some("dbo"), "t", &widen),
             Ok(vec![
-                "ALTER TABLE \"t\" ALTER COLUMN \"qty\" TYPE int, ALTER COLUMN \"qty\" SET NOT NULL, ALTER COLUMN \"qty\" SET DEFAULT 1".to_string(),
+                "EXEC sp_rename 'dbo.t.qty', 'quantity', 'COLUMN'".to_string(),
+                "ALTER TABLE [dbo].[t] ALTER COLUMN [quantity] bigint NULL".to_string(),
             ])
         );
         assert!(matches!(
-            column_operation_sql(DatabaseType::MsSql, None, "t", &with_default),
+            column_operation_sql(DatabaseType::SQLite, None, "t", &widen),
+            Err(DdlError::Unsupported(_))
+        ));
+
+        // Only what changed is changed.
+        let default_only = ColumnOperation::Alter {
+            from: spec("qty", "int", false, None),
+            to: spec("qty", "int", false, Some("1")),
+        };
+        assert_eq!(
+            column_operation_sql(DatabaseType::PostgreSQL, None, "t", &default_only),
+            Ok(vec![
+                "ALTER TABLE \"t\" ALTER COLUMN \"qty\" SET DEFAULT 1".to_string(),
+            ])
+        );
+        assert_eq!(
+            column_operation_sql(DatabaseType::DuckDb, None, "t", &default_only),
+            Ok(vec![
+                "ALTER TABLE \"t\" ALTER COLUMN \"qty\" SET DEFAULT 1".to_string(),
+            ])
+        );
+        // A rename alone is the one change SQLite makes in place.
+        let rename_only = ColumnOperation::Alter {
+            from: spec("qty", "int", false, None),
+            to: spec("quantity", "int", false, None),
+        };
+        assert_eq!(
+            column_operation_sql(DatabaseType::SQLite, None, "t", &rename_only),
+            Ok(vec![
+                "ALTER TABLE \"t\" RENAME COLUMN \"qty\" TO \"quantity\"".to_string(),
+            ])
+        );
+        let unchanged = ColumnOperation::Alter {
+            from: spec("qty", "int", false, None),
+            to: spec("qty", "int", false, None),
+        };
+        assert!(matches!(
+            column_operation_sql(DatabaseType::PostgreSQL, None, "t", &unchanged),
+            Err(DdlError::Invalid(_))
+        ));
+    }
+
+    #[test]
+    fn mysql_restates_column_attributes_and_refuses_generated_columns() {
+        let id = ColumnSpec {
+            attributes: Some("auto_increment".to_string()),
+            ..spec("id", "int(10) unsigned", false, None)
+        };
+        let comment = ColumnOperation::Alter {
+            from: id.clone(),
+            to: ColumnSpec {
+                comment: Some("Row id".to_string()),
+                ..id
+            },
+        };
+        assert_eq!(
+            column_operation_sql(DatabaseType::MySQL, None, "t", &comment),
+            Ok(vec![
+                "ALTER TABLE `t` CHANGE COLUMN `id` `id` int(10) unsigned NOT NULL auto_increment COMMENT 'Row id'".to_string()
+            ])
+        );
+        let generated = ColumnSpec {
+            generated: true,
+            ..spec("twice", "int(11)", true, None)
+        };
+        let change = |to: ColumnSpec| ColumnOperation::Alter {
+            from: generated.clone(),
+            to,
+        };
+        assert!(matches!(
+            column_operation_sql(
+                DatabaseType::MySQL,
+                None,
+                "t",
+                &change(ColumnSpec {
+                    comment: Some("x".to_string()),
+                    ..generated.clone()
+                })
+            ),
+            Err(DdlError::Unsupported(_))
+        ));
+        // A rename alone needs no definition.
+        assert_eq!(
+            column_operation_sql(
+                DatabaseType::MySQL,
+                None,
+                "t",
+                &change(ColumnSpec {
+                    name: "double".to_string(),
+                    ..generated.clone()
+                })
+            ),
+            Ok(vec![
+                "ALTER TABLE `t` RENAME COLUMN `twice` TO `double`".to_string()
+            ])
+        );
+    }
+
+    #[test]
+    fn column_comments_per_backend() {
+        let commented = |comment: Option<&str>| ColumnSpec {
+            comment: comment.map(str::to_string),
+            ..spec("code", "text", true, None)
+        };
+        let add = ColumnOperation::Add(commented(Some("ISO 4217's code")));
+        assert_eq!(
+            column_operation_sql(DatabaseType::PostgreSQL, Some("app"), "t", &add),
+            Ok(vec![
+                "ALTER TABLE \"app\".\"t\" ADD COLUMN \"code\" text".to_string(),
+                "COMMENT ON COLUMN \"app\".\"t\".\"code\" IS 'ISO 4217''s code'".to_string(),
+            ])
+        );
+        assert_eq!(
+            column_operation_sql(DatabaseType::MySQL, None, "t", &add),
+            Ok(vec![
+                "ALTER TABLE `t` ADD COLUMN `code` text COMMENT 'ISO 4217''s code'".to_string()
+            ])
+        );
+        assert!(matches!(
+            column_operation_sql(DatabaseType::SQLite, None, "t", &add),
+            Err(DdlError::Unsupported(_))
+        ));
+
+        let set = ColumnOperation::Alter {
+            from: commented(None),
+            to: commented(Some("Currency")),
+        };
+        assert_eq!(
+            column_operation_sql(DatabaseType::ClickHouse, None, "t", &set),
+            Ok(vec![
+                "ALTER TABLE `t` COMMENT COLUMN `code` 'Currency'".to_string()
+            ])
+        );
+        // MySQL restates the definition, which keeps the comment.
+        assert_eq!(
+            column_operation_sql(DatabaseType::MySQL, None, "t", &set),
+            Ok(vec![
+                "ALTER TABLE `t` CHANGE COLUMN `code` `code` text COMMENT 'Currency'".to_string()
+            ])
+        );
+        assert_eq!(
+            column_operation_sql(DatabaseType::MsSql, Some("sales"), "t", &set),
+            Ok(vec![
+                "IF EXISTS (SELECT 1 FROM sys.extended_properties WHERE class = 1 AND name = N'MS_Description' AND major_id = OBJECT_ID(N'[sales].[t]') AND minor_id = COLUMNPROPERTY(OBJECT_ID(N'[sales].[t]'), N'code', 'ColumnId')) EXEC sp_updateextendedproperty @name = N'MS_Description', @value = N'Currency', @level0type = N'SCHEMA', @level0name = N'sales', @level1type = N'TABLE', @level1name = N't', @level2type = N'COLUMN', @level2name = N'code' ELSE EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'Currency', @level0type = N'SCHEMA', @level0name = N'sales', @level1type = N'TABLE', @level1name = N't', @level2type = N'COLUMN', @level2name = N'code'".to_string()
+            ])
+        );
+        let clear = ColumnOperation::Alter {
+            from: commented(Some("Currency")),
+            to: commented(Some("  ")),
+        };
+        assert_eq!(
+            column_operation_sql(DatabaseType::PostgreSQL, None, "t", &clear),
+            Ok(vec!["COMMENT ON COLUMN \"t\".\"code\" IS NULL".to_string()])
+        );
+    }
+
+    #[test]
+    fn table_comment_per_backend() {
+        let set = TableChange::Comment(Some("Orders".to_string()));
+        let sql =
+            |db_type, change: &TableChange| table_change_sql(db_type, Some("app"), "t", change);
+        assert_eq!(
+            sql(DatabaseType::PostgreSQL, &set),
+            Ok(vec![
+                "COMMENT ON TABLE \"app\".\"t\" IS 'Orders'".to_string()
+            ])
+        );
+        assert_eq!(
+            sql(DatabaseType::MySQL, &set),
+            Ok(vec!["ALTER TABLE `app`.`t` COMMENT = 'Orders'".to_string()])
+        );
+        assert_eq!(
+            sql(DatabaseType::ClickHouse, &set),
+            Ok(vec![
+                "ALTER TABLE `app`.`t` MODIFY COMMENT 'Orders'".to_string()
+            ])
+        );
+        assert_eq!(
+            sql(DatabaseType::MsSql, &TableChange::Comment(None)),
+            Ok(vec![
+                "IF EXISTS (SELECT 1 FROM sys.extended_properties WHERE class = 1 AND name = N'MS_Description' AND major_id = OBJECT_ID(N'[app].[t]') AND minor_id = 0) EXEC sp_dropextendedproperty @name = N'MS_Description', @level0type = N'SCHEMA', @level0name = N'app', @level1type = N'TABLE', @level1name = N't'".to_string()
+            ])
+        );
+        assert_eq!(
+            sql(DatabaseType::DuckDb, &TableChange::Comment(None)),
+            Ok(vec!["COMMENT ON TABLE \"app\".\"t\" IS NULL".to_string()])
+        );
+        assert!(matches!(
+            sql(DatabaseType::SQLite, &set),
             Err(DdlError::Unsupported(_))
         ));
     }
 
     #[test]
     fn index_operations_per_backend() {
-        let create = IndexOperation::Create {
+        let create = IndexOperation::Create(IndexSpec {
             name: "t_a_b".to_string(),
             columns: vec!["a".to_string(), "b".to_string()],
             unique: true,
-        };
+            ..IndexSpec::default()
+        });
         assert_eq!(
             index_operation_sql(DatabaseType::PostgreSQL, Some("app"), "t", &create),
             Ok(vec![
@@ -936,11 +1543,11 @@ mod tests {
             index_operation_sql(DatabaseType::ClickHouse, None, "t", &create),
             Err(DdlError::Unsupported(_))
         ));
-        let skipping = IndexOperation::Create {
+        let skipping = IndexOperation::Create(IndexSpec {
             name: "idx".to_string(),
             columns: vec!["a".to_string()],
-            unique: false,
-        };
+            ..IndexSpec::default()
+        });
         assert_eq!(
             index_operation_sql(DatabaseType::ClickHouse, None, "t", &skipping),
             Ok(vec![
@@ -967,14 +1574,223 @@ mod tests {
                 DatabaseType::SQLite,
                 None,
                 "t",
-                &IndexOperation::Create {
+                &IndexOperation::Create(IndexSpec {
                     name: "i".to_string(),
-                    columns: vec![],
-                    unique: false
-                }
+                    ..IndexSpec::default()
+                })
             ),
             Err(DdlError::Invalid(_))
         ));
+    }
+
+    #[test]
+    fn create_table_per_backend() {
+        let new_table = |db_type: DatabaseType| {
+            let (key_type, attributes) = db_type.dialect().new_table_key();
+            NewTable {
+                columns: vec![
+                    ColumnSpec {
+                        name: "id".to_string(),
+                        data_type: key_type.to_string(),
+                        attributes: attributes.map(str::to_string),
+                        primary_key: true,
+                        ..ColumnSpec::default()
+                    },
+                    ColumnSpec {
+                        name: "customer_id".to_string(),
+                        data_type: "integer".to_string(),
+                        nullable: false,
+                        comment: Some("Who ordered".to_string()),
+                        ..ColumnSpec::default()
+                    },
+                ],
+                indexes: vec![IndexSpec {
+                    name: "orders_customer_idx".to_string(),
+                    columns: vec!["customer_id".to_string()],
+                    ..IndexSpec::default()
+                }],
+                foreign_keys: vec![ForeignKeyOperation::Create {
+                    name: None,
+                    columns: vec!["customer_id".to_string()],
+                    referenced_schema: None,
+                    referenced_table: "customers".to_string(),
+                    referenced_columns: vec!["id".to_string()],
+                    on_update: ReferentialAction::NoAction,
+                    on_delete: ReferentialAction::Cascade,
+                }],
+            }
+        };
+        assert_eq!(
+            create_table_sql(DatabaseType::PostgreSQL, Some("app"), "orders", &new_table(DatabaseType::PostgreSQL)),
+            Ok(vec![
+                "CREATE TABLE \"app\".\"orders\" (\n    \"id\" bigint GENERATED BY DEFAULT AS IDENTITY NOT NULL,\n    \"customer_id\" integer NOT NULL,\n    PRIMARY KEY (\"id\"),\n    FOREIGN KEY (\"customer_id\") REFERENCES \"app\".\"customers\" (\"id\") ON DELETE CASCADE\n)".to_string(),
+                "CREATE INDEX \"orders_customer_idx\" ON \"app\".\"orders\" (\"customer_id\")".to_string(),
+                "COMMENT ON COLUMN \"app\".\"orders\".\"customer_id\" IS 'Who ordered'".to_string(),
+            ])
+        );
+        assert_eq!(
+            create_table_sql(DatabaseType::MySQL, None, "orders", &new_table(DatabaseType::MySQL)),
+            Ok(vec![
+                "CREATE TABLE `orders` (\n    `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n    `customer_id` integer NOT NULL COMMENT 'Who ordered',\n    PRIMARY KEY (`id`),\n    FOREIGN KEY (`customer_id`) REFERENCES `customers` (`id`) ON DELETE CASCADE\n)".to_string(),
+                "CREATE INDEX `orders_customer_idx` ON `orders` (`customer_id`)".to_string(),
+            ])
+        );
+        // SQLite takes a foreign key only here, as it cannot add one later.
+        let sqlite = NewTable {
+            columns: new_table(DatabaseType::SQLite)
+                .columns
+                .into_iter()
+                .map(|spec| ColumnSpec {
+                    comment: None,
+                    ..spec
+                })
+                .collect(),
+            ..new_table(DatabaseType::SQLite)
+        };
+        assert_eq!(
+            create_table_sql(DatabaseType::SQLite, None, "orders", &sqlite).map(|sql| sql[0].clone()),
+            Ok("CREATE TABLE \"orders\" (\n    \"id\" INTEGER NOT NULL,\n    \"customer_id\" integer NOT NULL,\n    PRIMARY KEY (\"id\"),\n    FOREIGN KEY (\"customer_id\") REFERENCES \"customers\" (\"id\") ON DELETE CASCADE\n)".to_string())
+        );
+        assert!(matches!(
+            create_table_sql(
+                DatabaseType::SQLite,
+                None,
+                "orders",
+                &new_table(DatabaseType::SQLite)
+            ),
+            Err(DdlError::Unsupported(_))
+        ));
+        // ClickHouse has no foreign keys, and orders by its key.
+        assert!(matches!(
+            create_table_sql(
+                DatabaseType::ClickHouse,
+                None,
+                "orders",
+                &new_table(DatabaseType::ClickHouse)
+            ),
+            Err(DdlError::Unsupported(_))
+        ));
+        let clickhouse = NewTable {
+            foreign_keys: Vec::new(),
+            indexes: Vec::new(),
+            ..new_table(DatabaseType::ClickHouse)
+        };
+        assert_eq!(
+            create_table_sql(DatabaseType::ClickHouse, None, "orders", &clickhouse),
+            Ok(vec![
+                "CREATE TABLE `orders` (\n    `id` UInt64,\n    `customer_id` integer COMMENT 'Who ordered'\n)\nENGINE = MergeTree\nORDER BY (`id`)".to_string(),
+            ])
+        );
+        assert!(matches!(
+            create_table_sql(DatabaseType::PostgreSQL, None, " ", &clickhouse),
+            Err(DdlError::Invalid(_))
+        ));
+        assert!(matches!(
+            create_table_sql(DatabaseType::PostgreSQL, None, "t", &NewTable::default()),
+            Err(DdlError::Invalid(_))
+        ));
+    }
+
+    #[test]
+    fn index_options_per_backend() {
+        let unique_email = |nulls_not_distinct| IndexSpec {
+            name: "users_email_key".to_string(),
+            columns: vec!["email".to_string()],
+            unique: true,
+            nulls_not_distinct,
+            ..IndexSpec::default()
+        };
+        assert_eq!(
+            index_operation_sql(
+                DatabaseType::PostgreSQL,
+                None,
+                "users",
+                &IndexOperation::Create(unique_email(true))
+            ),
+            Ok(vec![
+                "CREATE UNIQUE INDEX \"users_email_key\" ON \"users\" (\"email\") NULLS NOT DISTINCT".to_string()
+            ])
+        );
+        assert!(matches!(
+            index_operation_sql(
+                DatabaseType::MySQL,
+                None,
+                "users",
+                &IndexOperation::Create(unique_email(true))
+            ),
+            Err(DdlError::Unsupported(_))
+        ));
+        assert!(matches!(
+            index_operation_sql(
+                DatabaseType::PostgreSQL,
+                None,
+                "users",
+                &IndexOperation::Create(IndexSpec {
+                    unique: false,
+                    ..unique_email(true)
+                })
+            ),
+            Err(DdlError::Invalid(_))
+        ));
+
+        let partial = IndexSpec {
+            name: "open_idx".to_string(),
+            columns: vec!["status".to_string()],
+            method: Some("hash".to_string()),
+            condition: Some("shipped_at IS NULL".to_string()),
+            ..IndexSpec::default()
+        };
+        assert_eq!(
+            index_operation_sql(
+                DatabaseType::PostgreSQL,
+                Some("sales"),
+                "orders",
+                &IndexOperation::Create(partial.clone())
+            ),
+            Ok(vec![
+                "CREATE INDEX \"open_idx\" ON \"sales\".\"orders\" USING hash (\"status\") WHERE shipped_at IS NULL".to_string()
+            ])
+        );
+        let condition_only = IndexSpec {
+            method: None,
+            ..partial.clone()
+        };
+        assert_eq!(
+            index_operation_sql(
+                DatabaseType::SQLite,
+                None,
+                "orders",
+                &IndexOperation::Create(condition_only.clone())
+            ),
+            Ok(vec![
+                "CREATE INDEX \"open_idx\" ON \"orders\" (\"status\") WHERE shipped_at IS NULL"
+                    .to_string()
+            ])
+        );
+        assert!(matches!(
+            index_operation_sql(
+                DatabaseType::MySQL,
+                None,
+                "orders",
+                &IndexOperation::Create(condition_only)
+            ),
+            Err(DdlError::Unsupported(_))
+        ));
+        assert_eq!(
+            index_operation_sql(
+                DatabaseType::ClickHouse,
+                None,
+                "orders",
+                &IndexOperation::Create(IndexSpec {
+                    method: Some("bloom_filter".to_string()),
+                    condition: None,
+                    ..partial
+                })
+            ),
+            Ok(vec![
+                "ALTER TABLE `orders` ADD INDEX `open_idx` (`status`) TYPE bloom_filter GRANULARITY 1".to_string()
+            ])
+        );
     }
 
     #[test]

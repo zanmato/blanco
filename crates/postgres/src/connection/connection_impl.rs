@@ -619,11 +619,7 @@ impl Connection for PostgresConnection {
         let schema_filter = schema.unwrap_or("public");
         let query = match kind {
             ObjectKind::Procedure | ObjectKind::Function => {
-                "SELECT pg_get_functiondef(p.oid)
-                 FROM pg_proc p
-                 JOIN pg_namespace n ON n.oid = p.pronamespace
-                 WHERE n.nspname = $1 AND p.proname = $2
-                 LIMIT 1"
+                return self.routine_ddl(kind, schema_filter, name).await;
             }
             ObjectKind::Trigger => {
                 "SELECT pg_get_triggerdef(t.oid, true)
@@ -721,134 +717,198 @@ impl Connection for PostgresConnection {
             })
     }
 
-    async fn table_ddl(&self, schema: Option<&str>, table_name: &str) -> Result<String> {
-        let schema_name = schema.unwrap_or("public");
-        let params = [schema_name.to_string(), table_name.to_string()];
-
-        // 1. Columns with type, identity, NOT NULL and DEFAULT or the
-        // expression of a generated column.
-        let columns_query = "
-            SELECT a.attname,
-                   format_type(a.atttypid, a.atttypmod),
-                   a.attnotnull,
-                   pg_get_expr(d.adbin, d.adrelid),
-                   a.attgenerated::text,
-                   a.attidentity::text
-            FROM pg_attribute a
-            JOIN pg_class c ON c.oid = a.attrelid
+    async fn table_info(
+        &self,
+        schema: Option<&str>,
+        table_name: &str,
+    ) -> Result<blanco_core::TableInfo> {
+        let params = [
+            schema.unwrap_or("public").to_string(),
+            table_name.to_string(),
+        ];
+        // CockroachDB reports no sizes through these functions, and its
+        // reltuples is not an estimate.
+        let query = if self.database_type == blanco_core::DatabaseType::CockroachDb {
+            "
+            SELECT obj_description(c.oid, 'pg_class'), NULL, NULL, NULL,
+                   array_to_string(c.reloptions, ', ')
+            FROM pg_class c
             JOIN pg_namespace n ON n.oid = c.relnamespace
-            LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
             WHERE n.nspname = $1 AND c.relname = $2
-              AND a.attnum > 0 AND NOT a.attisdropped
-            ORDER BY a.attnum
-        ";
-        let columns_result = self
-            .execute_query(
-                columns_query,
-                self.initial_database.as_deref(),
-                Some(&params),
-            )
+            "
+        } else {
+            // A partitioned table holds no rows itself, so its sizes and
+            // estimate would read 0.
+            "
+            SELECT obj_description(c.oid, 'pg_class'),
+                   CASE WHEN c.relkind <> 'p' AND c.reltuples >= 0 THEN c.reltuples::bigint END,
+                   CASE WHEN c.relkind <> 'p' THEN pg_table_size(c.oid) END,
+                   CASE WHEN c.relkind <> 'p' THEN pg_indexes_size(c.oid) END,
+                   array_to_string(c.reloptions, ', ')
+            FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = $1 AND c.relname = $2
+            "
+        };
+        let result = self
+            .execute_query(query, self.initial_database.as_deref(), Some(&params))
             .await?;
-        if columns_result.rows.is_empty() {
+        let Some(row) = result.rows.into_iter().next() else {
             return Err(anyhow::anyhow!(
                 "Table '{}.{}' not found",
-                schema_name,
-                table_name
+                params[0],
+                params[1]
+            ));
+        };
+        let get = |ix: usize| {
+            row.get(ix)
+                .cloned()
+                .flatten()
+                .filter(|value| !value.is_empty())
+        };
+        let number = |ix: usize| get(ix).and_then(|value| value.parse::<u64>().ok());
+        let mut info = blanco_core::TableInfo {
+            comment: get(0),
+            estimated_rows: number(1),
+            data_bytes: number(2),
+            index_bytes: number(3),
+            ..Default::default()
+        };
+        if let Some(options) = get(4) {
+            info.options
+                .push(("Storage parameters".to_string(), options));
+        }
+        Ok(info)
+    }
+
+    async fn server_version_num(&self) -> Result<Option<u32>> {
+        let result = self
+            .execute_query(
+                "SELECT current_setting('server_version_num')",
+                self.initial_database.as_deref(),
+                None,
+            )
+            .await?;
+        Ok(result
+            .rows
+            .first()
+            .and_then(|row| row.first().cloned().flatten())
+            .and_then(|version| version.trim().parse().ok()))
+    }
+
+    async fn table_ddl(&self, schema: Option<&str>, table_name: &str) -> Result<String> {
+        let schema_name = schema.unwrap_or("public");
+        let dialect = self.database_type.dialect();
+        let qualified_name = dialect.quote_qualified(Some(schema_name), table_name);
+        let relation = self.ddl_relation(schema_name, table_name).await?;
+        let oid_param = [relation.oid.clone()];
+
+        let mut sections: Vec<Vec<String>> = Vec::new();
+        let mut create = vec![match relation.kind.as_str() {
+            "v" | "m" => relation.view_statement(&qualified_name),
+            _ => {
+                self.create_table_statement(&relation, &qualified_name)
+                    .await?
+            }
+        }];
+        if relation.kind != "v" {
+            create.extend(self.ddl_indexes(&relation).await?);
+        }
+        sections.push(create);
+
+        // Every column's comment is listed, inherited ones too: the comment
+        // belongs to this table's copy of the column.
+        let comments_query = "
+            SELECT a.attname, col_description(a.attrelid, a.attnum)
+            FROM pg_attribute a
+            WHERE a.attrelid = $1::oid AND a.attnum > 0 AND NOT a.attisdropped
+            ORDER BY a.attnum
+        ";
+        let comments_result = self
+            .execute_query(
+                comments_query,
+                self.initial_database.as_deref(),
+                Some(&oid_param),
+            )
+            .await?;
+        let mut comments = Vec::new();
+        if let Some(comment) = &relation.comment {
+            comments.push(format!(
+                "COMMENT ON {} {} IS {};",
+                relation.object_keyword(),
+                qualified_name,
+                dialect.string_literal(comment)
             ));
         }
-
-        let mut column_defs: Vec<String> = Vec::new();
-        for row in &columns_result.rows {
-            let name = row.first().and_then(|v| v.clone()).unwrap_or_default();
-            let data_type = row.get(1).and_then(|v| v.clone()).unwrap_or_default();
-            let not_null = row.get(2).and_then(|v| v.as_deref()) == Some("true");
-            let default = row.get(3).and_then(|v| v.clone()).filter(|s| !s.is_empty());
-            let generated = row.get(4).and_then(|v| v.as_deref()) == Some("s");
-            let identity = row.get(5).and_then(|v| v.as_deref()).unwrap_or_default();
-
-            let mut def = format!("    \"{}\" {}", name, data_type);
-            match identity {
-                "a" => def.push_str(" GENERATED ALWAYS AS IDENTITY"),
-                "d" => def.push_str(" GENERATED BY DEFAULT AS IDENTITY"),
-                _ => {}
-            }
-            if not_null {
-                def.push_str(" NOT NULL");
-            }
-            // A stored generated column keeps its expression where a default
-            // would be, but PostgreSQL rejects it written as a default.
-            match default {
-                Some(expression) if generated => {
-                    def.push_str(&format!(" GENERATED ALWAYS AS ({expression}) STORED"))
-                }
-                Some(default) => def.push_str(&format!(" DEFAULT {default}")),
-                None => {}
-            }
-            column_defs.push(def);
+        for row in &comments_result.rows {
+            let (Some(Some(column)), Some(Some(comment))) = (row.first(), row.get(1)) else {
+                continue;
+            };
+            comments.push(format!(
+                "COMMENT ON COLUMN {}.{} IS {};",
+                qualified_name,
+                dialect.quote_identifier(column),
+                dialect.string_literal(comment)
+            ));
         }
+        sections.push(comments);
 
-        // 2. Table constraints (PK, UNIQUE, FK, CHECK). contype DESC keeps
-        // primary keys ('p') ahead of foreign keys ('f') and checks ('c').
-        let constraints_query = "
-            SELECT con.conname, pg_get_constraintdef(con.oid)
-            FROM pg_constraint con
-            JOIN pg_class c ON c.oid = con.conrelid
-            JOIN pg_namespace n ON n.oid = c.relnamespace
-            WHERE n.nspname = $1 AND c.relname = $2
-            ORDER BY con.contype DESC, con.conname
+        // A partition gets a clone of each row trigger of its parent, which
+        // the parent's DDL already creates. PostgreSQL 13 marks a clone with
+        // tgparentid, older releases with tgisinternal, and reading the
+        // column through to_jsonb works on both.
+        let triggers_query = "
+            SELECT pg_get_triggerdef(t.oid, true)
+            FROM pg_trigger t
+            WHERE t.tgrelid = $1::oid AND NOT t.tgisinternal
+              AND coalesce((to_jsonb(t) ->> 'tgparentid')::oid, 0) = 0
+            ORDER BY t.tgname
         ";
-        let constraints_result = self
+        let triggers_result = self
             .execute_query(
-                constraints_query,
+                triggers_query,
                 self.initial_database.as_deref(),
-                Some(&params),
+                Some(&oid_param),
             )
             .await?;
-
-        let mut constraint_names: std::collections::HashSet<String> =
-            std::collections::HashSet::new();
-        for row in &constraints_result.rows {
-            let name = row.first().and_then(|v| v.clone()).unwrap_or_default();
-            let def = row.get(1).and_then(|v| v.clone()).unwrap_or_default();
-            if name.is_empty() || def.is_empty() {
-                continue;
-            }
-            constraint_names.insert(name.clone());
-            column_defs.push(format!("    CONSTRAINT \"{name}\" {def}"));
-        }
-
-        let mut ddl = format!(
-            "CREATE TABLE \"{}\".\"{}\" (\n{}\n);",
-            schema_name,
-            table_name,
-            column_defs.join(",\n")
+        sections.push(
+            triggers_result
+                .rows
+                .into_iter()
+                .filter_map(|row| row.into_iter().next().flatten())
+                .map(|definition| format!("{definition};"))
+                .collect(),
         );
 
-        // 3. Standalone indexes (those not backing a PK/UNIQUE constraint, which
-        // pg_get_constraintdef already covers).
-        let indexes_query = "
-            SELECT indexname, indexdef
-            FROM pg_indexes
-            WHERE schemaname = $1 AND tablename = $2
-            ORDER BY indexname
-        ";
-        let indexes_result = self
-            .execute_query(
-                indexes_query,
-                self.initial_database.as_deref(),
-                Some(&params),
+        let implicit_grantees = self.implicit_grantees_filter();
+        let grants_query = format!(
+            "
+            SELECT 'GRANT',
+                   CASE WHEN a.grantee = 0 THEN 'PUBLIC'
+                        ELSE quote_ident(pg_get_userbyid(a.grantee)) END,
+                   a.is_grantable,
+                   string_agg(a.privilege_type, ', ' ORDER BY a.privilege_type)
+            FROM pg_class c, aclexplode(c.relacl) a
+            WHERE c.oid = $1::oid AND a.grantee <> c.relowner {implicit_grantees}
+            GROUP BY a.grantee, a.is_grantable
+            ORDER BY 2, 3
+            "
+        );
+        sections.push(
+            self.privilege_statements(
+                &grants_query,
+                &relation.oid,
+                &format!("TABLE {qualified_name}"),
             )
-            .await?;
-        for row in &indexes_result.rows {
-            let name = row.first().and_then(|v| v.clone()).unwrap_or_default();
-            let def = row.get(1).and_then(|v| v.clone()).unwrap_or_default();
-            if def.is_empty() || constraint_names.contains(&name) {
-                continue;
-            }
-            ddl.push_str(&format!("\n{def};"));
-        }
+            .await,
+        );
 
-        Ok(ddl)
+        Ok(sections
+            .into_iter()
+            .filter(|section| !section.is_empty())
+            .map(|section| section.join("\n"))
+            .collect::<Vec<_>>()
+            .join("\n\n"))
     }
 
     async fn get_queryable_entities(
@@ -1296,14 +1356,24 @@ impl Connection for PostgresConnection {
             table_name
         );
 
-        let query = "
+        // `indnullsnotdistinct` exists from PostgreSQL 15 on. Reading it
+        // through the row as JSON gives NULL on older servers instead of
+        // failing the query. CockroachDB has no such indexes.
+        let nulls_not_distinct = if self.database_type == blanco_core::DatabaseType::CockroachDb {
+            "false"
+        } else {
+            "COALESCE((to_jsonb(ix) ->> 'indnullsnotdistinct')::boolean, false)"
+        };
+        let query = format!(
+            "
             SELECT
                 i.relname AS index_name,
                 am.amname AS algorithm,
                 ix.indisunique AS is_unique,
                 array_agg(a.attname ORDER BY array_position(ix.indkey, a.attnum)) AS column_names,
                 pg_get_expr(ix.indpred, ix.indrelid) AS condition,
-                obj_description(i.oid, 'pg_class') AS comment
+                obj_description(i.oid, 'pg_class') AS comment,
+                {nulls_not_distinct} AS nulls_not_distinct
             FROM pg_index ix
             JOIN pg_class t ON t.oid = ix.indrelid
             JOIN pg_class i ON i.oid = ix.indexrelid
@@ -1311,13 +1381,15 @@ impl Connection for PostgresConnection {
             JOIN pg_am am ON am.oid = i.relam
             JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(ix.indkey)
             WHERE t.relname = $1 AND n.nspname = $2
-            GROUP BY i.relname, am.amname, ix.indisunique, ix.indpred, ix.indrelid, i.oid
+            GROUP BY i.relname, am.amname, ix.indisunique, ix.indpred, ix.indrelid, i.oid,
+                     nulls_not_distinct
             ORDER BY i.relname
-        ";
+        "
+        );
 
         let result = self
             .execute_query(
-                query,
+                &query,
                 self.initial_database.as_deref(),
                 Some(&[table_name.to_string(), schema_name.to_string()]),
             )
@@ -1340,6 +1412,7 @@ impl Connection for PostgresConnection {
                     .collect();
                 let condition = row[4].clone().filter(|s| !s.is_empty());
                 let comment = row[5].clone().filter(|s| !s.is_empty());
+                let nulls_not_distinct = row.get(6).cloned().flatten().as_deref() == Some("true");
 
                 indexes.push(IndexInfo {
                     name: index_name,
@@ -1348,6 +1421,7 @@ impl Connection for PostgresConnection {
                     column_names,
                     condition,
                     comment,
+                    nulls_not_distinct,
                 });
             }
         }
@@ -1375,6 +1449,396 @@ impl Clone for PostgresConnection {
             ssh_config: self.ssh_config.clone(),
             local_tunnel_port: self.local_tunnel_port,
         }
+    }
+}
+
+/// What `table_ddl` reads about a relation before it writes its statements.
+struct DdlRelation {
+    oid: String,
+    kind: String,
+    unlogged: bool,
+    /// `FOR VALUES ...` or `DEFAULT`, set on a partition only.
+    partition_bound: Option<String>,
+    /// The partition's parent, or the tables listed under INHERITS.
+    parents: Option<String>,
+    partition_key: Option<String>,
+    options: Option<String>,
+    comment: Option<String>,
+    view_definition: Option<String>,
+}
+
+impl DdlRelation {
+    fn object_keyword(&self) -> &'static str {
+        match self.kind.as_str() {
+            "v" => "VIEW",
+            "m" => "MATERIALIZED VIEW",
+            "f" => "FOREIGN TABLE",
+            _ => "TABLE",
+        }
+    }
+
+    fn view_statement(&self, qualified_name: &str) -> String {
+        let definition = self
+            .view_definition
+            .as_deref()
+            .unwrap_or_default()
+            .trim()
+            .trim_end_matches(';');
+        let options = self
+            .options
+            .as_ref()
+            .map(|options| format!(" WITH ({options})"))
+            .unwrap_or_default();
+        format!(
+            "CREATE {} {qualified_name}{options} AS\n{definition};",
+            self.object_keyword()
+        )
+    }
+}
+
+/// Turns rows of (action, grantee, is grantable, privileges) into GRANT and
+/// REVOKE statements on `object`.
+fn privilege_statements_from_rows(rows: Vec<Vec<Option<String>>>, object: &str) -> Vec<String> {
+    rows.into_iter()
+        .filter_map(|row| {
+            let mut cells = row.into_iter();
+            let action = cells.next().flatten()?;
+            let grantee = cells.next().flatten()?;
+            let grantable = cells.next().flatten().as_deref() == Some("true");
+            let privileges = cells.next().flatten()?;
+            Some(if action == "REVOKE" {
+                format!("REVOKE {privileges} ON {object} FROM {grantee};")
+            } else if grantable {
+                format!("GRANT {privileges} ON {object} TO {grantee} WITH GRANT OPTION;")
+            } else {
+                format!("GRANT {privileges} ON {object} TO {grantee};")
+            })
+        })
+        .collect()
+}
+
+impl PostgresConnection {
+    /// CockroachDB lists the admin and root roles in every ACL, as they
+    /// always hold every privilege.
+    fn implicit_grantees_filter(&self) -> &'static str {
+        if self.database_type == blanco_core::DatabaseType::CockroachDb {
+            "AND pg_get_userbyid(a.grantee) NOT IN ('admin', 'root')"
+        } else {
+            ""
+        }
+    }
+
+    async fn ddl_relation(&self, schema_name: &str, table_name: &str) -> Result<DdlRelation> {
+        let query = "
+            SELECT c.oid::text,
+                   c.relkind::text,
+                   c.relpersistence::text,
+                   CASE WHEN c.relispartition THEN pg_get_expr(c.relpartbound, c.oid) END,
+                   (SELECT string_agg(format('%I.%I', parent_namespace.nspname, parent.relname),
+                                      ', ' ORDER BY inheritance.inhseqno)
+                    FROM pg_inherits inheritance
+                    JOIN pg_class parent ON parent.oid = inheritance.inhparent
+                    JOIN pg_namespace parent_namespace ON parent_namespace.oid = parent.relnamespace
+                    WHERE inheritance.inhrelid = c.oid),
+                   CASE WHEN c.relkind = 'p' THEN pg_get_partkeydef(c.oid) END,
+                   array_to_string(c.reloptions, ', '),
+                   obj_description(c.oid, 'pg_class'),
+                   CASE WHEN c.relkind IN ('v', 'm') THEN pg_get_viewdef(c.oid, true) END
+            FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = $1 AND c.relname = $2
+              AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
+        ";
+        let result = self
+            .execute_query(
+                query,
+                self.initial_database.as_deref(),
+                Some(&[schema_name.to_string(), table_name.to_string()]),
+            )
+            .await?;
+        let row = result
+            .rows
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("Table '{schema_name}.{table_name}' not found"))?;
+        let get = |index: usize| {
+            row.get(index)
+                .cloned()
+                .flatten()
+                .filter(|value| !value.is_empty())
+        };
+        Ok(DdlRelation {
+            oid: get(0)
+                .ok_or_else(|| anyhow::anyhow!("Table '{schema_name}.{table_name}' has no oid"))?,
+            kind: get(1).unwrap_or_default(),
+            unlogged: get(2).as_deref() == Some("u"),
+            partition_bound: get(3),
+            parents: get(4),
+            partition_key: get(5),
+            options: get(6),
+            comment: get(7),
+            view_definition: get(8),
+        })
+    }
+
+    async fn create_table_statement(
+        &self,
+        relation: &DdlRelation,
+        qualified_name: &str,
+    ) -> Result<String> {
+        let dialect = self.database_type.dialect();
+        let oid_param = [relation.oid.clone()];
+        let mut definitions: Vec<String> = Vec::new();
+
+        // A partition takes its columns from its parent. An inheriting
+        // table lists only the columns it declares itself, as INHERITS
+        // brings in the rest.
+        if relation.partition_bound.is_none() {
+            let columns_query = "
+                SELECT a.attname,
+                       format_type(a.atttypid, a.atttypmod),
+                       a.attnotnull,
+                       pg_get_expr(d.adbin, d.adrelid),
+                       a.attgenerated::text,
+                       a.attidentity::text
+                FROM pg_attribute a
+                LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
+                WHERE a.attrelid = $1::oid AND a.attislocal
+                  AND a.attnum > 0 AND NOT a.attisdropped
+                ORDER BY a.attnum
+            ";
+            let columns_result = self
+                .execute_query(
+                    columns_query,
+                    self.initial_database.as_deref(),
+                    Some(&oid_param),
+                )
+                .await?;
+            for row in &columns_result.rows {
+                let name = row.first().and_then(|v| v.clone()).unwrap_or_default();
+                let data_type = row.get(1).and_then(|v| v.clone()).unwrap_or_default();
+                let not_null = row.get(2).and_then(|v| v.as_deref()) == Some("true");
+                let default = row.get(3).and_then(|v| v.clone()).filter(|s| !s.is_empty());
+                let generated = row.get(4).and_then(|v| v.as_deref()) == Some("s");
+                let identity = row.get(5).and_then(|v| v.as_deref()).unwrap_or_default();
+
+                let mut definition =
+                    format!("    {} {}", dialect.quote_identifier(&name), data_type);
+                match identity {
+                    "a" => definition.push_str(" GENERATED ALWAYS AS IDENTITY"),
+                    "d" => definition.push_str(" GENERATED BY DEFAULT AS IDENTITY"),
+                    _ => {}
+                }
+                if not_null {
+                    definition.push_str(" NOT NULL");
+                }
+                // A stored generated column keeps its expression where a
+                // default would be, but PostgreSQL rejects it written as a
+                // default.
+                match default {
+                    Some(expression) if generated => {
+                        definition.push_str(&format!(" GENERATED ALWAYS AS ({expression}) STORED"))
+                    }
+                    Some(default) => definition.push_str(&format!(" DEFAULT {default}")),
+                    None => {}
+                }
+                definitions.push(definition);
+            }
+        }
+
+        // contype DESC keeps primary keys ('p') ahead of foreign keys ('f')
+        // and checks ('c'). Constraints a parent passes down are left to the
+        // parent's DDL. NOT NULL constraints ('n') are already on their
+        // columns, and CockroachDB spells them without the column.
+        let constraints_query = "
+            SELECT con.conname, pg_get_constraintdef(con.oid)
+            FROM pg_constraint con
+            WHERE con.conrelid = $1::oid AND con.conislocal AND con.contype <> 'n'
+            ORDER BY con.contype DESC, con.conname
+        ";
+        let constraints_result = self
+            .execute_query(
+                constraints_query,
+                self.initial_database.as_deref(),
+                Some(&oid_param),
+            )
+            .await?;
+        for row in &constraints_result.rows {
+            let name = row.first().and_then(|v| v.clone()).unwrap_or_default();
+            let definition = row.get(1).and_then(|v| v.clone()).unwrap_or_default();
+            if name.is_empty() || definition.is_empty() {
+                continue;
+            }
+            definitions.push(format!(
+                "    CONSTRAINT {} {definition}",
+                dialect.quote_identifier(&name)
+            ));
+        }
+
+        let unlogged = if relation.unlogged { "UNLOGGED " } else { "" };
+        let mut statement = match (&relation.partition_bound, &relation.parents) {
+            (Some(bound), Some(parent)) => {
+                let mut statement =
+                    format!("CREATE {unlogged}TABLE {qualified_name} PARTITION OF {parent}");
+                if !definitions.is_empty() {
+                    statement.push_str(&format!(" (\n{}\n)", definitions.join(",\n")));
+                }
+                statement.push_str(&format!("\n{bound}"));
+                statement
+            }
+            _ => {
+                let mut statement = format!(
+                    "CREATE {unlogged}TABLE {qualified_name} (\n{}\n)",
+                    definitions.join(",\n")
+                );
+                if let Some(parents) = &relation.parents {
+                    statement.push_str(&format!("\nINHERITS ({parents})"));
+                }
+                statement
+            }
+        };
+        if let Some(partition_key) = &relation.partition_key {
+            statement.push_str(&format!("\nPARTITION BY {partition_key}"));
+        }
+        if let Some(options) = &relation.options {
+            statement.push_str(&format!("\nWITH ({options})"));
+        }
+        statement.push(';');
+        Ok(statement)
+    }
+
+    /// Indexes that no constraint creates. A partition's indexes that are
+    /// attached to an index of its parent come from the parent's DDL.
+    async fn ddl_indexes(&self, relation: &DdlRelation) -> Result<Vec<String>> {
+        let query = "
+            SELECT pg_get_indexdef(x.indexrelid)
+            FROM pg_index x
+            JOIN pg_class index_class ON index_class.oid = x.indexrelid
+            WHERE x.indrelid = $1::oid
+              AND NOT coalesce(index_class.relispartition, false)
+              AND index_class.relname NOT IN (
+                  SELECT con.conname FROM pg_constraint con WHERE con.conrelid = x.indrelid)
+            ORDER BY index_class.relname
+        ";
+        let result = self
+            .execute_query(
+                query,
+                self.initial_database.as_deref(),
+                Some(std::slice::from_ref(&relation.oid)),
+            )
+            .await?;
+        // An index on a partitioned table is written ON ONLY, which leaves
+        // it invalid on a table whose partitions exist already. Without ONLY
+        // it is built on every partition.
+        let partitioned = relation.kind == "p";
+        Ok(result
+            .rows
+            .into_iter()
+            .filter_map(|row| row.into_iter().next().flatten())
+            .filter(|definition| !definition.is_empty())
+            .map(|definition| {
+                if partitioned {
+                    format!("{};", definition.replacen(" ON ONLY ", " ON ", 1))
+                } else {
+                    format!("{definition};")
+                }
+            })
+            .collect())
+    }
+
+    /// Runs a query for `privilege_statements_from_rows`. Reading another
+    /// role's privileges can be refused, and the DDL is still worth showing
+    /// without them, so a failure leaves the grants out.
+    async fn privilege_statements(&self, query: &str, oid: &str, object: &str) -> Vec<String> {
+        match self
+            .execute_query(
+                query,
+                self.initial_database.as_deref(),
+                Some(&[oid.to_string()]),
+            )
+            .await
+        {
+            Ok(result) => privilege_statements_from_rows(result.rows, object),
+            Err(error) => {
+                tracing::debug!("Leaving the grants on {object} out of its DDL: {error:#}");
+                Vec::new()
+            }
+        }
+    }
+
+    async fn routine_ddl(&self, kind: ObjectKind, schema_name: &str, name: &str) -> Result<String> {
+        let query = "
+            SELECT p.oid::text,
+                   pg_get_functiondef(p.oid),
+                   format('%s %I.%I(%s)',
+                          CASE WHEN p.prokind = 'p' THEN 'PROCEDURE' ELSE 'FUNCTION' END,
+                          n.nspname, p.proname, pg_get_function_identity_arguments(p.oid))
+            FROM pg_proc p
+            JOIN pg_namespace n ON n.oid = p.pronamespace
+            WHERE n.nspname = $1 AND p.proname = $2
+            LIMIT 1
+        ";
+        let result = self
+            .execute_query(
+                query,
+                self.initial_database.as_deref(),
+                Some(&[schema_name.to_string(), name.to_string()]),
+            )
+            .await?;
+        let not_found = || {
+            anyhow::anyhow!(
+                "{} '{}.{}' not found",
+                kind.display_name(),
+                schema_name,
+                name
+            )
+        };
+        let mut cells = result
+            .rows
+            .into_iter()
+            .next()
+            .ok_or_else(not_found)?
+            .into_iter();
+        let (Some(Some(oid)), Some(Some(definition)), Some(Some(signature))) =
+            (cells.next(), cells.next(), cells.next())
+        else {
+            return Err(not_found());
+        };
+
+        // PUBLIC may execute a routine unless that is revoked, so only a
+        // revoke, or a grant to PUBLIC with grant option, differs from the
+        // defaults. A NULL proacl means the defaults.
+        let implicit_grantees = self.implicit_grantees_filter();
+        let grants_query = format!(
+            "
+            SELECT 'GRANT',
+                   CASE WHEN a.grantee = 0 THEN 'PUBLIC'
+                        ELSE quote_ident(pg_get_userbyid(a.grantee)) END,
+                   a.is_grantable,
+                   string_agg(a.privilege_type, ', ' ORDER BY a.privilege_type)
+            FROM pg_proc p, aclexplode(p.proacl) a
+            WHERE p.oid = $1::oid AND a.grantee <> p.proowner {implicit_grantees}
+              AND NOT (a.grantee = 0 AND a.privilege_type = 'EXECUTE' AND NOT a.is_grantable)
+            GROUP BY a.grantee, a.is_grantable
+            UNION ALL
+            SELECT 'REVOKE', 'PUBLIC', false, 'EXECUTE'
+            FROM pg_proc p
+            WHERE p.oid = $1::oid AND p.proacl IS NOT NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM aclexplode(p.proacl) a
+                  WHERE a.grantee = 0 AND a.privilege_type = 'EXECUTE')
+            ORDER BY 1 DESC, 2, 3
+            "
+        );
+        let grants = self
+            .privilege_statements(&grants_query, &oid, &signature)
+            .await;
+        if grants.is_empty() {
+            return Ok(definition);
+        }
+        let definition = definition.trim_end();
+        let terminator = if definition.ends_with(';') { "" } else { ";" };
+        Ok(format!("{definition}{terminator}\n\n{}", grants.join("\n")))
     }
 }
 

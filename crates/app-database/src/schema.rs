@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 /// Schema version stored in SQLite's `PRAGMA user_version`. Bump it and append
 /// a step to [`MIGRATIONS`] for every schema change.
-pub const SCHEMA_VERSION: i64 = 11;
+pub const SCHEMA_VERSION: i64 = 12;
 
 /// The complete schema for a fresh database, at [`SCHEMA_VERSION`]. Keep it in
 /// sync with the migrations: a database created from this must be identical
@@ -110,7 +110,27 @@ const BASELINE: &[&str] = &[
         updated_at INTEGER NOT NULL
     )
     "#,
+    VIRTUAL_FOREIGN_KEYS_TABLE,
 ];
+
+/// Foreign keys declared in Blanco only. Column lists are JSON arrays, and a
+/// table without a schema stores an empty one so the unique key holds.
+const VIRTUAL_FOREIGN_KEYS_TABLE: &str = r#"
+    CREATE TABLE virtual_foreign_keys (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        connection_id INTEGER NOT NULL REFERENCES connections(id) ON DELETE CASCADE,
+        database_name TEXT NOT NULL,
+        schema_name TEXT NOT NULL DEFAULT '',
+        table_name TEXT NOT NULL,
+        name TEXT NOT NULL,
+        columns TEXT NOT NULL,
+        referenced_schema TEXT NOT NULL DEFAULT '',
+        referenced_table TEXT NOT NULL,
+        referenced_columns TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        UNIQUE (connection_id, database_name, schema_name, table_name, name)
+    )
+    "#;
 
 const WINDOWS_TABLE: &str = r#"
     CREATE TABLE windows (
@@ -146,6 +166,7 @@ const MIGRATIONS: &[Migration] = &[
     |pool| Box::pin(migrate_v8_to_v9(pool)),
     |pool| Box::pin(migrate_v9_to_v10(pool)),
     |pool| Box::pin(migrate_v10_to_v11(pool)),
+    |pool| Box::pin(migrate_v11_to_v12(pool)),
 ];
 
 /// Columns that may be missing from an unversioned database, per table, in the
@@ -321,6 +342,13 @@ async fn migrate_v10_to_v11(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     )
     .execute(pool)
     .await?;
+    Ok(())
+}
+
+async fn migrate_v11_to_v12(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    sqlx::query(VIRTUAL_FOREIGN_KEYS_TABLE)
+        .execute(pool)
+        .await?;
     Ok(())
 }
 

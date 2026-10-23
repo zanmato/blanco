@@ -198,7 +198,7 @@ impl TabType {
         match self {
             TabType::TableStructure(tab) => {
                 let tab = tab.read(cx);
-                tab.has_pending_changes().then(|| tab.table_name.clone())
+                tab.has_pending_changes(cx).then(|| tab.title.clone())
             }
             _ => self
                 .connection_tab()

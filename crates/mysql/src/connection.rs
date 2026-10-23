@@ -138,31 +138,9 @@ impl MysqlConnectionKey {
 impl MysqlConnection {
     /// Map MySQL type name to ColumnType enum
     fn map_mysql_type(type_name: &str) -> ColumnType {
-        let type_lower = type_name.to_lowercase();
-
-        // Check for unsigned integer types first
-        if type_lower.ends_with("unsigned") {
-            let base_type = type_lower.trim_end_matches("unsigned").trim();
-            return match base_type {
-                "tinyint" | "smallint" | "mediumint" | "int" | "bigint" => {
-                    ColumnType::UnsignedInteger
-                }
-                _ => ColumnType::Unknown,
-            };
-        }
-
-        match type_lower.as_str() {
-            "tinyint" | "smallint" | "mediumint" | "int" | "bigint" => ColumnType::Integer,
-            "float" | "double" | "decimal" | "numeric" => ColumnType::Numeric,
-            "char" | "varchar" | "text" => ColumnType::Text,
-            "date" | "datetime" | "timestamp" | "time" | "year" => ColumnType::DateTime,
-            "json" => ColumnType::Json,
-            "binary" | "varbinary" | "blob" | "tinyblob" | "mediumblob" | "longblob" => {
-                ColumnType::Binary
-            }
-            "boolean" => ColumnType::Boolean,
-            _ => ColumnType::Unknown,
-        }
+        blanco_core::DatabaseType::MySQL
+            .dialect()
+            .column_type(type_name)
     }
 
     /// Create a new MySQL connection from a connection string

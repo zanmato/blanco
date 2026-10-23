@@ -950,7 +950,7 @@ impl BlancoMcpServer {
 
     #[tool(
         name = "get_table_ddl",
-        description = "The CREATE TABLE statement for a table, as the backend reports it."
+        description = "The CREATE statement for a table or view as the backend reports it, followed where the backend has them by its comments, triggers and grants."
     )]
     async fn get_table_ddl(
         &self,

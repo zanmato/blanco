@@ -311,21 +311,91 @@ over matching on the enum; the tab strip groups every connection-bound tab under
 connection using `context(cx)`.
 
 Column, index and foreign key DDL is built by `blanco_core::ddl::{column_operation_sql,
-index_operation_sql, foreign_key_operation_sql}` and driven from the structure tab
-(`editor/table_structure.rs`: toolbar buttons, row context menus). Its dialogs and drops
-do not run anything: they stage a `StructureChange`, whose statements are built at once so
-an unsupported change is refused when it is added. `table_structure/staging.rs` replays the
-pending list onto the loaded structure, and the lists show that replay with each row marked
-(added, modified, dropped), so a staged column can be indexed and every row action addresses
-a staged row. Undoing a change replays the rest and drops the ones that no longer fit, as a
-reload does. Apply previews every statement and runs them as one
+index_operation_sql, foreign_key_operation_sql, table_change_sql}` and driven from the
+structure tab (`editor/table_structure.rs`). The tab shows one section at a time (columns,
+indexes, foreign keys, table, create statement) picked from a list on its left, and a
+selected row opens in a side panel (`table_structure/forms.rs`: `ColumnForm`, `IndexForm`,
+`ForeignKeyForm`), whose grids live in `table_structure/lists.rs`. Nothing the panel saves
+runs: it stages a `StructureChange`, whose statements are built at once so an unsupported
+change is refused when it is added. `table_structure/staging.rs` replays the pending list
+onto the loaded structure, and the lists show that replay with each row marked (added,
+modified, dropped), so a staged column can be indexed and every row action addresses a
+staged row. Editing a column that is still to be added replaces its addition. Undoing a
+change replays the rest and drops the ones that no longer fit, as a reload does. The bar at
+the bottom shows the pending statements and runs them as one
 `execute_operations_transactional` batch (`Dialect::rolls_back_ddl` says whether a failure
-rolls back), and the PROD confirmation lives on its Confirm button. A structure tab with
-pending changes counts as unsaved for closing tabs and windows (`TabType::unsaved_name`). SQLite cannot change a column's type, nullability or default in place, nor add or
-drop a foreign key, and reports `DdlError::Unsupported` instead of a lossy table rebuild. The
-foreign keys list reads `Connection::get_foreign_keys_for_table`; drivers return one catalog row
-per key column and fold them with `ForeignKeyConstraint::from_column_rows`.
-`test_column_and_index_ddl_round_trip` exercises the builders against every compose backend.
+rolls back). On a connection whose environment confirms writes, Apply opens a confirmation
+with the statements first. A structure tab with pending changes counts as unsaved for
+closing tabs and windows (`TabType::unsaved_name`).
+
+`ColumnOperation::Alter` carries the column before and after (`ColumnSpec`, comment
+included), and each backend emits only what changed, so a rename alone stays a rename
+where nothing else could be changed in place. MySQL changes a column only by restating it
+with `CHANGE COLUMN`, and its catalog's `DATA_TYPE` drops `unsigned`, enum labels and
+`AUTO_INCREMENT`, so its `table_info` reports each column's `COLUMN_TYPE` and attributes
+(`TableInfo::column_definitions`), the panel starts from those (`staging::column_spec`), and
+the builder repeats them. Generated MySQL columns are refused rather than restated without
+their expression. Comments are set apart from the definition elsewhere: `COMMENT ON` on
+PostgreSQL, CockroachDB and DuckDB, `COMMENT COLUMN` and `MODIFY COMMENT` on ClickHouse,
+the `MS_Description` extended property on SQL Server (one `IF EXISTS` statement picks
+add, update or drop). SQLite has no comments (`Dialect::supports_comments`).
+
+`IndexSpec` adds a method (`Dialect::index_methods`, ClickHouse's skipping index types), a
+partial index condition (`supports_partial_indexes`) and NULLS NOT DISTINCT, which needs
+PostgreSQL 15: the tab reads `Connection::server_version_num` and asks
+`Dialect::supports_nulls_not_distinct`. The Postgres index listing reads
+`indnullsnotdistinct` through `to_jsonb(pg_index)` so older servers answer NULL instead of
+failing. The type field suggests `Dialect::data_types()` (`dialect/data_types.rs`, plus the
+database's own types from `list_types`) through an `EditorState` completion provider,
+inserting a type that takes arguments as a `name($0)` snippet.
+
+The Table section reads `Connection::table_info` (comment, row estimate, sizes, creation
+and last modified time, backend options). A failure leaves it empty rather than failing the
+tab. The last modified time says what it is worth (`LastModified::note`): MySQL's InnoDB
+`UPDATE_TIME` and SQL Server's index usage statistics reset when the server restarts, and
+ClickHouse's is its newest data part. SQLite cannot change a column's type, nullability or
+default in place, nor add or drop a foreign key, and reports `DdlError::Unsupported` instead
+of a lossy table rebuild. The foreign keys list reads `Connection::get_foreign_keys_for_table`.
+Drivers return one catalog row per key column and fold them with
+`ForeignKeyConstraint::from_column_rows`. `test_column_and_index_ddl_round_trip` exercises
+the builders, comments, table information and NULLS NOT DISTINCT against every compose
+backend.
+
+The create statement section shows `Connection::table_ddl`, which also serves the MCP
+`get_table_ddl` tool. PostgreSQL builds it from the catalog: views as views, `INHERITS`
+with only the table's own columns (`attislocal`, `conislocal`), `PARTITION BY` and
+`PARTITION OF`, `WITH (...)`, then indexes, comments, triggers (`pg_get_triggerdef`) and
+grants (`aclexplode`, the owner and CockroachDB's `admin` and `root` left out). Routines get
+their `proacl` grants. MySQL and ClickHouse add grants from `TABLE_PRIVILEGES` and
+`system.grants`. A failing grants read is logged and leaves the grants out, so a user who
+may not read the privilege catalog still gets the statement.
+`test_table_ddl_includes_comments_partitions_triggers_and_grants` recreates the PostgreSQL
+objects from their DDL and compares.
+
+A new table is the same tab in its creating mode (`TableStructureTab::new_table`, opened by
+the `NewTable` action from the sidebar's connection, database, schema and Tables folder
+menus, which know a folder by `TreeItemMetadata::category`). Its pending changes are only
+additions, and editing an added column replaces its addition, so they read as one
+`ddl::NewTable` that `create_table_sql` turns into a single `CREATE TABLE` with the primary
+key (`ColumnSpec::primary_key`) and foreign keys inline, followed by indexes and column
+comments. Staging checks that statement instead of building alterations, which is how SQLite
+and DuckDB get the foreign keys they cannot add later. It starts from
+`Dialect::new_table_key`. Once created, the tab takes the table's name and shows it from the
+server.
+
+## Virtual foreign keys
+
+Foreign keys the user declares for views and tables without constraints live in the app
+database's `virtual_foreign_keys` table (`app_database::VirtualForeignKey`), keyed by
+connection, database, schema (empty when there is none) and table, and deleted with their
+connection by its foreign key. A temporary connection has no row there, so the structure
+tab offers no virtual keys on one. They are never sent to the server. The structure tab's
+foreign keys section lists them after the declared keys and edits them in
+`ForeignKeyForm`'s virtual mode, which saves at once. `virtual_keys::merge_into_columns`
+gives a table's columns the keys as `ColumnInfo::foreign_key` wherever the server declares
+none, which the query run does for `QueryResult::table_columns`, so the grid's foreign key
+popover and open referenced row follow them unchanged. The schema graph draws them as
+dashed edges (`GraphEdge::dashed`).
 
 ## Connection secrets
 

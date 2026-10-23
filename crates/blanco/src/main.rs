@@ -42,6 +42,7 @@ mod status_bar;
 mod test_harness;
 mod time_format;
 mod update_manager;
+mod virtual_keys;
 mod windows;
 
 use assets::Assets;

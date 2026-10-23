@@ -443,6 +443,52 @@ pub struct IndexInfo {
     pub column_names: Vec<String>,
     pub condition: Option<String>,
     pub comment: Option<String>,
+    /// A unique index that counts NULLs as equal (PostgreSQL 15 and later).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub nulls_not_distinct: bool,
+}
+
+/// What the structure tab shows about a table as a whole, as far as the
+/// backend records it. Every field is optional because no backend keeps
+/// them all.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
+pub struct TableInfo {
+    pub comment: Option<String>,
+    /// The catalog's or planner's estimate, not a count.
+    pub estimated_rows: Option<u64>,
+    pub data_bytes: Option<u64>,
+    pub index_bytes: Option<u64>,
+    /// When the table was created, as the server prints the time.
+    pub created: Option<String>,
+    pub last_modified: Option<LastModified>,
+    /// Backend specific settings shown as they are: engine, collation, the
+    /// next auto increment value.
+    pub options: Vec<(String, String)>,
+    /// What a statement restating a column must repeat, where the backend
+    /// changes a column only by restating it (MySQL's CHANGE COLUMN). Empty
+    /// elsewhere.
+    pub column_definitions: Vec<ColumnDefinition>,
+}
+
+/// A column's full type and the attributes beside it, as MySQL reports
+/// them (`int(10) unsigned`, `auto_increment`).
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct ColumnDefinition {
+    pub name: String,
+    pub column_type: String,
+    /// Clauses after the default: `auto_increment`, `on update
+    /// current_timestamp()`, `INVISIBLE`.
+    pub attributes: Option<String>,
+    /// A generated column, whose definition carries an expression.
+    pub generated: bool,
+}
+
+/// When a table's data last changed, with what the time is worth: the
+/// servers that keep it lose it on a restart.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct LastModified {
+    pub at: String,
+    pub note: String,
 }
 
 /// Information about a database column
@@ -861,6 +907,24 @@ pub trait Connection: Send + Sync {
         Err(anyhow::anyhow!(
             "object_ddl is not supported by this connection type"
         ))
+    }
+
+    /// Return what the backend records about a table as a whole: comment,
+    /// size, row estimate, times and storage options. Defaults to nothing
+    /// known.
+    async fn table_info(
+        &self,
+        _schema: Option<&str>,
+        _table_name: &str,
+    ) -> Result<TableInfo, anyhow::Error> {
+        Ok(TableInfo::default())
+    }
+
+    /// The server's version as one number where features depend on it:
+    /// PostgreSQL's `server_version_num` (`150004` for 15.4). `None` where
+    /// nothing asks for it.
+    async fn server_version_num(&self) -> Result<Option<u32>, anyhow::Error> {
+        Ok(None)
     }
 
     /// Return the reconstructed `CREATE TABLE` statement (including indexes and

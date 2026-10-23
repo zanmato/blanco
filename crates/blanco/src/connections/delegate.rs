@@ -15,7 +15,7 @@ use gpui_component::{
 use crate::app::CreateNewQueryTab;
 use crate::app::OpenTableStructure;
 use crate::app::{BackupDatabase, OpenSqlFile, RestoreDatabase, RunSqlFile};
-use crate::app::{OpenProcessList, OpenSchemaGraph};
+use crate::app::{NewTable, OpenProcessList, OpenSchemaGraph};
 use crate::connections::{
     ChildTables, ConnectionsPanel, CreateNewQueryTabParams, TreeItemIcon, TreeItemKind,
     TreeItemMetadata,
@@ -43,6 +43,32 @@ impl ConnectionsTreeDelegate {
                 window.dispatch_action(Box::new(action.clone()), cx);
             },
         ))
+    }
+
+    /// "New Table…", which designs a table in the node's database and schema.
+    /// `None` where the backend has no tables to create.
+    fn new_table_item(
+        &self,
+        metadata: &TreeItemMetadata,
+        window: &mut Window,
+    ) -> Option<PopupMenuItem> {
+        if !metadata.db_type.dialect().supports_column_ddl() {
+            return None;
+        }
+        let context = metadata.create_new_script_tab_action().context;
+        Some(
+            PopupMenuItem::new("New Table…").on_click(window.listener_for(
+                &self.parent,
+                move |_this, _event, window, cx| {
+                    window.dispatch_action(
+                        Box::new(NewTable {
+                            context: context.clone(),
+                        }),
+                        cx,
+                    );
+                },
+            )),
+        )
     }
 
     /// "Open SQL File…" and "Run SQL File…" on a database of a SQL backend.
@@ -458,6 +484,14 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                             },
                         )),
                     );
+                // A connection with no database level holds its tables.
+                let menu = match (!metadata.db_type.dialect().lists_server_databases())
+                    .then(|| self.new_table_item(metadata, window))
+                    .flatten()
+                {
+                    Some(item) => menu.separator().item(item),
+                    None => menu,
+                };
                 // The server-wide process list runs on the connection's
                 // configured database.
                 let menu = if metadata.db_type.dialect().supports_process_list() {
@@ -549,6 +583,9 @@ impl TreeDelegate for ConnectionsTreeDelegate {
 
                 let connection_name_for_graph = connection_name.clone();
                 let database_name_for_graph = database_name.clone();
+                if let Some(item) = self.new_table_item(metadata, window) {
+                    menu = menu.item(item);
+                }
                 menu = menu.item(PopupMenuItem::new("View Schema Graph").on_click(
                     window.listener_for(&self.parent, move |_this, _event, window, cx| {
                         window.dispatch_action(
@@ -628,6 +665,11 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                         )),
                     )
                     .item(self.new_script_item(metadata, window))
+                } else if metadata.category == Some(super::data_loading::DatabaseItemType::Table) {
+                    match self.new_table_item(metadata, window) {
+                        Some(item) => menu.item(item),
+                        None => menu,
+                    }
                 } else {
                     menu
                 }
@@ -789,19 +831,20 @@ impl TreeDelegate for ConnectionsTreeDelegate {
 
                     if matches!(metadata.kind, TreeItemKind::Schema) {
                         let context_for_graph = context;
-                        menu = menu.separator().item(
-                            PopupMenuItem::new("View Schema Graph").on_click(window.listener_for(
-                                &self.parent,
-                                move |_this, _event, window, cx| {
-                                    window.dispatch_action(
-                                        Box::new(OpenSchemaGraph {
-                                            context: context_for_graph.clone(),
-                                        }),
-                                        cx,
-                                    );
-                                },
-                            )),
-                        );
+                        menu = menu.separator();
+                        if let Some(item) = self.new_table_item(metadata, window) {
+                            menu = menu.item(item);
+                        }
+                        menu = menu.item(PopupMenuItem::new("View Schema Graph").on_click(
+                            window.listener_for(&self.parent, move |_this, _event, window, cx| {
+                                window.dispatch_action(
+                                    Box::new(OpenSchemaGraph {
+                                        context: context_for_graph.clone(),
+                                    }),
+                                    cx,
+                                );
+                            }),
+                        ));
                     }
 
                     menu

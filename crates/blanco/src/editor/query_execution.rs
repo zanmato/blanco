@@ -632,6 +632,8 @@ impl EditorPanel {
             let history_database_name = database_name.clone();
             let history_max_items =
                 AppSettings::global(cx).settings.database.max_history_items as i64;
+            let virtual_keys_db = history_db.clone();
+            let tab_schema_name = query_tab.context.schema_name.clone();
 
             self._run_query_task = cx.spawn_in(window, async move |editor_panel_entity, window| {
                 let activity = activity;
@@ -734,10 +736,24 @@ impl EditorPanel {
                             if let Some(table_name) = &table_name {
                                 let (schema, table) =
                                     db_type.dialect().split_table_path(table_name);
-                                if let Ok(columns) = connection
+                                if let Ok(mut columns) = connection
                                     .get_columns_for_table(&table, schema.as_deref())
                                     .await
                                 {
+                                    // An unqualified table is the tab's schema's,
+                                    // which is where its virtual keys are kept.
+                                    let keys = crate::virtual_keys::load(
+                                        &virtual_keys_db,
+                                        connection_id,
+                                        &database_name,
+                                        schema.as_deref().or(tab_schema_name.as_deref()),
+                                    )
+                                    .await;
+                                    crate::virtual_keys::merge_into_columns(
+                                        &mut columns,
+                                        &table,
+                                        &keys,
+                                    );
                                     result.table_columns = Some(columns);
                                 }
                             }

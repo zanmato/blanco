@@ -72,15 +72,9 @@ impl SqliteConnectionKey {
 impl SqliteConnection {
     /// Map SQLite type name to ColumnType enum
     fn map_sqlite_type(type_name: &str) -> ColumnType {
-        match type_name.to_lowercase().as_str() {
-            "integer" | "int" => ColumnType::Integer,
-            "real" | "float" | "double" | "numeric" | "decimal" => ColumnType::Numeric,
-            "text" | "varchar" => ColumnType::Text,
-            "boolean" => ColumnType::Boolean,
-            "date" | "datetime" => ColumnType::DateTime,
-            "blob" => ColumnType::Binary,
-            _ => ColumnType::Unknown,
-        }
+        blanco_core::DatabaseType::SQLite
+            .dialect()
+            .column_type(type_name)
     }
 
     /// Create a new SQLite connection

@@ -9,7 +9,8 @@ tables and how their foreign keys connect them.
 </figure>
 
 Each table lists its columns and types, with primary and foreign keys marked.
-Lines run from a foreign key column to the column it references. By default
+Lines run from a foreign key column to the column it references. Dashed lines
+are [virtual foreign keys](structure.md#virtual-foreign-keys). By default
 only the lines of the selected table are drawn. Switch to show all of them.
 
 Drag the background to move around and drag a table to move it.

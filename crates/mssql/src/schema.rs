@@ -110,6 +110,58 @@ WHERE ep.class = 1
     )
 }
 
+/// `s.name = N'schema'`, or the session's default schema when none is given.
+fn schema_condition(column: &str, schema: Option<&str>) -> String {
+    match schema.filter(|schema| !schema.is_empty()) {
+        Some(schema) => format!("{column} = N'{}'", schema.replace('\'', "''")),
+        None => format!("{column} = SCHEMA_NAME()"),
+    }
+}
+
+/// One row describing `table_name`: comment, row count, data and index
+/// bytes, and creation time.
+pub fn table_info_sql(table_name: &str, schema: Option<&str>) -> String {
+    format!(
+        r#"
+SELECT
+    CAST(ep.value AS nvarchar(4000)),
+    CAST((SELECT SUM(p.rows) FROM sys.partitions p
+          WHERE p.object_id = t.object_id AND p.index_id IN (0, 1)) AS varchar(30)),
+    CAST((SELECT SUM(a.used_pages) * 8192 FROM sys.partitions p
+          JOIN sys.allocation_units a ON a.container_id = p.partition_id
+          WHERE p.object_id = t.object_id AND p.index_id IN (0, 1)) AS varchar(30)),
+    CAST((SELECT SUM(a.used_pages) * 8192 FROM sys.partitions p
+          JOIN sys.allocation_units a ON a.container_id = p.partition_id
+          WHERE p.object_id = t.object_id AND p.index_id > 1) AS varchar(30)),
+    CONVERT(varchar(19), t.create_date, 120)
+FROM sys.tables t
+JOIN sys.schemas s ON s.schema_id = t.schema_id
+LEFT JOIN sys.extended_properties ep
+    ON ep.class = 1 AND ep.major_id = t.object_id AND ep.minor_id = 0
+    AND ep.name = 'MS_Description'
+WHERE t.name = N'{table}' AND {schema_condition}
+"#,
+        table = table_name.replace('\'', "''"),
+        schema_condition = schema_condition("s.name", schema),
+    )
+}
+
+/// The last time a statement wrote to `table_name` since the server
+/// started, from the index usage statistics.
+pub fn table_last_update_sql(table_name: &str, schema: Option<&str>) -> String {
+    format!(
+        r#"
+SELECT CONVERT(varchar(19), MAX(u.last_user_update), 120)
+FROM sys.dm_db_index_usage_stats u
+JOIN sys.tables t ON t.object_id = u.object_id
+JOIN sys.schemas s ON s.schema_id = t.schema_id
+WHERE u.database_id = DB_ID() AND t.name = N'{table}' AND {schema_condition}
+"#,
+        table = table_name.replace('\'', "''"),
+        schema_condition = schema_condition("s.name", schema),
+    )
+}
+
 pub fn indexes_for_table_sql(table_name: &str, schema: Option<&str>) -> String {
     let schema_filter = match schema {
         Some(s) => format!("AND s.name = '{}'", s.replace('\'', "''")),
@@ -121,7 +173,8 @@ SELECT
     i.name,
     i.type_desc,
     CASE WHEN i.is_unique = 1 THEN '1' ELSE '0' END,
-    STRING_AGG(c.name, ',') WITHIN GROUP (ORDER BY ic.key_ordinal)
+    STRING_AGG(c.name, ',') WITHIN GROUP (ORDER BY ic.key_ordinal),
+    CAST(i.filter_definition AS nvarchar(4000))
 FROM sys.indexes i
 JOIN sys.tables t ON t.object_id = i.object_id
 JOIN sys.schemas s ON s.schema_id = t.schema_id
@@ -129,7 +182,7 @@ JOIN sys.index_columns ic ON ic.object_id = i.object_id AND ic.index_id = i.inde
 JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
 WHERE t.name = '{table}'
 {schema_filter}
-GROUP BY i.name, i.type_desc, i.is_unique
+GROUP BY i.name, i.type_desc, i.is_unique, CAST(i.filter_definition AS nvarchar(4000))
 ORDER BY i.name
 "#,
         table = table_name.replace('\'', "''"),

@@ -340,6 +340,13 @@ pub struct OpenSchemaGraph {
     pub context: ConnectionContext,
 }
 
+/// Design a new table in the database and schema of `context`.
+#[derive(Action, Clone, PartialEq, Eq)]
+#[action(namespace = blanco_app, no_json)]
+pub struct NewTable {
+    pub context: ConnectionContext,
+}
+
 /// Open the sessions and running queries of the server behind `context`.
 #[derive(Action, Clone, PartialEq, Eq)]
 #[action(namespace = blanco_app, no_json)]
@@ -2222,6 +2229,15 @@ impl BlancoApp {
         cx.notify();
     }
 
+    fn on_new_table(&mut self, action: &NewTable, window: &mut Window, cx: &mut Context<Self>) {
+        let tab = self.editor_panel.update(cx, |panel, cx| {
+            panel.create_new_table_tab(action.context.clone(), window, cx)
+        });
+        // Loads the connection's flags and types for the type suggestions.
+        tab.update(cx, |tab, cx| tab.reload(window, cx));
+        cx.notify();
+    }
+
     fn on_refresh_connection_tree(
         &mut self,
         action: &RefreshConnectionTree,
@@ -2342,6 +2358,7 @@ impl BlancoApp {
         });
 
         let db_service = database::DatabaseService::global(cx).clone();
+        let app_database = AppDatabase::global(cx).clone();
         let connection_id = action.context.connection_id;
         let database_name = action.context.database_name.clone();
         let schema_name = action.context.schema_name.clone();
@@ -2351,6 +2368,13 @@ impl BlancoApp {
             let connection_result = db_service
                 .get_or_create_connection_by_id(connection_id, Some(&database_name))
                 .await;
+            let virtual_keys = crate::virtual_keys::load(
+                &app_database,
+                connection_id,
+                &database_name,
+                schema_name.as_deref(),
+            )
+            .await;
 
             match connection_result {
                 Ok(connection) => {
@@ -2380,7 +2404,12 @@ impl BlancoApp {
                         .update(|window, cx| {
                             if let Some(tab) = weak_tab.upgrade() {
                                 tab.update(cx, |tab, cx| {
-                                    tab.update_with_schema(all_table_info, window, cx);
+                                    tab.update_with_schema(
+                                        all_table_info,
+                                        &virtual_keys,
+                                        window,
+                                        cx,
+                                    );
                                 });
                             }
                         })
@@ -2989,6 +3018,7 @@ impl Render for BlancoApp {
             .on_action(cx.listener(Self::on_open_table_structure))
             .on_action(cx.listener(Self::on_open_object_ddl))
             .on_action(cx.listener(Self::on_open_schema_graph))
+            .on_action(cx.listener(Self::on_new_table))
             .on_action(cx.listener(Self::on_open_process_list))
             .on_action(cx.listener(Self::on_backup_database))
             .on_action(cx.listener(Self::on_restore_database))
@@ -3367,6 +3397,34 @@ mod tests {
         app.read_with(&cx, |app, _| {
             assert!(!app.sidebar_collapsed());
             assert_eq!(app.sidebar_tab(), SidebarTab::Snippets);
+        });
+    }
+
+    #[gpui::test]
+    async fn test_new_table_opens_a_structure_tab_creating_a_table(cx: &mut TestAppContext) {
+        let harness = FullAppHarness::new(cx);
+        let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+        let editor_panel = harness.editor_panel(&cx);
+        let app = harness.app;
+        let context = editor_panel.read_with(&cx, |panel, cx| {
+            panel
+                .active_context(cx)
+                .expect("the harness tab has a context")
+        });
+
+        cx.update(|window, cx| {
+            let handle = app.read(cx).focus_handle(cx);
+            window.focus(&handle, cx);
+            window.dispatch_action(Box::new(NewTable { context }), cx);
+        });
+        cx.run_until_parked();
+
+        let tab = editor_panel
+            .read_with(&cx, |panel, _| panel.active_structure_tab())
+            .expect("a structure tab should be active");
+        tab.read_with(&cx, |tab, _| {
+            assert!(tab.is_creating());
+            assert_eq!(tab.title, "New table");
         });
     }
 

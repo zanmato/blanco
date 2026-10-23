@@ -232,68 +232,9 @@ impl ClickhouseConnection {
     }
 
     fn map_clickhouse_type(type_name: &str) -> ColumnType {
-        let inner = Self::unwrap_type_wrappers(type_name);
-        let lower = inner.to_lowercase();
-
-        if lower.starts_with("uint") {
-            ColumnType::UnsignedInteger
-        } else if lower.starts_with("int")
-            || lower == "bigint"
-            || lower == "smallint"
-            || lower == "tinyint"
-            || lower == "mediumint"
-            || lower == "serial"
-            || lower == "bigserial"
-        {
-            ColumnType::Integer
-        } else if lower.starts_with("float")
-            || lower.starts_with("double")
-            || lower == "real"
-            || lower.starts_with("decimal")
-            || lower.starts_with("numeric")
-            || lower == "money"
-        {
-            ColumnType::Numeric
-        } else if lower == "bool" || lower == "boolean" {
-            ColumnType::Boolean
-        } else if lower.starts_with("date")
-            || lower.starts_with("datetime")
-            || lower == "time"
-            || lower == "timestamp"
-        {
-            ColumnType::DateTime
-        } else if lower == "uuid" {
-            ColumnType::Uuid
-        } else if lower == "json" || lower.starts_with("object") {
-            ColumnType::Json
-        } else if lower.starts_with("array") {
-            ColumnType::Array
-        } else if lower.starts_with("string")
-            || lower.starts_with("fixedstring")
-            || lower.starts_with("enum")
-            || lower.starts_with("lowcardinality")
-            || lower == "name"
-            || lower == "nullable"
-        {
-            ColumnType::Text
-        } else {
-            ColumnType::Unknown
-        }
-    }
-
-    fn unwrap_type_wrappers(type_name: &str) -> &str {
-        let s = type_name.trim();
-        if let Some(inner) = s.strip_prefix("Nullable(")
-            && let Some(inner) = inner.strip_suffix(')')
-        {
-            return Self::unwrap_type_wrappers(inner);
-        }
-        if let Some(inner) = s.strip_prefix("LowCardinality(")
-            && let Some(inner) = inner.strip_suffix(')')
-        {
-            return Self::unwrap_type_wrappers(inner);
-        }
-        s
+        blanco_core::DatabaseType::ClickHouse
+            .dialect()
+            .column_type(type_name)
     }
 }
 

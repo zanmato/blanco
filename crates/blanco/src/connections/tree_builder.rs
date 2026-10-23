@@ -46,6 +46,7 @@ impl ConnectionsPanel {
             relative_size: size_bytes.and_then(|size| self.relative_connection_size(size)),
             comment: None,
             child_tables: None,
+            category: None,
         };
 
         let label = if connection.is_temporary() {
@@ -99,6 +100,7 @@ impl ConnectionsPanel {
                         relative_size: database.relative_size,
                         comment: None,
                         child_tables: None,
+                        category: None,
                     };
 
                     let schema_items: Vec<TreeItem<TreeItemMetadata>> = database
@@ -128,6 +130,7 @@ impl ConnectionsPanel {
                                 relative_size: None,
                                 comment: None,
                                 child_tables: None,
+                                category: None,
                             };
 
                             let category_items: Vec<TreeItem<TreeItemMetadata>> = if schema
@@ -299,6 +302,7 @@ impl ConnectionsPanel {
                     relative_size: None,
                     comment: None,
                     child_tables: None,
+                    category: Some(item_type),
                 };
 
                 // Backends that namespace object names with a separator (e.g.
@@ -390,6 +394,7 @@ fn build_object_item(
         relative_size: table.relative_size,
         comment: table.comment.clone(),
         child_tables: None,
+        category: None,
     };
 
     (
@@ -675,6 +680,7 @@ mod tests {
             relative_size: None,
             comment: None,
             child_tables: None,
+            category: None,
         };
         (
             item_type,
