@@ -44,6 +44,13 @@ it.
 
 JSON cells open in an editor with **Format** and **Minify**.
 
+PostGIS `geometry` and `geography` values show as WKT, and a point as its
+coordinates (`18.07, 59.33`). Expanding one shows its full text with the SRID
+(`SRID=4326;POINT(18.07 59.33)`) and its GeoJSON underneath, with a copy
+button. An edit takes WKT, EWKT or hex and is checked before it is sent. WKT
+typed without an SRID keeps the SRID of the value it replaces. Text filters
+such as **contains** match a geometry's WKT. Curves and surfaces stay hex.
+
 With **Defer Values Larger Than (KB)** set in Settings, a `SELECT *` on a table loads a
 preview of large text and binary values and fetches the rest when you open,
 copy or export them.

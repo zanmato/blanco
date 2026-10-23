@@ -168,7 +168,11 @@ pub fn ewkb_to_ewkt(bytes: &[u8]) -> Option<String> {
 
 /// Decode EWKB (or ISO WKB). The whole input must be one geometry.
 pub fn from_ewkb(bytes: &[u8]) -> Option<Geometry> {
-    let mut reader = WkbReader { bytes, offset: 0 };
+    let mut reader = WkbReader {
+        bytes,
+        offset: 0,
+        depth: 0,
+    };
     let (srid, dimensions, shape) = reader.geometry()?;
     (reader.offset == bytes.len()).then_some(Geometry {
         srid: srid.filter(|srid| *srid != 0),
@@ -187,6 +191,7 @@ pub fn parse_ewkt(text: &str) -> Result<Geometry, String> {
         coordinate_count: None,
         declared: None,
         end: wkt.chars().count(),
+        depth: 0,
     };
     let shape = parser.geometry()?;
     if let Some((_, position)) = parser.tokens.get(parser.index) {
@@ -480,9 +485,17 @@ fn shape_geojson(shape: &Shape, dimensions: Dimensions) -> Value {
     Value::Object(object)
 }
 
+/// How deep collections may nest. Readers recurse into each member, so
+/// without a limit a value nested a few hundred thousand times over, which
+/// takes only a few megabytes, would overflow the stack. Real data nests a
+/// level or two.
+const MAX_NESTING: usize = 64;
+
 struct WkbReader<'a> {
     bytes: &'a [u8],
     offset: usize,
+    /// How many collections the reader is inside, see [`MAX_NESTING`].
+    depth: usize,
 }
 
 impl WkbReader<'_> {
@@ -543,9 +556,15 @@ impl WkbReader<'_> {
     fn members(&mut self, little_endian: bool) -> Option<Vec<Shape>> {
         // A member is at least a byte order and a type.
         let count = self.count(little_endian, 5)?;
-        (0..count)
+        self.depth += 1;
+        if self.depth > MAX_NESTING {
+            return None;
+        }
+        let members = (0..count)
             .map(|_| self.geometry().map(|(_, _, shape)| shape))
-            .collect()
+            .collect();
+        self.depth -= 1;
+        members
     }
 
     fn geometry(&mut self) -> Option<(Option<u32>, Dimensions, Shape)> {
@@ -727,6 +746,8 @@ struct WktParser {
     declared: Option<Dimensions>,
     /// Character count of the input, for errors at its end.
     end: usize,
+    /// How many collections the parser is inside, see [`MAX_NESTING`].
+    depth: usize,
 }
 
 impl WktParser {
@@ -912,7 +933,18 @@ impl WktParser {
             ShapeName::MultiPoint => Shape::MultiPoint(self.list(Self::member_point)?),
             ShapeName::MultiLineString => Shape::MultiLineString(self.list(Self::positions)?),
             ShapeName::MultiPolygon => Shape::MultiPolygon(self.list(Self::rings)?),
-            ShapeName::GeometryCollection => Shape::GeometryCollection(self.list(Self::geometry)?),
+            ShapeName::GeometryCollection => {
+                self.depth += 1;
+                if self.depth > MAX_NESTING {
+                    return Err(format!(
+                        "collections nest more than {MAX_NESTING} deep at character {}",
+                        self.position()
+                    ));
+                }
+                let members = self.list(Self::geometry)?;
+                self.depth -= 1;
+                Shape::GeometryCollection(members)
+            }
         };
         Ok(shape)
     }
@@ -1126,5 +1158,31 @@ mod tests {
             geojson("POINT EMPTY"),
             Ok(json!({"type": "Point", "coordinates": []}))
         );
+    }
+
+    #[test]
+    fn deep_nesting_is_refused_rather_than_overflowing_the_stack() {
+        let depth = 100_000;
+        let wkt = format!(
+            "{}POINT(1 2){}",
+            "GEOMETRYCOLLECTION(".repeat(depth),
+            ")".repeat(depth)
+        );
+        let error = parse_ewkt(&wkt).expect_err("too deep");
+        assert!(error.contains("nest more than"), "{error}");
+
+        // The same in EWKB: each level a little endian collection of one.
+        let mut ewkb = Vec::new();
+        for _ in 0..depth {
+            ewkb.extend_from_slice(&[1, 7, 0, 0, 0, 1, 0, 0, 0]);
+        }
+        ewkb.extend_from_slice(&[1, 1, 0, 0, 0]);
+        ewkb.extend_from_slice(&1f64.to_le_bytes());
+        ewkb.extend_from_slice(&2f64.to_le_bytes());
+        assert!(from_ewkb(&ewkb).is_none());
+
+        // A few levels, as real data has, still read.
+        let nested = "GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(POINT(1 2)))";
+        assert_eq!(parse_ewkt(nested).expect("nested").to_wkt(), nested);
     }
 }
