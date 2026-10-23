@@ -7,6 +7,6 @@ pub mod statement_parser;
 pub use statement_parser::{
     CompletionContext, ParameterStyle, QueryParameter, StatementInfo, contains_node_kind,
     extract_command_at_cursor, extract_completion_context, extract_statement_info,
-    extract_statement_info_with_styles, highlights_query, ident_eq, language,
+    extract_statement_info_with_styles, highlights_query, ident_eq, keyword_ranges, language,
     strip_identifier_quotes,
 };

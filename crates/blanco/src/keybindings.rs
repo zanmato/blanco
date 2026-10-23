@@ -1,10 +1,10 @@
 use crate::app::{
     ActivateNextTab, ActivatePreviousTab, CancelQuery, CloseActiveTab, CloseWindow, CommitChanges,
     CopySelection, DecreaseEditorFontSize, ExplainAnalyzeQuery, ExplainQuery, ExportTableData,
-    FormatQuery, ImportTableData, IncreaseEditorFontSize, NewQueryTab, NewWindow,
-    OpenReferencedRow, OpenSettings, OpenTerminal, RefreshConnections, ReopenClosedTab,
+    FormatQuery, ImportTableData, IncreaseEditorFontSize, LowerCaseKeywords, NewQueryTab,
+    NewWindow, OpenReferencedRow, OpenSettings, OpenTerminal, RefreshConnections, ReopenClosedTab,
     ResetEditorFontSize, RollbackChanges, RunQuery, SaveTab, SaveTabAs, ToggleCommandPalette,
-    ToggleFilterBar, ToggleResults, ToggleSidebar,
+    ToggleFilterBar, ToggleResults, ToggleSidebar, UpperCaseKeywords,
 };
 use crate::settings::Settings;
 
@@ -72,6 +72,20 @@ pub const CUSTOMIZABLE_BINDINGS: &[BindingDef] = &[
         label: "Format SQL",
         group: "Query",
         default: "shift-alt-f",
+        context: None,
+    },
+    BindingDef {
+        action: "UpperCaseKeywords",
+        label: "Upper case keywords",
+        group: "Query",
+        default: "shift-alt-u",
+        context: None,
+    },
+    BindingDef {
+        action: "LowerCaseKeywords",
+        label: "Lower case keywords",
+        group: "Query",
+        default: "shift-alt-l",
         context: None,
     },
     BindingDef {
@@ -335,6 +349,8 @@ fn key_binding(action: &str, keystrokes: &str, context: Option<&str>) -> Option<
         "ExplainQuery" => gpui::KeyBinding::new(keystrokes, ExplainQuery, context),
         "ExplainAnalyzeQuery" => gpui::KeyBinding::new(keystrokes, ExplainAnalyzeQuery, context),
         "FormatQuery" => gpui::KeyBinding::new(keystrokes, FormatQuery, context),
+        "UpperCaseKeywords" => gpui::KeyBinding::new(keystrokes, UpperCaseKeywords, context),
+        "LowerCaseKeywords" => gpui::KeyBinding::new(keystrokes, LowerCaseKeywords, context),
         "ToggleCommandPalette" => gpui::KeyBinding::new(keystrokes, ToggleCommandPalette, context),
         "ToggleFilterBar" => gpui::KeyBinding::new(keystrokes, ToggleFilterBar, context),
         "NewWindow" => gpui::KeyBinding::new(keystrokes, NewWindow, context),

@@ -21,12 +21,12 @@ use crate::{
         CopyAsCSV, CopyAsHTML, CopyAsJSON, CopyAsMarkdown, CopyAsSQL, CopyAsTSV, CreateNewQueryTab,
         CreateNewScriptTab, ExplainAnalyzeQuery, ExplainQuery, ExportAsCSV, ExportAsHTML,
         ExportAsJSON, ExportAsMarkdown, ExportAsSQL, ExportAsTSV, ExportConnections,
-        ExportTableData, FormatQuery, ImportConnections, ImportTableData, MoveTabToNewWindow,
-        NewDuckdbDatabase, NewQueryTab, NewSnippet, NewSqliteDatabase, NewWindow, OpenDatabaseFile,
-        OpenNewConnectionModal, OpenProcessList, OpenSettings, OpenSqlFile, OpenTerminal,
-        RefreshConnections, ReopenClosedTab, RestoreDatabase, RollbackChanges, RunQuery,
-        RunSqlFile, SaveTab, SaveTabAs, SwitchTheme, ToggleFilterBar, ToggleRenderWhitespace,
-        ToggleResults, ToggleSidebar, ToggleWordWrap,
+        ExportTableData, FormatQuery, ImportConnections, ImportTableData, LowerCaseKeywords,
+        MoveTabToNewWindow, NewDuckdbDatabase, NewQueryTab, NewSnippet, NewSqliteDatabase,
+        NewWindow, OpenDatabaseFile, OpenNewConnectionModal, OpenProcessList, OpenSettings,
+        OpenSqlFile, OpenTerminal, RefreshConnections, ReopenClosedTab, RestoreDatabase,
+        RollbackChanges, RunQuery, RunSqlFile, SaveTab, SaveTabAs, SwitchTheme, ToggleFilterBar,
+        ToggleRenderWhitespace, ToggleResults, ToggleSidebar, ToggleWordWrap, UpperCaseKeywords,
     },
     connections::ConnectionsPanel,
     editor::EditorPanel,
@@ -106,6 +106,8 @@ pub enum CommandType {
     ExplainQuery,
     ExplainAnalyzeQuery,
     FormatQuery,
+    UpperCaseKeywords,
+    LowerCaseKeywords,
     ToggleFilterBar,
     SaveTab,
     SaveTabAs,
@@ -766,6 +768,8 @@ fn keybinding_for_command(cmd: &CommandType, window: &Window) -> Option<gpui_com
     use gpui_component::kbd::Kbd;
     let action: Box<dyn gpui::Action> = match cmd {
         CommandType::FormatQuery => Box::new(FormatQuery),
+        CommandType::UpperCaseKeywords => Box::new(UpperCaseKeywords),
+        CommandType::LowerCaseKeywords => Box::new(LowerCaseKeywords),
         CommandType::ToggleFilterBar => Box::new(ToggleFilterBar),
         CommandType::SaveTab => Box::new(SaveTab),
         CommandType::SaveTabAs => Box::new(SaveTabAs),
@@ -798,6 +802,8 @@ fn execute_command(cmd: &CommandType, window: &mut Window, cx: &mut App) {
             window.dispatch_action(Box::new(ExplainAnalyzeQuery), cx)
         }
         CommandType::FormatQuery => window.dispatch_action(Box::new(FormatQuery), cx),
+        CommandType::UpperCaseKeywords => window.dispatch_action(Box::new(UpperCaseKeywords), cx),
+        CommandType::LowerCaseKeywords => window.dispatch_action(Box::new(LowerCaseKeywords), cx),
         CommandType::ToggleFilterBar => window.dispatch_action(Box::new(ToggleFilterBar), cx),
         CommandType::SaveTab => window.dispatch_action(Box::new(SaveTab), cx),
         CommandType::SaveTabAs => window.dispatch_action(Box::new(SaveTabAs), cx),
@@ -1333,6 +1339,33 @@ fn build_commands(
         leaf("Reopen Closed Tab", "Tab", CommandType::ReopenClosedTab),
     ];
 
+    // Keyword case reads the grammar of an SQL editor tab, so Redis tabs and
+    // tabs without an editor do without it.
+    if editor_panel
+        .upgrade()
+        .is_some_and(|panel| panel.read(cx).active_tab_edits_sql())
+    {
+        let after_format = commands
+            .iter()
+            .position(|command| matches!(command.kind, ItemKind::Command(CommandType::FormatQuery)))
+            .map_or(commands.len(), |ix| ix + 1);
+        commands.splice(
+            after_format..after_format,
+            [
+                leaf(
+                    "Upper Case Keywords",
+                    "Query",
+                    CommandType::UpperCaseKeywords,
+                ),
+                leaf(
+                    "Lower Case Keywords",
+                    "Query",
+                    CommandType::LowerCaseKeywords,
+                ),
+            ],
+        );
+    }
+
     add_tab_commands(&mut commands, editor_panel, cx);
     add_theme_commands(&mut commands, cx);
     add_connection_commands(&mut commands, sidebar, cx);
@@ -1686,6 +1719,31 @@ mod visual_tests {
             !labels.iter().any(|l| l == "Run Query"),
             "non-matching commands should be filtered out, got {labels:?}"
         );
+    }
+
+    /// The keyword case commands are offered on SQL editor tabs only.
+    #[gpui::test]
+    async fn keyword_case_commands_need_an_sql_tab(cx: &mut TestAppContext) {
+        for (db_type, offered) in [
+            (database::DatabaseType::SQLite, true),
+            (database::DatabaseType::Redis, false),
+        ] {
+            let harness = crate::test_harness::TestHarness::new_with_db_type(cx, db_type);
+            let editor_panel = harness.editor_panel.downgrade();
+            let labels: Vec<String> = cx.update(|cx| {
+                super::build_commands(&gpui::WeakEntity::new_invalid(), &editor_panel, cx)
+                    .into_iter()
+                    .map(|command| command.label)
+                    .collect()
+            });
+            for label in ["Upper Case Keywords", "Lower Case Keywords"] {
+                assert_eq!(
+                    labels.iter().any(|existing| existing == label),
+                    offered,
+                    "{db_type:?}: {label}"
+                );
+            }
+        }
     }
 
     #[gpui::test]

@@ -14,6 +14,8 @@ one there too.
 | Explain analyze query | <kbd>Ctrl+Shift+E</kbd> | <kbd>Cmd+Shift+E</kbd> |
 | Cancel running query | <kbd>Ctrl+.</kbd> | <kbd>Cmd+.</kbd> |
 | Format SQL | <kbd>Shift+Alt+F</kbd> | <kbd>Shift+Option+F</kbd> |
+| Upper case keywords | <kbd>Shift+Alt+U</kbd> | <kbd>Shift+Option+U</kbd> |
+| Lower case keywords | <kbd>Shift+Alt+L</kbd> | <kbd>Shift+Option+L</kbd> |
 
 ## File
 

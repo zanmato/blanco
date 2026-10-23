@@ -451,6 +451,42 @@ pub fn contains_node_kind(grammar: SqlGrammar, sql: &str, kinds: &[&str]) -> Opt
     })
 }
 
+/// Byte ranges of the keyword tokens of `sql` that lie within `within`, in
+/// order. The grammar names every keyword, type name and keyword literal
+/// (`NULL`, `TRUE`) `keyword_*`, and nothing else, so string literals,
+/// identifiers quoted or not, function names and comments are left out. A
+/// statement still being typed parses with errors, and its keywords are
+/// found inside them too. `None` when the grammar's parser is unavailable.
+pub fn keyword_ranges(
+    grammar: SqlGrammar,
+    sql: &str,
+    within: Range<usize>,
+) -> Option<Vec<Range<usize>>> {
+    fn walk(node: Node, within: &Range<usize>, ranges: &mut Vec<Range<usize>>) {
+        let range = node.byte_range();
+        if range.end <= within.start || range.start >= within.end {
+            return;
+        }
+        if node.kind().starts_with("keyword_") {
+            if range.start >= within.start && range.end <= within.end {
+                ranges.push(range);
+            }
+            return;
+        }
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            walk(child, within, ranges);
+        }
+    }
+
+    with_parser(grammar, |parser| {
+        let tree = parser.parser.parse(sql, None)?;
+        let mut ranges = Vec::new();
+        walk(tree.root_node(), &within, &mut ranges);
+        Some(ranges)
+    })
+}
+
 /// Extract the single line-oriented command at the cursor for non-SQL backends
 /// (e.g. Redis), where statements are one-per-line rather than `;`-delimited and
 /// there is no grammar to parse. Returns the trimmed text of the line containing
@@ -1724,6 +1760,88 @@ fn determine_clause_from_keywords(source: &str, cursor_byte_pos: usize) -> Optio
 mod tests {
     use super::*;
     use blanco_core::DatabaseType;
+
+    fn keywords(grammar: SqlGrammar, sql: &str) -> Vec<&str> {
+        keyword_ranges(grammar, sql, 0..sql.len())
+            .expect("parser")
+            .into_iter()
+            .map(|range| &sql[range])
+            .collect()
+    }
+
+    #[test]
+    fn keyword_ranges_leave_out_names_literals_and_comments() {
+        let sql = "select count(*) as Total, 'select' from \"From\" f \
+                   where f.Name is not null and f.ok = true -- select\n";
+        assert_eq!(
+            keywords(SqlGrammar::PostgreSql, sql),
+            [
+                "select", "as", "from", "where", "is", "not", "null", "and", "true"
+            ]
+        );
+        // Type names are keywords too.
+        assert_eq!(
+            keywords(
+                SqlGrammar::PostgreSql,
+                "create table t (at timestamp with time zone not null)"
+            ),
+            [
+                "create",
+                "table",
+                "timestamp",
+                "with",
+                "time",
+                "zone",
+                "not",
+                "null"
+            ]
+        );
+        assert_eq!(
+            keywords(SqlGrammar::MariaDb, "select `select`, ifnull(a, 0) from t"),
+            ["select", "from"]
+        );
+        assert_eq!(
+            keywords(SqlGrammar::TSql, "select top 5 [Top] from t with (nolock)"),
+            ["select", "top", "from", "with", "nolock"]
+        );
+        assert_eq!(
+            keywords(SqlGrammar::DuckDb, "from t select a qualify a = 1"),
+            ["from", "select", "qualify"]
+        );
+    }
+
+    #[test]
+    fn keyword_ranges_stay_within_the_range_and_survive_errors() {
+        let sql = "select 1; select a from t";
+        let second = sql.find("select a").expect("second statement");
+        let ranges =
+            keyword_ranges(SqlGrammar::PostgreSql, sql, second..sql.len()).expect("parser");
+        let found: Vec<&str> = ranges.iter().map(|range| &sql[range.clone()]).collect();
+        assert_eq!(found, ["select", "from"]);
+        assert!(ranges.iter().all(|range| range.start >= second));
+
+        // A keyword the range cuts through is left alone.
+        assert_eq!(
+            keyword_ranges(SqlGrammar::PostgreSql, sql, 2..sql.len()).expect("parser")[0],
+            second..second + "select".len()
+        );
+
+        // MariaDB's grammar does not parse ON DUPLICATE KEY UPDATE without a
+        // VALUES list, yet the words still come out as keywords.
+        let unfinished = "insert into t select 1 on duplicate key update";
+        assert_eq!(
+            keywords(SqlGrammar::MariaDb, unfinished),
+            [
+                "insert",
+                "into",
+                "select",
+                "on",
+                "duplicate",
+                "key",
+                "update"
+            ]
+        );
+    }
 
     #[test]
     fn every_highlights_query_compiles_against_its_grammar() {

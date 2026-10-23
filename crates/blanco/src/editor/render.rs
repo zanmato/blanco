@@ -20,10 +20,11 @@ use gpui_component::{
 };
 
 use super::rename_form::RenameTabForm;
+use super::sql_operations::KeywordCase;
 use super::{EditorPanel, QueryTab, ScriptTab, TabType};
 use crate::app::{
-    ExecuteSubstitutedQuery, ExplainAnalyzeQuery, ExplainQuery, FormatQuery, RenameTab,
-    ToggleFilterBar,
+    ExecuteSubstitutedQuery, ExplainAnalyzeQuery, ExplainQuery, FormatQuery, LowerCaseKeywords,
+    RenameTab, ToggleFilterBar, UpperCaseKeywords,
 };
 use crate::app_settings::AppSettings;
 use crate::result_ext::ResultExt;
@@ -1026,6 +1027,12 @@ impl Render for EditorPanel {
             )
             .on_action(cx.listener(|this, _: &FormatQuery, window, cx| {
                 this.format_current_query(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &UpperCaseKeywords, window, cx| {
+                this.change_keyword_case(KeywordCase::Upper, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &LowerCaseKeywords, window, cx| {
+                this.change_keyword_case(KeywordCase::Lower, window, cx);
             }))
             .on_action(cx.listener(|this, _: &ToggleFilterBar, window, cx| {
                 if let Some(panel) = this.active_results_panel() {

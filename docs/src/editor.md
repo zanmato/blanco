@@ -23,6 +23,13 @@ the cursor for the connection's dialect. How keywords, identifiers and
 functions are cased, and how joins and CTEs are indented, is set on the
 Formatter page in Settings.
 
+<kbd>Shift+Alt+U</kbd> and <kbd>Shift+Alt+L</kbd> (**Upper Case Keywords**
+and **Lower Case Keywords** in the command palette) change only the case of
+keywords, type names and words such as `NULL` and `TRUE`, and leave the
+layout alone. Strings, comments, function names and identifiers, quoted or
+not, keep their case. They work on the selection, or on the statement under
+the cursor when nothing is selected, and one undo reverts them.
+
 ## Linting
 
 Statements are checked as you type, and problems are underlined.

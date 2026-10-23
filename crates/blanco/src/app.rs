@@ -402,6 +402,18 @@ pub struct EditConnection {
 #[action(namespace = blanco_app, no_json)]
 pub struct FormatQuery;
 
+/// Upper case the keywords of the selection, or of the statement at the
+/// cursor, leaving names, literals and comments as they are.
+#[derive(Action, Clone, PartialEq, Eq)]
+#[action(namespace = blanco_app, no_json)]
+pub struct UpperCaseKeywords;
+
+/// Lower case the keywords of the selection, or of the statement at the
+/// cursor, leaving names, literals and comments as they are.
+#[derive(Action, Clone, PartialEq, Eq)]
+#[action(namespace = blanco_app, no_json)]
+pub struct LowerCaseKeywords;
+
 /// Corner radius of the sidebar and editor cards. Deliberately separate from
 /// `theme.radius`, which stays smaller for the controls inside the cards.
 pub(crate) const PANEL_RADIUS: gpui::Pixels = px(8.);

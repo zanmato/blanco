@@ -324,10 +324,114 @@ impl EditorPanel {
     }
 }
 
+/// The case the keyword commands change keywords to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum KeywordCase {
+    Upper,
+    Lower,
+}
+
+/// One edit that puts the keywords at `ranges` of `text` in `case`, spanning
+/// from the first keyword it changes to the last, so it is one undo step.
+/// `None` when every keyword already has that case. Keywords are ASCII, so
+/// the edit keeps every offset of the text.
+pub(crate) fn keyword_case_edit(
+    text: &str,
+    ranges: &[Range<usize>],
+    case: KeywordCase,
+) -> Option<(Range<usize>, String)> {
+    let changed: Vec<(Range<usize>, String)> = ranges
+        .iter()
+        .filter_map(|range| {
+            let word = text.get(range.clone())?;
+            let cased = match case {
+                KeywordCase::Upper => word.to_ascii_uppercase(),
+                KeywordCase::Lower => word.to_ascii_lowercase(),
+            };
+            (cased != word).then(|| (range.clone(), cased))
+        })
+        .collect();
+    let start = changed.first()?.0.start;
+    let end = changed.last()?.0.end;
+    let mut replacement = String::with_capacity(end - start);
+    let mut copied_to = start;
+    for (range, cased) in changed {
+        replacement.push_str(text.get(copied_to..range.start)?);
+        replacement.push_str(&cased);
+        copied_to = range.end;
+    }
+    Some((start..end, replacement))
+}
+
+impl EditorPanel {
+    /// Change the case of the keywords in the selection, or in the statement
+    /// at the cursor when nothing is selected.
+    pub(crate) fn change_keyword_case(
+        &mut self,
+        case: KeywordCase,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(tab) = self
+            .tabs
+            .get(self.active_tab_ix)
+            .and_then(TabType::connection_tab)
+        else {
+            return;
+        };
+        if !tab.context.db_type.supports_sql() {
+            return;
+        }
+        let grammar = tab.context.db_type.sql_grammar();
+        let editor = tab.editor.clone();
+        let (text, selection) = {
+            let state = editor.read(cx);
+            (state.text().clone(), state.selected_range())
+        };
+        let scope = if selection.is_empty() {
+            match active_statement_range(grammar, &text, selection.start) {
+                Some(range) => range,
+                None => {
+                    window.push_notification(
+                        (NotificationType::Info, "No query found at cursor"),
+                        cx,
+                    );
+                    return;
+                }
+            }
+        } else {
+            selection.clone()
+        };
+        let source = text.to_string();
+        let Some(ranges) = sql_parser::keyword_ranges(grammar, &source, scope) else {
+            return;
+        };
+        let Some((range, replacement)) = keyword_case_edit(&source, &ranges, case) else {
+            return;
+        };
+        editor.update(cx, |state, cx| {
+            let edit = lsp_types::TextEdit {
+                range: lsp_types::Range {
+                    start: state.text().offset_to_position(range.start),
+                    end: state.text().offset_to_position(range.end),
+                },
+                new_text: replacement,
+            };
+            state.apply_lsp_edits(&vec![edit], window, cx);
+            // The edit keeps every offset, so the selection goes back where
+            // it was rather than ending after the replaced text.
+            state.set_selected_range(selection, window, cx);
+        });
+    }
+}
+
 #[cfg(test)]
 mod format_tests {
     use gpui::{TestAppContext, VisualTestContext};
+    use gpui_component::input::Undo;
 
+    use super::{KeywordCase, keyword_case_edit};
+    use crate::app::{LowerCaseKeywords, UpperCaseKeywords};
     use crate::test_harness::{TestHarness, set_editor_text};
 
     /// Format replaces exactly the statement at the cursor when multibyte
@@ -365,6 +469,119 @@ mod format_tests {
         assert!(
             !text.contains("select   a") && text.trim_end().ends_with("from t;"),
             "the second statement is formatted in place: {text:?}"
+        );
+    }
+
+    fn editor_of(
+        harness: &TestHarness,
+        cx: &VisualTestContext,
+    ) -> gpui::Entity<gpui_component::input::EditorState> {
+        harness.editor_panel.read_with(cx, |panel, _| {
+            panel
+                .active_query_tab()
+                .expect("query tab")
+                .base
+                .editor
+                .clone()
+        })
+    }
+
+    /// The commands change the keywords of the statement at the cursor, keep
+    /// the cursor where it was and undo in one step.
+    #[gpui::test]
+    async fn keyword_case_changes_the_statement_at_the_cursor(cx: &mut TestAppContext) {
+        let harness = TestHarness::new(cx);
+        let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+        let sql = "select 'select' from t;\nselect count(*) as Total, \"From\" from t where a is not null -- select\n;";
+        set_editor_text(&harness, sql, &mut cx);
+        let editor = editor_of(&harness, &cx);
+        let cursor = sql.find("Total").expect("second statement");
+        editor.update_in(&mut cx, |editor, window, cx| {
+            editor.focus(window, cx);
+            editor.set_selected_range(cursor..cursor, window, cx);
+        });
+
+        cx.dispatch_action(UpperCaseKeywords);
+        cx.run_until_parked();
+        let upper = "select 'select' from t;\nSELECT count(*) AS Total, \"From\" FROM t WHERE a IS NOT NULL -- select\n;";
+        editor.read_with(&cx, |editor, _| {
+            assert_eq!(editor.text().to_string(), upper);
+            assert_eq!(editor.selected_range(), cursor..cursor);
+        });
+
+        cx.dispatch_action(LowerCaseKeywords);
+        cx.run_until_parked();
+        editor.read_with(&cx, |editor, _| assert_eq!(editor.text().to_string(), sql));
+
+        cx.dispatch_action(Undo);
+        cx.run_until_parked();
+        editor.read_with(&cx, |editor, _| {
+            assert_eq!(editor.text().to_string(), upper)
+        });
+        cx.dispatch_action(Undo);
+        cx.run_until_parked();
+        editor.read_with(&cx, |editor, _| assert_eq!(editor.text().to_string(), sql));
+    }
+
+    /// A selection limits the change to the keywords inside it, across
+    /// statements, and stays selected.
+    #[gpui::test]
+    async fn keyword_case_changes_only_the_selection(cx: &mut TestAppContext) {
+        let harness = TestHarness::new(cx);
+        let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+        let sql = "select a from t; select b from u; select c from v;";
+        set_editor_text(&harness, sql, &mut cx);
+        let editor = editor_of(&harness, &cx);
+        let selection = sql.find("from t").expect("from")..sql.find(" from u").expect("from");
+        editor.update_in(&mut cx, |editor, window, cx| {
+            editor.focus(window, cx);
+            editor.set_selected_range(selection.clone(), window, cx);
+        });
+        cx.dispatch_action(UpperCaseKeywords);
+        cx.run_until_parked();
+        editor.read_with(&cx, |editor, _| {
+            assert_eq!(
+                editor.text().to_string(),
+                "select a FROM t; SELECT b from u; select c from v;"
+            );
+            assert_eq!(editor.selected_range(), selection);
+        });
+    }
+
+    /// Redis has no SQL keywords, so its tabs are left alone.
+    #[gpui::test]
+    async fn keyword_case_leaves_redis_tabs_alone(cx: &mut TestAppContext) {
+        let harness = TestHarness::new_with_db_type(cx, database::DatabaseType::Redis);
+        let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+        set_editor_text(&harness, "get select", &mut cx);
+        harness
+            .editor_panel
+            .update_in(&mut cx, |panel, window, cx| {
+                assert!(!panel.active_tab_edits_sql());
+                panel.change_keyword_case(KeywordCase::Upper, window, cx);
+            });
+        cx.run_until_parked();
+        let editor = editor_of(&harness, &cx);
+        editor.read_with(&cx, |editor, _| {
+            assert_eq!(editor.text().to_string(), "get select")
+        });
+    }
+
+    #[test]
+    fn keyword_case_edit_spans_only_the_changed_keywords() {
+        let text = "SELECT a from t WHERE b";
+        let ranges = [0..6, 9..13, 16..21];
+        assert_eq!(
+            keyword_case_edit(text, &ranges, KeywordCase::Upper),
+            Some((9..13, "FROM".to_string()))
+        );
+        assert_eq!(
+            keyword_case_edit(text, &ranges, KeywordCase::Lower),
+            Some((0..21, "select a from t where".to_string()))
+        );
+        assert_eq!(
+            keyword_case_edit("SELECT A", &[0..6], KeywordCase::Upper),
+            None
         );
     }
 }

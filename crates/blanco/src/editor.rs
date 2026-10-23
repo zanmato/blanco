@@ -932,6 +932,14 @@ impl EditorPanel {
         self.tabs.get(self.active_tab_ix)?.context(cx)
     }
 
+    /// Whether the active tab is a query or script editor on an SQL backend.
+    pub(crate) fn active_tab_edits_sql(&self) -> bool {
+        self.tabs
+            .get(self.active_tab_ix)
+            .and_then(TabType::connection_tab)
+            .is_some_and(|tab| tab.context.db_type.supports_sql())
+    }
+
     pub fn close_active_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.request_close_tab(self.active_tab_ix, window, cx);
     }
