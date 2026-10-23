@@ -68,6 +68,9 @@ struct ExportedConnection {
     /// stored, by `SecretKind::key`. The setting, never a secret itself.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     ask_on_connect: Vec<String>,
+    /// The name a Redis connection gives itself with `CLIENT SETNAME`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    client_name: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -107,6 +110,7 @@ impl From<&ConnectionData> for ExportedConnection {
                 .iter()
                 .map(|kind| kind.key().to_string())
                 .collect(),
+            client_name: connection.client_name.clone(),
         }
     }
 }
@@ -144,6 +148,7 @@ impl ExportedConnection {
         connection.read_only = self.read_only;
         connection.only_configured_database = self.only_configured_database;
         connection.open_default_schema = self.open_default_schema;
+        connection.client_name = self.client_name;
         // A name this build does not know is skipped rather than refused.
         connection.ask_secrets = self
             .ask_on_connect
@@ -272,6 +277,7 @@ mod tests {
         prod.environment_type = EnvironmentType::PROD;
         prod.read_only = true;
         prod.open_default_schema = false;
+        prod.client_name = Some("reports".to_string());
 
         let document = export_connections(&[prod.clone()]);
         assert!(!document.contains("secret"), "{document}");
@@ -284,6 +290,7 @@ mod tests {
         assert_eq!(imported.password, None);
         assert_eq!(imported.ssh_password, None);
         assert_eq!(imported.environment_type, EnvironmentType::PROD);
+        assert_eq!(imported.client_name.as_deref(), Some("reports"));
         assert_eq!(
             imported.ssh_private_key_path.as_deref(),
             Some("~/.ssh/id_ed25519")

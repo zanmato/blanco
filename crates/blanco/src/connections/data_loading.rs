@@ -853,6 +853,7 @@ mod tests {
             schemas: Vec::new(),
             supports_schemas,
             size_bytes: None,
+            keys_truncated: false,
         }
     }
 

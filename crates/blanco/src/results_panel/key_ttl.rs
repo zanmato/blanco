@@ -51,11 +51,17 @@ impl ResultsPanel {
                             Button::new("ttl-set").primary().label("Set TTL").on_click(
                                 move |_, window, cx| {
                                     let value = input.read(cx).value();
-                                    let Ok(seconds) = value.trim().parse::<i64>() else {
+                                    // EXPIRE deletes the key at once for zero or less.
+                                    let Some(seconds) = value
+                                        .trim()
+                                        .parse::<i64>()
+                                        .ok()
+                                        .filter(|seconds| *seconds > 0)
+                                    else {
                                         window.push_notification(
                                             (
                                                 NotificationType::Error,
-                                                "The TTL must be a whole number of seconds",
+                                                "The TTL must be a whole number of seconds above 0",
                                             ),
                                             cx,
                                         );

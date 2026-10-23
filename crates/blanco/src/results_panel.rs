@@ -1648,10 +1648,7 @@ impl ResultsPanel {
             .child(badge("type:", kv.key_type.as_str().to_string()))
             .child(badge("ttl:", ttl_value))
             .when_some(kv.compression.clone(), |this, compression| {
-                this.child(badge(
-                    "compressed:",
-                    format!("{compression}, shown read only"),
-                ))
+                this.child(badge("compressed:", compression))
             })
             .child(div().flex_1())
             .child(

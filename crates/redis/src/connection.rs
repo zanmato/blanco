@@ -342,13 +342,15 @@ impl Connection for RedisConnection {
                 let name = name.clone();
                 async move {
                     let custom = CustomCommand::new("CLIENT", ClusterHash::FirstKey, false);
-                    let _: Value = client
+                    let named: Result<Value, _> = client
                         .custom(
                             custom,
                             vec![Value::from("SETNAME"), Value::from(name.as_str())],
                         )
-                        .await
-                        .unwrap_or(Value::Null);
+                        .await;
+                    if let Err(error) = named {
+                        tracing::warn!("Failed to set the Redis client name: {error}");
+                    }
                     Ok(())
                 }
             });
@@ -536,12 +538,12 @@ mod tests {
         assert_eq!(decompress(b"plain text"), None);
     }
 
-    /// A Redis to test against: `REDIS_TEST_URL`, by default a local server on
-    /// port 6390 using database 15. Missing servers skip the test unless
+    /// A Redis to test against: `REDIS_TEST_URL`, by default the compose
+    /// server, using database 15. Missing servers skip the test unless
     /// `BLANCO_RUN_DB_TESTS=1`.
     async fn test_connection(client_name: Option<&str>) -> Option<RedisConnection> {
         let url = std::env::var("REDIS_TEST_URL")
-            .unwrap_or_else(|_| "redis://127.0.0.1:6390/15".to_string());
+            .unwrap_or_else(|_| "redis://:blanco@127.0.0.1:6400/15".to_string());
         let url = match client_name {
             Some(name) => format!("{url}?client_name={name}"),
             None => url,

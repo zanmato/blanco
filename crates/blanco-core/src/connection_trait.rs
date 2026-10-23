@@ -1062,8 +1062,7 @@ pub trait Connection: Send + Sync {
 
     /// List up to `limit` keys matching the glob `pattern`, filtered on the
     /// server. Defaults to `get_tables` for stores without a pattern match.
-    async fn list_keys(&self, pattern: &str, limit: usize) -> Result<KeyListing, anyhow::Error> {
-        let _ = pattern;
+    async fn list_keys(&self, _pattern: &str, limit: usize) -> Result<KeyListing, anyhow::Error> {
         let mut keys = self.get_tables(None).await?;
         let truncated = keys.len() > limit;
         keys.truncate(limit);

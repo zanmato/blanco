@@ -704,12 +704,14 @@ impl ConnectionConfig {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
     fn redis_urls_carry_the_client_name() {
-        let config = super::ConnectionConfig::new(
+        let config = ConnectionConfig::new(
             1,
             "cache".into(),
-            super::DatabaseType::Redis,
+            DatabaseType::Redis,
             "localhost".into(),
             6379,
             "2".into(),
@@ -726,8 +728,6 @@ mod tests {
             "redis://localhost:6379/2?client_name=report+worker"
         );
     }
-
-    use super::*;
 
     #[test]
     fn editor_language_maps_sql_backends_and_redis() {
