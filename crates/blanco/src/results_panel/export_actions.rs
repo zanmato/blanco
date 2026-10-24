@@ -73,7 +73,12 @@ impl ResultsPanel {
     }
 
     /// Export selected data in the specified format
-    fn export_selected_as(&mut self, format: &str, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn export_selected_as(
+        &mut self,
+        format: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let selected_rows = self.table_state.read(cx).selected_rows().clone();
 
         if selected_rows.is_empty() {

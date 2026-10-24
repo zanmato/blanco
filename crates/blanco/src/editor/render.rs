@@ -21,6 +21,7 @@ use gpui_component::{
 
 use super::rename_form::RenameTabForm;
 use super::sql_operations::KeywordCase;
+use super::tab_actions::CloseScope;
 use super::{EditorPanel, QueryTab, ScriptTab, TabType};
 use crate::app::{
     ExecuteSubstitutedQuery, ExplainAnalyzeQuery, ExplainQuery, FormatQuery, LowerCaseKeywords,
@@ -202,8 +203,12 @@ impl EditorPanel {
         let can_duplicate = self.can_duplicate_tab(ix);
         let can_move = self.can_move_tab_to_new_window(ix);
         let closable = self.tabs.len() > 1;
-        let has_others = (self.pinned_count..self.tabs.len()).any(|other| other != ix);
-        let has_right = (ix + 1).max(self.pinned_count) < self.tabs.len();
+        let len = self.tabs.len();
+        let closes_any = |scope: CloseScope| !scope.indices(ix, len, self.pinned_count).is_empty();
+        let has_others = closes_any(CloseScope::Others);
+        let has_left = closes_any(CloseScope::Left);
+        let has_right = closes_any(CloseScope::Right);
+        let has_unpinned = closes_any(CloseScope::All);
         move |menu, _, _| {
             let item = |label: &'static str,
                         enabled: bool,
@@ -237,11 +242,22 @@ impl EditorPanel {
             .item(item("Close", closable, |panel, ix, window, cx| {
                 panel.request_close_tab(ix, window, cx)
             }))
-            .item(item("Close Others", has_others, |panel, ix, _, cx| {
-                panel.close_other_tabs(ix, cx)
+            .item(item("Close Others", has_others, |panel, ix, window, cx| {
+                panel.close_tabs(CloseScope::Others, ix, window, cx)
             }))
-            .item(item("Close to the Right", has_right, |panel, ix, _, cx| {
-                panel.close_tabs_to_the_right(ix, cx)
+            .item(item(
+                "Close to the Left",
+                has_left,
+                |panel, ix, window, cx| panel.close_tabs(CloseScope::Left, ix, window, cx),
+            ))
+            .item(item(
+                "Close to the Right",
+                has_right,
+                |panel, ix, window, cx| panel.close_tabs(CloseScope::Right, ix, window, cx),
+            ))
+            .separator()
+            .item(item("Close All", has_unpinned, |panel, ix, window, cx| {
+                panel.close_tabs(CloseScope::All, ix, window, cx)
             }))
         }
     }

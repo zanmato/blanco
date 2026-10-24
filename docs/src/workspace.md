@@ -23,8 +23,10 @@ connection in the tab strip.
   <kbd>Ctrl+Shift+T</kbd> brings back the last one closed.
 - <kbd>Ctrl+Tab</kbd> and <kbd>Ctrl+Shift+Tab</kbd> move between tabs. This
   is <kbd>Ctrl</kbd> on macOS too.
-- Drag a tab to reorder it. Right click it to rename, duplicate, pin, close
-  the others or move it to a new window.
+- Drag a tab to reorder it. Right click it to rename, duplicate, pin or move
+  it to a new window, or to close the tabs to its left, its right, all but it
+  or all of them. Pinned tabs stay open. Closing a tab with unsaved changes to
+  its file asks to save them first.
 - Middle click closes a tab.
 
 What you type is saved as you go. Tabs and their text come back when you

@@ -11,7 +11,12 @@ use crate::app::{
 use super::ResultsPanel;
 
 impl ResultsPanel {
-    fn copy_selected_as(&mut self, format: &str, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn copy_selected_as(
+        &mut self,
+        format: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let selected_rows = {
             let table_state = self.table_state.read(cx);
             let mut selected_rows = table_state.selected_rows().clone();

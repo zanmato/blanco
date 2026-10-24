@@ -17,8 +17,9 @@ use database::{DatabaseService, DatabaseType};
 use crate::{
     app::{
         ActivateEditorTab, ActivateNextTab, ActivatePreviousTab, BackupDatabase, CancelQuery,
-        ClearCompareSelection, CloseActiveTab, CloseWindow, CommitChanges, ConnectToConnection,
-        CopyAsCSV, CopyAsHTML, CopyAsJSON, CopyAsMarkdown, CopyAsSQL, CopyAsTSV, CreateNewQueryTab,
+        ClearCompareSelection, CloseActiveTab, CloseAllTabs, CloseOtherTabs, CloseTabsToTheLeft,
+        CloseTabsToTheRight, CloseWindow, CommitChanges, ConnectToConnection, CopyAsCSV,
+        CopyAsHTML, CopyAsJSON, CopyAsMarkdown, CopyAsSQL, CopyAsTSV, CreateNewQueryTab,
         CreateNewScriptTab, ExplainAnalyzeQuery, ExplainQuery, ExportAsCSV, ExportAsHTML,
         ExportAsJSON, ExportAsMarkdown, ExportAsSQL, ExportAsTSV, ExportConnections,
         ExportTableData, FormatQuery, ImportConnections, ImportTableData, LowerCaseKeywords,
@@ -140,6 +141,10 @@ pub enum CommandType {
     ToggleRenderWhitespace,
     ToggleWordWrap,
     CloseActiveTab,
+    CloseOtherTabs,
+    CloseTabsToTheLeft,
+    CloseTabsToTheRight,
+    CloseAllTabs,
     NewQueryTab,
     NewWindow,
     CloseWindow,
@@ -169,11 +174,6 @@ struct NavLevel {
     crumb: SharedString,
     items: Vec<CommandItem>,
     placeholder: SharedString,
-}
-
-struct ScoredItem {
-    command: CommandItem,
-    score: i64,
 }
 
 pub struct CommandPalette {
@@ -575,7 +575,10 @@ impl CommandPalette {
             .delegate()
             .filtered
             .iter()
-            .map(|item| item.command.label.clone())
+            .map(|&ix| {
+                let delegate = self.list_state.read(cx).delegate();
+                delegate.current_items()[ix].label.clone()
+            })
             .collect()
     }
 
@@ -779,6 +782,10 @@ fn keybinding_for_command(cmd: &CommandType, window: &Window) -> Option<gpui_com
         CommandType::RollbackChanges => Box::new(RollbackChanges),
         CommandType::ToggleSidebar => Box::new(ToggleSidebar),
         CommandType::CloseActiveTab => Box::new(CloseActiveTab),
+        CommandType::CloseOtherTabs => Box::new(CloseOtherTabs),
+        CommandType::CloseTabsToTheLeft => Box::new(CloseTabsToTheLeft),
+        CommandType::CloseTabsToTheRight => Box::new(CloseTabsToTheRight),
+        CommandType::CloseAllTabs => Box::new(CloseAllTabs),
         CommandType::NewQueryTab => Box::new(NewQueryTab),
         CommandType::NewWindow => Box::new(NewWindow),
         CommandType::CloseWindow => Box::new(CloseWindow),
@@ -844,6 +851,12 @@ fn execute_command(cmd: &CommandType, window: &mut Window, cx: &mut App) {
         }
         CommandType::ToggleWordWrap => window.dispatch_action(Box::new(ToggleWordWrap), cx),
         CommandType::CloseActiveTab => window.dispatch_action(Box::new(CloseActiveTab), cx),
+        CommandType::CloseOtherTabs => window.dispatch_action(Box::new(CloseOtherTabs), cx),
+        CommandType::CloseTabsToTheLeft => window.dispatch_action(Box::new(CloseTabsToTheLeft), cx),
+        CommandType::CloseTabsToTheRight => {
+            window.dispatch_action(Box::new(CloseTabsToTheRight), cx)
+        }
+        CommandType::CloseAllTabs => window.dispatch_action(Box::new(CloseAllTabs), cx),
         CommandType::NewQueryTab => window.dispatch_action(Box::new(NewQueryTab), cx),
         CommandType::NewWindow => window.dispatch_action(Box::new(NewWindow), cx),
         CommandType::CloseWindow => window.dispatch_action(Box::new(CloseWindow), cx),
@@ -937,7 +950,11 @@ pub struct CommandPaletteDelegate {
     root_commands: Vec<CommandItem>,
     /// Pushed navigation levels; empty == at the root.
     stack: Vec<NavLevel>,
-    filtered: Vec<ScoredItem>,
+    /// The labels of the current level's items in lower case, made when the
+    /// level changes so that typing doesn't redo it for every item.
+    labels: Vec<String>,
+    /// The matching items of the current level, as indices, best first.
+    filtered: Vec<usize>,
     selected_index: Option<IndexPath>,
     query: String,
     loading: bool,
@@ -955,6 +972,7 @@ impl CommandPaletteDelegate {
             editor_panel,
             root_commands: Vec::new(),
             stack: Vec::new(),
+            labels: Vec::new(),
             filtered: Vec::new(),
             selected_index: None,
             query: String::new(),
@@ -979,6 +997,7 @@ impl CommandPaletteDelegate {
         self.loading = false;
         self.error = None;
         self.query.clear();
+        self.index_labels();
         self.apply_filter();
     }
 
@@ -995,6 +1014,7 @@ impl CommandPaletteDelegate {
         });
         self.error = None;
         self.query.clear();
+        self.index_labels();
         self.apply_filter();
     }
 
@@ -1002,6 +1022,7 @@ impl CommandPaletteDelegate {
         self.stack.pop();
         self.error = None;
         self.query.clear();
+        self.index_labels();
         self.apply_filter();
     }
 
@@ -1010,6 +1031,7 @@ impl CommandPaletteDelegate {
         self.stack.truncate(depth);
         self.error = None;
         self.query.clear();
+        self.index_labels();
         self.apply_filter();
     }
 
@@ -1053,84 +1075,74 @@ impl CommandPaletteDelegate {
         cx.notify();
     }
 
+    /// Lower case the labels of the current level's items.
+    fn index_labels(&mut self) {
+        self.labels = self
+            .current_items()
+            .iter()
+            .map(|item| item.label.to_lowercase())
+            .collect();
+    }
+
     fn apply_filter(&mut self) {
         if self.query.is_empty() {
-            self.filtered = self
-                .current_items()
-                .iter()
-                .enumerate()
-                .map(|(i, cmd)| ScoredItem {
-                    command: cmd.clone(),
-                    score: 10000 - i as i64,
-                })
-                .collect();
+            self.filtered = (0..self.labels.len()).collect();
             return;
         }
 
-        let query_lower = self.query.to_lowercase();
-        let mut results: Vec<ScoredItem> = self
-            .current_items()
+        let query: Vec<char> = self.query.to_lowercase().chars().collect();
+        let mut scored: Vec<(usize, i64)> = self
+            .labels
             .iter()
-            .filter_map(|cmd| {
-                let label_lower = cmd.label.to_lowercase();
-                let score = fuzzy_score(&label_lower, &query_lower)?;
-                Some(ScoredItem {
-                    command: cmd.clone(),
-                    score,
-                })
-            })
+            .enumerate()
+            .filter_map(|(ix, label)| Some((ix, fuzzy_score(label, &query)?)))
             .collect();
+        // Stable, so equal scores keep the order the items were added in.
+        scored.sort_by_key(|&(_, score)| std::cmp::Reverse(score));
+        self.filtered = scored.into_iter().map(|(ix, _)| ix).collect();
+    }
 
-        results.sort_by_key(|item| std::cmp::Reverse(item.score));
-        self.filtered = results;
+    /// The item shown at `row`.
+    fn item_at(&self, row: usize) -> Option<&CommandItem> {
+        self.current_items().get(*self.filtered.get(row)?)
     }
 
     pub fn selected_command(&self) -> Option<CommandItem> {
         let ix = self.selected_index?;
-        self.filtered.get(ix.row).map(|item| item.command.clone())
+        self.item_at(ix.row).cloned()
     }
 }
 
-fn fuzzy_score(text: &str, query: &str) -> Option<i64> {
-    let text_chars: Vec<char> = text.chars().collect();
-    let query_chars: Vec<char> = query.chars().collect();
-
-    if query_chars.is_empty() {
+/// How well `query` matches `text` as a subsequence, higher for runs of
+/// consecutive characters and for matches at the start of a word. `None`
+/// when it doesn't match. Both are expected in lower case.
+fn fuzzy_score(text: &str, query: &[char]) -> Option<i64> {
+    if query.is_empty() {
         return Some(0);
     }
-    if query_chars.len() > text_chars.len() {
-        return None;
-    }
-
     let mut score: i64 = 0;
     let mut query_pos = 0;
-    let mut last_match_pos: Option<usize> = None;
-
-    for (i, &ch) in text_chars.iter().enumerate() {
-        if query_pos >= query_chars.len() {
+    let mut last_match: Option<usize> = None;
+    let mut previous: Option<char> = None;
+    for (i, ch) in text.chars().enumerate() {
+        if query_pos == query.len() {
             break;
         }
-        if ch == query_chars[query_pos] {
+        if ch == query[query_pos] {
             let mut bonus: i64 = 1;
-            if let Some(last) = last_match_pos
-                && last + 1 == i
-            {
+            if last_match.is_some_and(|last| last + 1 == i) {
                 bonus += 10;
             }
-            if i == 0 || text_chars[i - 1] == ' ' || text_chars[i - 1] == '-' {
+            if matches!(previous, None | Some(' ') | Some('-')) {
                 bonus += 5;
             }
             score += bonus;
-            last_match_pos = Some(i);
+            last_match = Some(i);
             query_pos += 1;
         }
+        previous = Some(ch);
     }
-
-    if query_pos == query_chars.len() {
-        Some(score)
-    } else {
-        None
-    }
+    (query_pos == query.len()).then_some(score)
 }
 
 impl DatabaseRef {
@@ -1309,6 +1321,18 @@ fn build_commands(
         ),
         leaf("Word Wrap", "View", CommandType::ToggleWordWrap),
         leaf("Close Tab", "Tab", CommandType::CloseActiveTab),
+        leaf("Close Other Tabs", "Tab", CommandType::CloseOtherTabs),
+        leaf(
+            "Close Tabs to the Left",
+            "Tab",
+            CommandType::CloseTabsToTheLeft,
+        ),
+        leaf(
+            "Close Tabs to the Right",
+            "Tab",
+            CommandType::CloseTabsToTheRight,
+        ),
+        leaf("Close All Tabs", "Tab", CommandType::CloseAllTabs),
         leaf("New Query Tab", "Tab", CommandType::NewQueryTab),
         leaf(
             "Move Tab to New Window",
@@ -1530,7 +1554,7 @@ impl ListDelegate for CommandPaletteDelegate {
         cx: &mut Context<ListState<Self>>,
     ) -> Option<Self::Item> {
         let selected = self.selected_index == Some(ix);
-        let command = self.filtered.get(ix.row)?.command.clone();
+        let command = self.item_at(ix.row)?.clone();
         let theme = cx.theme();
         let muted_color = theme.muted_foreground;
         let selected_bg = theme.accent;
@@ -1587,35 +1611,39 @@ impl ListDelegate for CommandPaletteDelegate {
 mod tests {
     use super::*;
 
+    fn score(text: &str, query: &str) -> Option<i64> {
+        fuzzy_score(text, &query.chars().collect::<Vec<_>>())
+    }
+
     #[test]
     fn test_fuzzy_score_exact_match() {
-        assert!(fuzzy_score("run query", "run query").is_some());
+        assert!(score("run query", "run query").is_some());
     }
 
     #[test]
     fn test_fuzzy_score_prefix() {
-        assert!(fuzzy_score("run query", "run").is_some());
+        assert!(score("run query", "run").is_some());
     }
 
     #[test]
     fn test_fuzzy_score_subsequence() {
-        assert!(fuzzy_score("switch to dark theme", "std").is_some());
+        assert!(score("switch to dark theme", "std").is_some());
     }
 
     #[test]
     fn test_fuzzy_score_no_match() {
-        assert!(fuzzy_score("run query", "xyz").is_none());
+        assert!(score("run query", "xyz").is_none());
     }
 
     #[test]
     fn test_fuzzy_score_empty_query() {
-        assert!(fuzzy_score("run query", "").is_some());
+        assert!(score("run query", "").is_some());
     }
 
     #[test]
     fn test_fuzzy_score_consecutive_beats_spread() {
-        let consecutive = fuzzy_score("close tab", "clot").unwrap();
-        let spread = fuzzy_score("clear history", "clt").unwrap();
+        let consecutive = score("close tab", "clot").unwrap();
+        let spread = score("clear history", "clt").unwrap();
         assert!(consecutive > spread);
     }
 }

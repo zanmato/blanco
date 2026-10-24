@@ -32,6 +32,10 @@ one there too.
 | --- | --- | --- |
 | New query tab | <kbd>Ctrl+T</kbd> | <kbd>Cmd+T</kbd> |
 | Close tab | <kbd>Ctrl+W</kbd> | <kbd>Cmd+W</kbd> |
+| Close other tabs | <kbd>Ctrl+Alt+W</kbd> | <kbd>Cmd+Option+W</kbd> |
+| Close tabs to the left | none | none |
+| Close tabs to the right | none | none |
+| Close all tabs | <kbd>Ctrl+Alt+Shift+W</kbd> | <kbd>Cmd+Option+Shift+W</kbd> |
 | Next tab | <kbd>Ctrl+Tab</kbd> | <kbd>Ctrl+Tab</kbd> |
 | Previous tab | <kbd>Ctrl+Shift+Tab</kbd> | <kbd>Ctrl+Shift+Tab</kbd> |
 | Reopen closed tab | <kbd>Ctrl+Shift+T</kbd> | <kbd>Cmd+Shift+T</kbd> |

@@ -1,8 +1,19 @@
 //! Tab strip operations: reorder, duplicate, pin, move to another window and
-//! the bulk closes.
+//! the bulk closes, which ask to save the changed tabs first.
+
+use std::rc::Rc;
 
 use app_database::AppDatabase;
-use gpui::{App, Context, Window};
+use gpui::{
+    App, Context, EntityId, ParentElement as _, Styled as _, Window, div,
+    prelude::FluentBuilder as _,
+};
+use gpui_component::{
+    ActiveTheme as _, WindowExt as _,
+    button::{Button, ButtonVariants as _},
+    dialog::{DialogClose, DialogFooter},
+    v_flex,
+};
 
 use super::tabs::TabFile;
 use super::{EditorPanel, TabCreationParams, TabType};
@@ -15,6 +26,46 @@ pub struct MovedTab {
     is_script: bool,
     params: TabCreationParams,
     file: Option<TabFile>,
+}
+
+/// Which tabs a close command closes, around the tab it is given. Pinned
+/// tabs are never among them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CloseScope {
+    Others,
+    Left,
+    Right,
+    All,
+}
+
+impl CloseScope {
+    /// The indices of the tabs it closes among `len` tabs, the first
+    /// `pinned` of them pinned, around `ix`.
+    pub(super) fn indices(self, ix: usize, len: usize, pinned: usize) -> Vec<usize> {
+        let pinned = pinned.min(len);
+        match self {
+            Self::Others => (pinned..len).filter(|&other| other != ix).collect(),
+            Self::Left => (pinned..ix.min(len)).collect(),
+            Self::Right => ((ix + 1).max(pinned)..len).collect(),
+            Self::All => (pinned..len).collect(),
+        }
+    }
+}
+
+impl TabType {
+    /// The id of the tab's view, which stays the same while tabs move.
+    fn view_id(&self) -> EntityId {
+        match self {
+            TabType::Query(tab) => tab.editor.entity_id(),
+            TabType::Script(tab) => tab.editor.entity_id(),
+            TabType::Settings(tab) => tab.settings_view.entity_id(),
+            TabType::Snippet(tab) => tab.entity_id(),
+            TabType::TableStructure(tab) => tab.entity_id(),
+            TabType::ObjectDdl(tab) => tab.entity_id(),
+            TabType::SchemaGraph(tab) => tab.entity_id(),
+            TabType::ProcessList(tab) => tab.entity_id(),
+        }
+    }
 }
 
 impl EditorPanel {
@@ -207,34 +258,216 @@ impl EditorPanel {
         self.focus_active_tab(window, cx);
     }
 
-    /// Close every unpinned tab but the one at `keep`.
-    pub(super) fn close_other_tabs(&mut self, keep: usize, cx: &mut Context<Self>) {
-        let doomed: Vec<usize> = (self.pinned_count..self.tabs.len())
-            .filter(|&ix| ix != keep)
+    /// Close the tabs `scope` names around the tab at `ix`, asking first
+    /// when some of them have unsaved changes. Pinned tabs stay open.
+    pub(crate) fn close_tabs(
+        &mut self,
+        scope: CloseScope,
+        ix: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let indices = scope.indices(ix, self.tabs.len(), self.pinned_count);
+        if indices.is_empty() {
+            return;
+        }
+        let ids: Vec<EntityId> = indices.iter().map(|&ix| self.tabs[ix].view_id()).collect();
+        // The tab to show afterwards: the active one when it stays open,
+        // else the tab the command was given, as with Close Others.
+        let keep = [self.active_tab_ix, ix]
+            .into_iter()
+            .filter_map(|ix| self.tabs.get(ix))
+            .map(TabType::view_id)
+            .find(|id| !ids.contains(id));
+        let unsaved: Vec<(EntityId, String)> = indices
+            .iter()
+            .filter_map(|&ix| {
+                let tab = &self.tabs[ix];
+                Some((tab.view_id(), tab.unsaved_name(cx)?))
+            })
             .collect();
-        self.close_tabs(doomed, cx);
+        if unsaved.is_empty() {
+            self.close_tabs_by_id(&ids, keep, window, cx);
+        } else {
+            self.confirm_close_unsaved(ids, unsaved, keep, window, cx);
+        }
     }
 
-    /// Close the unpinned tabs after the one at `ix`.
-    pub(super) fn close_tabs_to_the_right(&mut self, ix: usize, cx: &mut Context<Self>) {
-        let doomed: Vec<usize> = ((ix + 1).max(self.pinned_count)..self.tabs.len()).collect();
-        self.close_tabs(doomed, cx);
+    /// Close the tabs `scope` names around the active tab.
+    pub(crate) fn close_tabs_around_active(
+        &mut self,
+        scope: CloseScope,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.close_tabs(scope, self.active_tab_ix, window, cx);
     }
 
-    /// Close the tabs at `indices`, highest first so the others keep theirs.
-    /// A tab with unsaved changes stays open: closing it asks first, and a
-    /// bulk close has no good moment for a question per tab.
-    fn close_tabs(&mut self, mut indices: Vec<usize>, cx: &mut Context<Self>) {
-        indices.sort_unstable_by(|a, b| b.cmp(a));
-        for ix in indices {
-            let unsaved = self
-                .tabs
-                .get(ix)
-                .is_some_and(|tab| tab.unsaved_name(cx).is_some());
-            if !unsaved {
+    /// Ask whether to save the changed files among the tabs being closed.
+    /// Saving closes the tabs that were written and keeps the others, such as
+    /// a table whose structure changes are not applied.
+    fn confirm_close_unsaved(
+        &mut self,
+        ids: Vec<EntityId>,
+        unsaved: Vec<(EntityId, String)>,
+        keep: Option<EntityId>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let title = match unsaved.as_slice() {
+            [(_, name)] => format!("Save changes to {name}?"),
+            _ => format!("Save changes to {} tabs?", unsaved.len()),
+        };
+        let names: Vec<String> = match unsaved.as_slice() {
+            [_] => Vec::new(),
+            _ => unsaved.iter().map(|(_, name)| name.clone()).collect(),
+        };
+        let save_label = if unsaved.len() > 1 {
+            "Save All"
+        } else {
+            "Save"
+        };
+        let has_structure = unsaved.iter().any(|(id, _)| {
+            self.tabs
+                .iter()
+                .any(|tab| matches!(tab, TabType::TableStructure(_)) && tab.view_id() == *id)
+        });
+
+        let unsaved_ids: Vec<EntityId> = unsaved.iter().map(|(id, _)| *id).collect();
+        let weak = cx.entity().downgrade();
+        let respond = Rc::new(move |save: bool, window: &mut Window, cx: &mut App| {
+            weak.update(cx, |this, cx| {
+                this.answer_close(&ids, &unsaved_ids, keep, save, window, cx)
+            })
+            .log_err();
+            window.close_dialog(cx);
+        });
+
+        window.open_dialog(cx, move |dialog, _, cx| {
+            let save = respond.clone();
+            let discard = respond.clone();
+            dialog
+                .title(title.clone())
+                .child(
+                    v_flex()
+                        .gap_2()
+                        .when(!names.is_empty(), |this| {
+                            this.child(v_flex().children(names.iter().map(|name| {
+                                div()
+                                    .text_sm()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(name.clone())
+                            })))
+                        })
+                        .child("Your changes are lost if you close without saving.")
+                        .when(has_structure, |this| {
+                            this.child(
+                                "Tables with structure changes not yet applied stay open when you save.",
+                            )
+                        }),
+                )
+                .footer(
+                    DialogFooter::new()
+                        .child(
+                            DialogClose::new()
+                                .child(Button::new("close-tabs-cancel").label("Cancel").outline()),
+                        )
+                        // Sibling `DialogAction`s share a click state, so the
+                        // buttons close the dialog themselves.
+                        .child(
+                            Button::new("close-tabs-discard")
+                                .outline()
+                                .label("Don't Save")
+                                .on_click(move |_, window, cx| discard(false, window, cx)),
+                        )
+                        .child(
+                            Button::new("close-tabs-save")
+                                .primary()
+                                .label(save_label)
+                                .on_click(move |_, window, cx| save(true, window, cx)),
+                        ),
+                )
+        });
+    }
+
+    /// Close the tabs after the save prompt was answered. With `save` the
+    /// unsaved tabs are written first, and those that could not be stay open.
+    fn answer_close(
+        &mut self,
+        ids: &[EntityId],
+        unsaved: &[EntityId],
+        keep: Option<EntityId>,
+        save: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let mut ids = ids.to_vec();
+        if save {
+            for id in unsaved {
+                if !self.save_tab_file(*id, window, cx) {
+                    ids.retain(|other| other != id);
+                }
+            }
+        }
+        self.close_tabs_by_id(&ids, keep, window, cx);
+    }
+
+    /// Write the file of the tab whose view is `id`. Returns whether it was
+    /// written, false for a tab without a file to write.
+    fn save_tab_file(&mut self, id: EntityId, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some(ix) = self.tabs.iter().position(|tab| tab.view_id() == id) else {
+            return false;
+        };
+        let path = self.tabs[ix]
+            .connection_tab()
+            .and_then(|tab| tab.file.as_ref())
+            .map(|file| file.path.clone());
+        path.is_some_and(|path| self.write_tab_to(ix, path, window, cx))
+    }
+
+    /// Close the tabs whose views are `ids`, then show `keep` when it is
+    /// still open. A window always keeps a tab, so closing every tab first
+    /// opens an empty query tab on the active tab's connection.
+    fn close_tabs_by_id(
+        &mut self,
+        ids: &[EntityId],
+        mut keep: Option<EntityId>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let closes_all = self.tabs.iter().all(|tab| ids.contains(&tab.view_id()));
+        if closes_all && let Some(context) = self.active_context(cx) {
+            let title = match &context.schema_name {
+                Some(schema) => format!("{}.{}", context.database_name, schema),
+                None => context.database_name.clone(),
+            };
+            self.create_and_add_tab_with_connection(
+                window,
+                TabCreationParams {
+                    title,
+                    content: None,
+                    db_id: None,
+                    last_run_at: None,
+                    context,
+                },
+                cx,
+            );
+            keep = self.tabs.last().map(TabType::view_id);
+        }
+        // Highest first, so the other indices stay put.
+        for ix in (0..self.tabs.len()).rev() {
+            if ids.contains(&self.tabs[ix].view_id()) {
                 self.close_tab(ix, cx);
             }
         }
+        if let Some(ix) =
+            keep.and_then(|keep| self.tabs.iter().position(|tab| tab.view_id() == keep))
+        {
+            self.active_tab_ix = ix;
+            self.tabbar_scroll_handle.scroll_to_item(ix);
+        }
+        self.focus_active_tab(window, cx);
+        cx.notify();
     }
 
     /// Store the saved tabs' order so a restart restores it.
@@ -330,17 +563,19 @@ mod tests {
             .editor_panel
             .update_in(&mut cx, |panel, window, cx| panel.toggle_pin(3, window, cx));
         assert_eq!(titles(&harness, &cx), ["d", "b", "c", "a"]);
-        harness.editor_panel.update(&mut cx, |panel, cx| {
-            assert!(!panel.can_move_tab(1, 0), "unpinned cannot pass pinned");
-            panel.close_other_tabs(2, cx);
-        });
+        harness
+            .editor_panel
+            .update_in(&mut cx, |panel, window, cx| {
+                assert!(!panel.can_move_tab(1, 0), "unpinned cannot pass pinned");
+                panel.close_tabs(CloseScope::Others, 2, window, cx);
+            });
         assert_eq!(titles(&harness, &cx), ["d", "c"]);
 
         harness
             .editor_panel
             .update_in(&mut cx, |panel, window, cx| {
                 panel.toggle_pin(0, window, cx);
-                panel.close_tabs_to_the_right(0, cx);
+                panel.close_tabs(CloseScope::Right, 0, window, cx);
             });
         assert_eq!(titles(&harness, &cx), ["d"]);
     }
@@ -391,5 +626,124 @@ mod tests {
             assert_eq!(text, "select 'b'");
             assert_eq!(panel.tabs[2].context(cx), panel.tabs[1].context(cx));
         });
+    }
+
+    #[test]
+    fn close_scopes_skip_pinned_tabs() {
+        // Five tabs, the first two pinned, given the tab at 3.
+        assert_eq!(CloseScope::Others.indices(3, 5, 2), [2, 4]);
+        assert_eq!(CloseScope::Left.indices(3, 5, 2), [2]);
+        assert_eq!(CloseScope::Right.indices(3, 5, 2), [4]);
+        assert_eq!(CloseScope::All.indices(3, 5, 2), [2, 3, 4]);
+        // Given a pinned tab, the scopes still reach only unpinned ones.
+        assert_eq!(CloseScope::Left.indices(1, 5, 2), Vec::<usize>::new());
+        assert_eq!(CloseScope::Right.indices(0, 5, 2), [2, 3, 4]);
+    }
+
+    #[gpui::test]
+    async fn close_left_and_all_keep_pinned_tabs(cx: &mut TestAppContext) {
+        let harness = TestHarness::new(cx);
+        let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+        four_tabs(&harness, &mut cx);
+
+        harness
+            .editor_panel
+            .update_in(&mut cx, |panel, window, cx| {
+                panel.toggle_pin(3, window, cx);
+                panel.close_tabs(CloseScope::Left, 2, window, cx);
+            });
+        assert_eq!(titles(&harness, &cx), ["d", "b", "c"]);
+
+        harness
+            .editor_panel
+            .update_in(&mut cx, |panel, window, cx| {
+                panel.close_tabs(CloseScope::All, 2, window, cx)
+            });
+        assert_eq!(titles(&harness, &cx), ["d"]);
+        harness.editor_panel.read_with(&cx, |panel, _| {
+            assert_eq!(panel.active_tab_ix, 0);
+        });
+    }
+
+    #[gpui::test]
+    async fn close_all_without_pins_leaves_an_empty_tab(cx: &mut TestAppContext) {
+        let harness = TestHarness::new(cx);
+        let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+        four_tabs(&harness, &mut cx);
+
+        harness
+            .editor_panel
+            .update_in(&mut cx, |panel, window, cx| {
+                panel.close_tabs(CloseScope::All, 1, window, cx)
+            });
+        harness.editor_panel.read_with(&cx, |panel, cx| {
+            assert_eq!(panel.tabs.len(), 1);
+            let tab = panel.tabs[0].connection_tab().expect("a query tab");
+            assert!(tab.editor.read(cx).text().to_string().is_empty());
+            assert!(!["a", "b", "c", "d"].contains(&tab.title.as_str()));
+        });
+    }
+
+    /// Tab `c` gets a file in `dir` with other saved text, so it has unsaved
+    /// changes. Returns the file's path.
+    fn unsaved_file_on_c(
+        harness: &TestHarness,
+        dir: &tempfile::TempDir,
+        cx: &mut VisualTestContext,
+    ) -> std::path::PathBuf {
+        let path = dir.path().join("c.sql");
+        std::fs::write(&path, "old").unwrap();
+        let file = TabFile::new(path.clone(), Some("old".into()), "select 'c'");
+        harness.editor_panel.update(cx, |panel, _| {
+            panel.tabs[2].connection_tab_mut().expect("query tab").file = Some(file);
+        });
+        path
+    }
+
+    #[gpui::test]
+    async fn closing_an_unsaved_tab_asks_first(cx: &mut TestAppContext) {
+        let harness = TestHarness::new(cx);
+        let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+        four_tabs(&harness, &mut cx);
+        let dir = tempfile::tempdir().unwrap();
+        let path = unsaved_file_on_c(&harness, &dir, &mut cx);
+
+        harness
+            .editor_panel
+            .update_in(&mut cx, |panel, window, cx| {
+                panel.close_tabs(CloseScope::Others, 0, window, cx)
+            });
+        assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
+        assert_eq!(titles(&harness, &cx), ["a", "b", "c", "d"]);
+
+        // Saving writes the file and closes every tab asked for.
+        harness
+            .editor_panel
+            .update_in(&mut cx, |panel, window, cx| {
+                let ids: Vec<EntityId> = panel.tabs[1..].iter().map(TabType::view_id).collect();
+                let unsaved = [panel.tabs[2].view_id()];
+                let keep = Some(panel.tabs[0].view_id());
+                panel.answer_close(&ids, &unsaved, keep, true, window, cx);
+            });
+        assert_eq!(titles(&harness, &cx), ["a"]);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "select 'c'");
+    }
+
+    #[gpui::test]
+    async fn not_saving_closes_without_writing(cx: &mut TestAppContext) {
+        let harness = TestHarness::new(cx);
+        let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+        four_tabs(&harness, &mut cx);
+        let dir = tempfile::tempdir().unwrap();
+        let path = unsaved_file_on_c(&harness, &dir, &mut cx);
+
+        harness
+            .editor_panel
+            .update_in(&mut cx, |panel, window, cx| {
+                let ids = [panel.tabs[2].view_id()];
+                panel.answer_close(&ids, &ids, None, false, window, cx);
+            });
+        assert_eq!(titles(&harness, &cx), ["a", "b", "d"]);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "old");
     }
 }

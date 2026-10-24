@@ -284,7 +284,7 @@ impl EditorPanel {
 
     /// Write the tab at `ix` to `path` and make that its file. Returns whether
     /// it was written.
-    fn write_tab_to(
+    pub(super) fn write_tab_to(
         &mut self,
         ix: usize,
         path: PathBuf,

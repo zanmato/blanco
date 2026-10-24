@@ -40,8 +40,8 @@ use crate::{
     connections::{ConnectionsPanel, ConnectionsPanelEvent},
     database_file,
     editor::{
-        EditorPanel, EditorPanelEvent, ObjectDdlParams, TabCreationParams, TableStructureParams,
-        open_tabs::OpenTabsPanel,
+        CloseScope, EditorPanel, EditorPanelEvent, KeywordCase, ObjectDdlParams, TabCreationParams,
+        TableStructureParams, open_tabs::OpenTabsPanel,
     },
     history_panel::{HistoryPanel, HistoryPanelEvent},
     result_ext::ResultExt,
@@ -103,6 +103,10 @@ actions!(
         ExplainAnalyzeQuery,
         ToggleCommandPalette,
         CloseActiveTab,
+        CloseOtherTabs,
+        CloseTabsToTheLeft,
+        CloseTabsToTheRight,
+        CloseAllTabs,
         NewQueryTab,
         ActivateNextTab,
         ActivatePreviousTab,
@@ -1797,6 +1801,27 @@ impl BlancoApp {
         });
     }
 
+    /// Close the tabs `scope` names around the active tab.
+    /// Run `f` on the results of the active tab, when it has any.
+    fn with_active_results(
+        &mut self,
+        cx: &mut Context<Self>,
+        f: impl FnOnce(
+            &mut crate::results_panel::ResultsPanel,
+            &mut Context<crate::results_panel::ResultsPanel>,
+        ),
+    ) {
+        if let Some(panel) = self.editor_panel.read(cx).active_results_panel() {
+            panel.update(cx, f);
+        }
+    }
+
+    fn close_tabs(&mut self, scope: CloseScope, window: &mut Window, cx: &mut Context<Self>) {
+        self.editor_panel.update(cx, |panel, cx| {
+            panel.close_tabs_around_active(scope, window, cx);
+        });
+    }
+
     fn on_switch_theme(
         &mut self,
         action: &SwitchTheme,
@@ -3043,6 +3068,101 @@ impl Render for BlancoApp {
             .on_action(cx.listener(Self::on_refresh_snippets))
             .on_action(cx.listener(Self::on_activate_editor_tab))
             .on_action(cx.listener(Self::on_close_active_tab))
+            // The editor and its results handle these themselves while they
+            // have focus. They reach here from elsewhere, such as the command
+            // palette after it gives focus back to the sidebar, and go to the
+            // active tab.
+            .on_action(cx.listener(|this, _: &FormatQuery, window, cx| {
+                this.editor_panel
+                    .update(cx, |panel, cx| panel.format_current_query(window, cx));
+            }))
+            .on_action(cx.listener(|this, _: &UpperCaseKeywords, window, cx| {
+                this.editor_panel.update(cx, |panel, cx| {
+                    panel.change_keyword_case(KeywordCase::Upper, window, cx)
+                });
+            }))
+            .on_action(cx.listener(|this, _: &LowerCaseKeywords, window, cx| {
+                this.editor_panel.update(cx, |panel, cx| {
+                    panel.change_keyword_case(KeywordCase::Lower, window, cx)
+                });
+            }))
+            .on_action(cx.listener(|this, _: &ToggleFilterBar, window, cx| {
+                this.with_active_results(cx, |panel, cx| panel.toggle_filter_bar(window, cx));
+            }))
+            .on_action(cx.listener(|this, _: &ClearCompareSelection, _, cx| {
+                this.with_active_results(cx, |panel, cx| panel.clear_compare_selection(cx));
+            }))
+            .on_action(cx.listener(|this, _: &CopyAsCSV, window, cx| {
+                this.with_active_results(cx, |panel, cx| panel.copy_selected_as("csv", window, cx));
+            }))
+            .on_action(cx.listener(|this, _: &CopyAsTSV, window, cx| {
+                this.with_active_results(cx, |panel, cx| panel.copy_selected_as("tsv", window, cx));
+            }))
+            .on_action(cx.listener(|this, _: &CopyAsJSON, window, cx| {
+                this.with_active_results(cx, |panel, cx| {
+                    panel.copy_selected_as("json", window, cx)
+                });
+            }))
+            .on_action(cx.listener(|this, _: &CopyAsSQL, window, cx| {
+                this.with_active_results(cx, |panel, cx| panel.copy_selected_as("sql", window, cx));
+            }))
+            .on_action(cx.listener(|this, _: &CopyAsVALUES, window, cx| {
+                this.with_active_results(cx, |panel, cx| {
+                    panel.copy_selected_as("values", window, cx)
+                });
+            }))
+            .on_action(cx.listener(|this, _: &CopyAsMarkdown, window, cx| {
+                this.with_active_results(cx, |panel, cx| {
+                    panel.copy_selected_as("markdown", window, cx)
+                });
+            }))
+            .on_action(cx.listener(|this, _: &CopyAsHTML, window, cx| {
+                this.with_active_results(cx, |panel, cx| {
+                    panel.copy_selected_as("html", window, cx)
+                });
+            }))
+            .on_action(cx.listener(|this, _: &ExportAsCSV, window, cx| {
+                this.with_active_results(cx, |panel, cx| {
+                    panel.export_selected_as("csv", window, cx)
+                });
+            }))
+            .on_action(cx.listener(|this, _: &ExportAsTSV, window, cx| {
+                this.with_active_results(cx, |panel, cx| {
+                    panel.export_selected_as("tsv", window, cx)
+                });
+            }))
+            .on_action(cx.listener(|this, _: &ExportAsJSON, window, cx| {
+                this.with_active_results(cx, |panel, cx| {
+                    panel.export_selected_as("json", window, cx)
+                });
+            }))
+            .on_action(cx.listener(|this, _: &ExportAsSQL, window, cx| {
+                this.with_active_results(cx, |panel, cx| {
+                    panel.export_selected_as("sql", window, cx)
+                });
+            }))
+            .on_action(cx.listener(|this, _: &ExportAsMarkdown, window, cx| {
+                this.with_active_results(cx, |panel, cx| {
+                    panel.export_selected_as("markdown", window, cx)
+                });
+            }))
+            .on_action(cx.listener(|this, _: &ExportAsHTML, window, cx| {
+                this.with_active_results(cx, |panel, cx| {
+                    panel.export_selected_as("html", window, cx)
+                });
+            }))
+            .on_action(cx.listener(|this, _: &CloseOtherTabs, window, cx| {
+                this.close_tabs(CloseScope::Others, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &CloseTabsToTheLeft, window, cx| {
+                this.close_tabs(CloseScope::Left, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &CloseTabsToTheRight, window, cx| {
+                this.close_tabs(CloseScope::Right, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &CloseAllTabs, window, cx| {
+                this.close_tabs(CloseScope::All, window, cx)
+            }))
             .on_action(cx.listener(Self::on_open_sql_file))
             .on_action(cx.listener(Self::on_save_tab))
             .on_action(cx.listener(Self::on_save_tab_as))
@@ -3438,6 +3558,38 @@ mod tests {
             assert!(tab.is_creating());
             assert_eq!(tab.title, "New table");
         });
+    }
+
+    /// Editor actions run from outside the editor, as the command palette
+    /// does after giving focus back to the sidebar, reach the active tab.
+    #[gpui::test]
+    async fn test_editor_actions_reach_the_active_tab_without_focus(cx: &mut TestAppContext) {
+        let harness = FullAppHarness::new(cx);
+        let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+        let editor_panel = harness.editor_panel(&cx);
+        let app = harness.app;
+
+        let text = |cx: &mut VisualTestContext| {
+            editor_panel.read_with(cx, |panel, cx| {
+                let tab = panel.active_query_tab().expect("a query tab");
+                tab.editor.read(cx).text().to_string()
+            })
+        };
+        editor_panel.update_in(&mut cx, |panel, window, cx| {
+            let tab = panel.active_query_tab().expect("a query tab");
+            tab.editor.update(cx, |state, cx| {
+                state.set_value("select 1 from t", window, cx)
+            });
+        });
+
+        // Focus is on the app, outside the editor panel.
+        cx.update(|window, cx| {
+            let handle = app.read(cx).focus_handle(cx);
+            window.focus(&handle, cx);
+            window.dispatch_action(Box::new(UpperCaseKeywords), cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(text(&mut cx), "SELECT 1 FROM t");
     }
 
     #[gpui::test]

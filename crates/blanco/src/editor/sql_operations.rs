@@ -235,7 +235,7 @@ impl EditorPanel {
     }
 
     /// Format the current query/statement.
-    pub(super) fn format_current_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn format_current_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let tab_index = self.active_tab_ix;
 
         let Some(TabType::Query(query_tab)) = self.tabs.get(tab_index) else {

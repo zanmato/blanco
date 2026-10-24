@@ -27,7 +27,8 @@ mod table_structure;
 mod tabs;
 mod terminal_pane;
 
-pub(crate) use tab_actions::MovedTab;
+pub(crate) use sql_operations::KeywordCase;
+pub(crate) use tab_actions::{CloseScope, MovedTab};
 pub use tabs::{
     ConnectionBackedTab, ObjectDdlParams, OutlinedStatement, QueryTab, ScriptTab, SettingsTab,
     TabCreationParams, TabType, TableStructureParams,

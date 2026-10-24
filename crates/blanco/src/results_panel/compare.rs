@@ -188,6 +188,11 @@ impl ResultsPanel {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.clear_compare_selection(cx);
+    }
+
+    /// Forget the cell or row picked to compare with.
+    pub(crate) fn clear_compare_selection(&mut self, cx: &mut Context<Self>) {
         self.compare_selection = None;
         self.sync_compare_selection_kind(cx);
         cx.notify();
