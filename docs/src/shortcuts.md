@@ -51,6 +51,13 @@ one there too.
 | Open settings | <kbd>Super+,</kbd> | <kbd>Cmd+,</kbd> |
 | Toggle terminal | <kbd>Ctrl+`</kbd> | <kbd>Ctrl+`</kbd> |
 
+## Snippets
+
+| Action | Linux and Windows | macOS |
+| --- | --- | --- |
+| Rename snippet or group | <kbd>F2</kbd> | <kbd>F2</kbd> |
+| Duplicate snippet | <kbd>Ctrl+D</kbd> | <kbd>Cmd+D</kbd> |
+
 ## Data
 
 | Action | Linux and Windows | macOS |

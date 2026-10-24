@@ -117,6 +117,52 @@ impl AppDatabase {
         .await
     }
 
+    /// Give a snippet or group a new name, keeping everything else.
+    pub async fn rename_snippet(&self, id: i64, name: &str) -> Result<(), sqlx::Error> {
+        let pool = self.pool();
+        let name = name.to_string();
+        let now = chrono::Utc::now().timestamp();
+        self.run(async move {
+            sqlx::query("UPDATE snippets SET name = ?, updated_at = ? WHERE id = ?")
+                .bind(name)
+                .bind(now)
+                .bind(id)
+                .execute(&pool)
+                .await?;
+            Ok(())
+        })
+        .await
+    }
+
+    /// Store what a snippet's editor changes: its text, kind and trigger.
+    /// Its name, group and place in the group are left as they are.
+    pub async fn update_snippet_body(
+        &self,
+        id: i64,
+        content: &str,
+        kind: EditorKind,
+        trigger: Option<&str>,
+    ) -> Result<(), sqlx::Error> {
+        let pool = self.pool();
+        let content = content.to_string();
+        let trigger = trigger.map(str::to_string);
+        let now = chrono::Utc::now().timestamp();
+        self.run(async move {
+            sqlx::query(
+                "UPDATE snippets SET content = ?, kind = ?, trigger_word = ?, updated_at = ? WHERE id = ?",
+            )
+            .bind(content)
+            .bind(kind.as_str())
+            .bind(trigger)
+            .bind(now)
+            .bind(id)
+            .execute(&pool)
+            .await?;
+            Ok(())
+        })
+        .await
+    }
+
     pub async fn delete_snippet(&self, id: i64) -> Result<(), sqlx::Error> {
         let pool = self.pool();
         self.run(async move {
@@ -216,6 +262,31 @@ mod tests {
         };
         assert_eq!(kind_of(query_id), Some(EditorKind::Query));
         assert_eq!(kind_of(script_id), Some(EditorKind::Script));
+    }
+
+    #[tokio::test]
+    async fn renaming_and_editing_keep_the_group_and_place() {
+        let db = in_memory_db().await;
+        let mut group = snippet("Reports", "", EditorKind::Query);
+        group.is_group = true;
+        let group_id = db.save_snippet(&group).await.unwrap();
+        let mut child = snippet("counts", "SELECT 1", EditorKind::Query);
+        child.parent_id = Some(group_id);
+        child.position = 3;
+        let id = db.save_snippet(&child).await.unwrap();
+
+        db.rename_snippet(id, "row counts").await.unwrap();
+        db.update_snippet_body(id, "SELECT 2", EditorKind::Script, Some("rc"))
+            .await
+            .unwrap();
+
+        let loaded = db.get_snippet_by_id(id).await.unwrap().unwrap();
+        assert_eq!(loaded.name, "row counts");
+        assert_eq!(loaded.content, "SELECT 2");
+        assert_eq!(loaded.kind, EditorKind::Script);
+        assert_eq!(loaded.trigger.as_deref(), Some("rc"));
+        assert_eq!(loaded.parent_id, Some(group_id));
+        assert_eq!(loaded.position, 3);
     }
 
     #[tokio::test]

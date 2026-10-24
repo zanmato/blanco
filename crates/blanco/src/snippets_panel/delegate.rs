@@ -1,10 +1,9 @@
-use crate::app::NewSnippet;
-use crate::snippets_panel::{CreateGroup, DropPlacement, SnippetsPanel};
+use crate::snippets_panel::{DropPlacement, SnippetsPanel};
 use gpui::ClickEvent;
 use gpui::{
     App, Entity, InteractiveElement, ParentElement, Styled, Window, div, prelude::FluentBuilder, px,
 };
-use gpui_component::{ActiveTheme, Icon, h_flex};
+use gpui_component::{ActiveTheme, Icon, Sizable as _, h_flex, input::Input};
 use gpui_component::{
     label::Label,
     list::ListItem,
@@ -110,6 +109,7 @@ impl DraggableTreeDelegate for SnippetsTreeDelegate {
         };
 
         let item_id_for_click = item.id.to_string();
+        let rename_input = snippet_id(item_id).and_then(|id| self.parent.read(cx).rename_input(id));
         let icon_color = if is_group {
             cx.theme().blue
         } else {
@@ -140,13 +140,22 @@ impl DraggableTreeDelegate for SnippetsTreeDelegate {
                         )
                     })
                     .child(Icon::new(icon_name).text_color(icon_color))
-                    .child(Label::new(item.label.clone()).text_sm())
-                    .child(div().flex_1()),
+                    .map(|this| match rename_input {
+                        Some(input) => {
+                            this.child(div().flex_1().min_w_0().child(Input::new(&input).xsmall()))
+                        }
+                        None => this
+                            .child(Label::new(item.label.clone()).text_sm())
+                            .child(div().flex_1()),
+                    }),
             )
             .on_click(window.listener_for(
                 &self.parent,
                 move |this, event: &ClickEvent, window, cx| {
-                    if event.click_count() == 2 {
+                    // Clicks in the name field place the caret, and open nothing.
+                    let renaming = snippet_id(&item_id_for_click)
+                        .is_some_and(|id| this.rename_input(id).is_some());
+                    if event.click_count() == 2 && !renaming {
                         this.handle_snippet_double_click(&item_id_for_click, window, cx);
                     }
                 },
@@ -161,48 +170,63 @@ impl DraggableTreeDelegate for SnippetsTreeDelegate {
         window: &mut Window,
         cx: &mut App,
     ) -> PopupMenu {
-        let mut context_menu = menu
-            .menu("New Snippet", Box::new(NewSnippet))
-            .menu("New Group", Box::new(CreateGroup));
+        let metadata =
+            entry.and_then(|entry| self.get_snippet_metadata(entry.item().id.as_ref(), cx));
+        // New items go into the group right clicked, or beside the snippet.
+        let parent_id = metadata
+            .as_ref()
+            .and_then(|m| if m.is_group { Some(m.id) } else { m.parent_id });
+        let panel = &self.parent;
+        let create = |label: &'static str, is_group: bool| {
+            PopupMenuItem::new(label).on_click(window.listener_for(
+                panel,
+                move |this, _, window, cx| {
+                    this.create_item(is_group, parent_id, window, cx);
+                },
+            ))
+        };
+        let context_menu = menu
+            .item(create("New Snippet", false))
+            .item(create("New Group", true));
 
-        let Some(entry) = entry else {
+        let Some(metadata) = metadata else {
             return context_menu;
         };
-
-        let item_id = entry.item().id.as_ref();
-        let metadata = self.get_snippet_metadata(item_id, cx);
-
-        context_menu = context_menu.separator();
-        if let Some(metadata) = metadata {
-            if !metadata.is_group {
-                context_menu
-                    .item(
-                        PopupMenuItem::new("Copy Snippet").on_click(window.listener_for(
-                            &self.parent,
-                            move |this, _event, _window, cx| {
-                                this.copy_snippet_to_clipboard(metadata.id, cx);
-                            },
-                        )),
-                    )
-                    .item(PopupMenuItem::new("Delete").on_click(window.listener_for(
-                        &self.parent,
-                        move |this, _event, window, cx| {
-                            this.delete_snippet(metadata.id, metadata.name.clone(), window, cx);
-                        },
-                    )))
-            } else {
-                context_menu.item(
-                    PopupMenuItem::new("Delete Group").on_click(window.listener_for(
-                        &self.parent,
-                        move |this, _event, window, cx| {
-                            this.delete_snippet(metadata.id, metadata.name.clone(), window, cx);
-                        },
-                    )),
-                )
-            }
-        } else {
-            context_menu
+        let id = metadata.id;
+        let rename = PopupMenuItem::new("Rename").on_click(
+            window.listener_for(panel, move |this, _, window, cx| {
+                this.rename_after_menu(id, window, cx)
+            }),
+        );
+        let context_menu = context_menu.separator().item(rename);
+        if metadata.is_group {
+            return context_menu.item(PopupMenuItem::new("Delete Group").on_click(
+                window.listener_for(panel, move |this, _event, window, cx| {
+                    this.delete_snippet(metadata.id, metadata.name.clone(), window, cx);
+                }),
+            ));
         }
+        context_menu
+            .item(PopupMenuItem::new("Duplicate").on_click(
+                window.listener_for(panel, move |this, _, window, cx| {
+                    this.duplicate_snippet(id, window, cx)
+                }),
+            ))
+            .item(
+                PopupMenuItem::new("Copy Snippet").on_click(window.listener_for(
+                    panel,
+                    move |this, _event, _window, cx| {
+                        this.copy_snippet_to_clipboard(id, cx);
+                    },
+                )),
+            )
+            .separator()
+            .item(PopupMenuItem::new("Delete").on_click(window.listener_for(
+                panel,
+                move |this, _event, window, cx| {
+                    this.delete_snippet(metadata.id, metadata.name.clone(), window, cx);
+                },
+            )))
     }
 
     fn can_drag(&self, _item_id: &str, _entry: &TreeEntry, _cx: &App) -> bool {

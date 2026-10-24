@@ -8,6 +8,7 @@ use crate::app::{
     ToggleFilterBar, ToggleResults, ToggleSidebar, UpperCaseKeywords,
 };
 use crate::settings::Settings;
+use crate::snippets_panel::{DuplicateSnippet, RenameSnippet};
 
 /// A keyboard shortcut the user can rebind from the settings UI.
 pub struct BindingDef {
@@ -35,7 +36,9 @@ const INPUT_CONTEXT: &str = "Input";
 const NOT_TERMINAL: &str = "!Terminal";
 
 /// The groups of the settings page, in order.
-pub const BINDING_GROUPS: &[&str] = &["Query", "File", "Tabs", "View", "Data", "Editor"];
+pub const BINDING_GROUPS: &[&str] = &[
+    "Query", "File", "Tabs", "View", "Data", "Editor", "Snippets",
+];
 
 /// The set of actions exposed for rebinding. Platform-fixed bindings such as
 /// Quit are intentionally excluded.
@@ -251,6 +254,20 @@ pub const CUSTOMIZABLE_BINDINGS: &[BindingDef] = &[
         context: None,
     },
     BindingDef {
+        action: "RenameSnippet",
+        label: "Rename snippet or group",
+        group: "Snippets",
+        default: "f2",
+        context: None,
+    },
+    BindingDef {
+        action: "DuplicateSnippet",
+        label: "Duplicate snippet",
+        group: "Snippets",
+        default: "secondary-d",
+        context: Some(blanco_ui::draggable_tree::CONTEXT),
+    },
+    BindingDef {
         action: "ReopenClosedTab",
         label: "Reopen closed tab",
         group: "Tabs",
@@ -406,6 +423,8 @@ fn key_binding(action: &str, keystrokes: &str, context: Option<&str>) -> Option<
         "RefreshConnections" => gpui::KeyBinding::new(keystrokes, RefreshConnections, context),
         "NewQueryTab" => gpui::KeyBinding::new(keystrokes, NewQueryTab, context),
         "CloseActiveTab" => gpui::KeyBinding::new(keystrokes, CloseActiveTab, context),
+        "RenameSnippet" => gpui::KeyBinding::new(keystrokes, RenameSnippet, context),
+        "DuplicateSnippet" => gpui::KeyBinding::new(keystrokes, DuplicateSnippet, context),
         "CloseOtherTabs" => gpui::KeyBinding::new(keystrokes, CloseOtherTabs, context),
         "CloseTabsToTheLeft" => gpui::KeyBinding::new(keystrokes, CloseTabsToTheLeft, context),
         "CloseTabsToTheRight" => gpui::KeyBinding::new(keystrokes, CloseTabsToTheRight, context),

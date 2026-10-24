@@ -24,7 +24,6 @@ pub struct SnippetEditor {
     pub snippet_id: Option<i64>,
     pub name: String,
     pub kind: EditorKind,
-    pub name_input: Entity<InputState>,
     /// The word that offers the snippet in completion, optional.
     pub trigger_input: Entity<InputState>,
     pub editor: Entity<EditorState>,
@@ -32,7 +31,6 @@ pub struct SnippetEditor {
 
 impl SnippetEditor {
     pub fn new(kind: EditorKind, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let name_input = cx.new(|cx| InputState::new(window, cx).placeholder("Snippet name"));
         let trigger_input = cx.new(|cx| InputState::new(window, cx).placeholder("Trigger word"));
         let editor = Self::build_editor(kind, window, cx);
 
@@ -40,7 +38,6 @@ impl SnippetEditor {
             snippet_id: None,
             name: String::new(),
             kind,
-            name_input,
             trigger_input,
             editor,
         }
@@ -106,10 +103,6 @@ impl SnippetEditor {
         self.name = snippet.name.clone();
         self.set_kind(snippet.kind, window, cx);
 
-        // Update name input
-        self.name_input.update(cx, |input, cx| {
-            input.replace_all(&snippet.name, window, cx);
-        });
         self.trigger_input.update(cx, |input, cx| {
             input.replace_all(snippet.trigger.as_deref().unwrap_or_default(), window, cx);
         });
@@ -122,14 +115,16 @@ impl SnippetEditor {
         cx.notify();
     }
 
-    pub fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let name = self.name_input.read(cx).value().to_string();
-        let content = self.editor.read(cx).text().to_string();
+    /// Take the snippet's new name after it was renamed in the sidebar.
+    pub fn set_name(&mut self, name: &str, cx: &mut Context<Self>) {
+        self.name = name.to_string();
+        cx.notify();
+    }
 
-        if name.trim().is_empty() {
-            cx.notify();
-            return;
-        }
+    /// Save the snippet's text, kind and trigger. Its name and its place in
+    /// the sidebar belong to the sidebar, which renames and moves it.
+    pub fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let content = self.editor.read(cx).text().to_string();
         let trigger = self.trigger_input.read(cx).value().trim().to_string();
         if trigger.chars().any(char::is_whitespace) {
             window.push_notification(
@@ -141,50 +136,48 @@ impl SnippetEditor {
             );
             return;
         }
-
-        let snippet = SnippetData {
-            id: self.snippet_id,
-            name: name.clone(),
-            content,
-            kind: self.kind,
-            parent_id: None,
-            is_group: false,
-            position: 0,
-            trigger: (!trigger.is_empty()).then_some(trigger),
+        let trigger = (!trigger.is_empty()).then_some(trigger);
+        let kind = self.kind;
+        let snippet_id = self.snippet_id;
+        let name = match self.name.trim() {
+            "" => self.get_title(),
+            name => name.to_string(),
         };
 
-        let snippet_id = self.snippet_id;
-
         let app_database = AppDatabase::global(cx).clone();
-        cx.spawn(async move |weak_handle: WeakEntity<SnippetEditor>, cx| {
-            let saved_id = match app_database.save_snippet(&snippet).await {
-                Ok(id) => id,
-                Err(err) => {
-                    tracing::error!("Failed to save snippet: {}", err);
-                    return;
+        let save = gpui_tokio::Tokio::spawn_result(cx, async move {
+            match snippet_id {
+                Some(id) => {
+                    app_database
+                        .update_snippet_body(id, &content, kind, trigger.as_deref())
+                        .await?;
+                    Ok(id)
                 }
+                // A snippet that was never stored goes to the top level.
+                None => Ok(app_database
+                    .save_snippet(&SnippetData {
+                        id: None,
+                        name,
+                        content,
+                        kind,
+                        parent_id: None,
+                        is_group: false,
+                        position: 0,
+                        trigger,
+                    })
+                    .await?),
+            }
+        });
+        cx.spawn(async move |weak_handle: WeakEntity<SnippetEditor>, cx| {
+            let Some(id) = save.await.log_err() else {
+                return;
             };
-
-            let saved_name = name.clone();
-            let id = if let Some(id) = snippet_id {
-                id
-            } else {
-                saved_id
-            };
-
-            // Update the entity with the new snippet ID
             weak_handle
-                .update(cx, |editor, _cx| {
-                    editor.snippet_id = Some(id);
-                    editor.name = saved_name.clone();
-                })
+                .update(cx, |editor, _cx| editor.snippet_id = Some(id))
                 .log_err();
-            cx.update(|cx| {
-                cx.dispatch_action(&RefreshSnippets);
-            });
+            cx.update(|cx| cx.dispatch_action(&RefreshSnippets));
         })
         .detach();
-        window.dispatch_action(Box::new(RefreshSnippets), cx);
     }
 
     /// SQL/Script switch in the footer. Which one a snippet is decides its
@@ -251,7 +244,7 @@ impl Render for SnippetEditor {
                     .rounded_b(crate::app::PANEL_RADIUS)
                     .items_center()
                     .child(self.render_kind_toggle(cx))
-                    .child(div().flex_1().child(Input::new(&self.name_input).small()))
+                    .child(div().flex_1())
                     .child(
                         div()
                             .w(px(160.))

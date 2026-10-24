@@ -45,7 +45,7 @@ use crate::{
     },
     history_panel::{HistoryPanel, HistoryPanelEvent},
     result_ext::ResultExt,
-    snippets_panel::{RefreshSnippets, SnippetsPanel, SnippetsPanelEvent},
+    snippets_panel::{RefreshSnippets, RenameSnippet, SnippetsPanel, SnippetsPanelEvent},
     status_bar::{ActivityReporter, StatusBarState, StatusKind},
     update_manager::{UpdateManager, UpdateState},
 };
@@ -1179,8 +1179,18 @@ impl BlancoApp {
         subscriptions.push(cx.subscribe_in(
             snippets_panel,
             window,
-            move |_app, _snippets_panel, event, _window, _cx| match event {
+            move |app, _snippets_panel, event, window, cx| match event {
                 SnippetsPanelEvent::SnippetDeleted => {}
+                SnippetsPanelEvent::OpenSnippet(id) => {
+                    app.editor_panel.update(cx, |panel, cx| {
+                        panel.open_snippet_tab(*id, window, cx);
+                    });
+                }
+                SnippetsPanelEvent::SnippetRenamed { id, name } => {
+                    app.editor_panel.update(cx, |panel, cx| {
+                        panel.rename_snippet_tabs(*id, name, cx);
+                    });
+                }
             },
         ));
 
@@ -1713,6 +1723,11 @@ impl BlancoApp {
     }
 
     #[cfg(test)]
+    pub fn snippets_panel(&self) -> &Entity<SnippetsPanel> {
+        &self.snippets_panel
+    }
+
+    #[cfg(test)]
     pub fn open_tabs_panel(&self) -> &Entity<OpenTabsPanel> {
         &self.open_tabs_panel
     }
@@ -1826,10 +1841,42 @@ impl BlancoApp {
         crate::settings::apply_theme_by_name(&action.name, cx);
     }
 
+    /// Add a snippet in the Snippets panel, where it is named, and open it.
     fn on_new_snippet(&mut self, _: &NewSnippet, window: &mut Window, cx: &mut Context<Self>) {
-        self.editor_panel.update(cx, |panel, cx| {
-            panel.create_snippet_tab(window, cx);
+        self.show_snippets(cx);
+        self.snippets_panel.update(cx, |panel, cx| {
+            panel.create_item(false, None, window, cx);
         });
+    }
+
+    /// F2 in a snippet's editor renames the snippet in the Snippets panel.
+    fn on_rename_snippet(
+        &mut self,
+        _: &RenameSnippet,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(editor) = self.editor_panel.read(cx).active_snippet_editor() else {
+            return;
+        };
+        let editor = editor.read(cx);
+        if !editor.focus_handle(cx).contains_focused(window, cx) {
+            return;
+        }
+        let Some(id) = editor.snippet_id else {
+            return;
+        };
+        self.show_snippets(cx);
+        self.snippets_panel.update(cx, |panel, cx| {
+            panel.rename_after_menu(id, window, cx);
+        });
+    }
+
+    /// Show the Snippets panel, opening the sidebar if it is closed.
+    fn show_snippets(&mut self, cx: &mut Context<Self>) {
+        self.sidebar_tab = SidebarTab::Snippets;
+        self.sidebar_collapsed = false;
+        cx.notify();
     }
 
     fn on_open_snippet_editor(
@@ -3063,6 +3110,7 @@ impl Render for BlancoApp {
             .on_action(cx.listener(Self::on_refresh_snippets))
             .on_action(cx.listener(Self::on_activate_editor_tab))
             .on_action(cx.listener(Self::on_close_active_tab))
+            .on_action(cx.listener(Self::on_rename_snippet))
             // The editor and its results handle these themselves while they
             // have focus. They reach here from elsewhere, such as the command
             // palette after it gives focus back to the sidebar, and go to the

@@ -674,6 +674,26 @@ impl EditorPanel {
         cx.notify();
     }
 
+    /// The editor of the active tab, when it is a snippet.
+    pub(crate) fn active_snippet_editor(&self) -> Option<Entity<SnippetEditor>> {
+        match self.tabs.get(self.active_tab_ix)? {
+            TabType::Snippet(editor) => Some(editor.clone()),
+            _ => None,
+        }
+    }
+
+    /// Give open editors of the snippet `id` its new name.
+    pub(crate) fn rename_snippet_tabs(&mut self, id: i64, name: &str, cx: &mut Context<Self>) {
+        for tab in &self.tabs {
+            if let TabType::Snippet(editor) = tab
+                && editor.read(cx).snippet_id == Some(id)
+            {
+                editor.update(cx, |editor, cx| editor.set_name(name, cx));
+            }
+        }
+        cx.notify();
+    }
+
     pub fn open_snippet_tab(
         &mut self,
         snippet_id: i64,
