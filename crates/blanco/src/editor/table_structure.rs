@@ -135,10 +135,9 @@ impl TableStructureTab {
     ) -> Self {
         let title = table_name.clone();
 
-        let highlight_theme = cx.theme().highlight_theme.clone();
         let language = crate::sql::highlight_language(context.db_type);
-        let ddl_log = cx.new(|cx| SqlView::new(1, highlight_theme.clone(), language, cx));
-        let apply_preview = cx.new(|cx| SqlView::new(usize::MAX, highlight_theme, language, cx));
+        let ddl_log = cx.new(|cx| SqlView::new(1, language, cx));
+        let apply_preview = cx.new(|cx| SqlView::new(usize::MAX, language, cx));
 
         let indexes = order_indexes(indexes, &columns);
         let tab = cx.entity().downgrade();

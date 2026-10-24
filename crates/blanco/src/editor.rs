@@ -40,7 +40,7 @@ use gpui::{
     Keystroke, ParentElement as _, Task, WeakEntity, Window,
 };
 use gpui_component::{
-    ActiveTheme, WindowExt as _,
+    WindowExt as _,
     button::{Button, ButtonVariants as _},
     dialog::{DialogClose, DialogFooter},
     input::{EditorState, InputEvent, TabSize},
@@ -1296,7 +1296,6 @@ impl EditorPanel {
             sql_view: cx.new(|cx| {
                 SqlView::new(
                     10,
-                    cx.theme().highlight_theme.clone(),
                     crate::sql::highlight_language(params.context.db_type),
                     cx,
                 )
@@ -1305,7 +1304,6 @@ impl EditorPanel {
             commit_preview: cx.new(|cx| {
                 SqlView::new(
                     usize::MAX,
-                    cx.theme().highlight_theme.clone(),
                     crate::sql::highlight_language(params.context.db_type),
                     cx,
                 )
@@ -1421,13 +1419,8 @@ impl EditorPanel {
                 file: None,
             },
             log_view: cx.new(|cx| {
-                SqlView::new(
-                    SCRIPT_LOG_MAX_LINES,
-                    cx.theme().highlight_theme.clone(),
-                    SCRIPT_EDITOR_LANGUAGE,
-                    cx,
-                )
-                .show_copy_button(false)
+                SqlView::new(SCRIPT_LOG_MAX_LINES, SCRIPT_EDITOR_LANGUAGE, cx)
+                    .show_copy_button(false)
             }),
             log_visible: true,
         };

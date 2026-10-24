@@ -833,13 +833,8 @@ impl BlancoApp {
         let title = confirmation.title();
         let target = confirmation.target();
         let sql_view = cx.new(|cx| {
-            let mut view = SqlView::new(
-                usize::MAX,
-                cx.theme().highlight_theme.clone(),
-                confirmation.language,
-                cx,
-            )
-            .show_copy_button(false);
+            let mut view =
+                SqlView::new(usize::MAX, confirmation.language, cx).show_copy_button(false);
             view.append_text(&SqlViewMessage::SqlStatement(confirmation.sql), cx);
             view
         });

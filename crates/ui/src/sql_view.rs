@@ -12,9 +12,9 @@ use gpui_base::{
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::highlighter::{HighlightTheme, SyntaxHighlighter};
 use gpui_component::scroll::ScrollableElement as _;
+use gpui_component::theme::Theme;
 use gpui_component::{ActiveTheme, IconName, Sizable as _};
 use std::ops::Range;
-use std::sync::Arc;
 use std::time::Duration;
 
 pub enum SqlViewMessage {
@@ -44,7 +44,6 @@ pub struct SqlView {
     entries: Vec<LogEntry>,
     next_sequence: u64,
     max_entries: usize,
-    theme: Arc<HighlightTheme>,
     language: SharedString,
     scroll_handle: ScrollHandle,
     /// Takes focus when a selection starts in the log, so the copy shortcut
@@ -52,6 +51,9 @@ pub struct SqlView {
     focus_handle: FocusHandle,
     copied: bool,
     show_copy_button: bool,
+    /// Entries keep the colors of the theme they were highlighted with, so a
+    /// theme change highlights them again.
+    _rehighlight_on_theme_change: Subscription,
 }
 
 impl SqlView {
@@ -59,7 +61,6 @@ impl SqlView {
     /// statements with the given highlighter `language`.
     pub fn new(
         max_entries: usize,
-        theme: Arc<HighlightTheme>,
         language: impl Into<SharedString>,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -67,13 +68,21 @@ impl SqlView {
             entries: Vec::new(),
             next_sequence: 0,
             max_entries,
-            theme,
             language: language.into(),
             scroll_handle: ScrollHandle::default(),
             focus_handle: cx.focus_handle(),
             copied: false,
             show_copy_button: true,
+            _rehighlight_on_theme_change: cx.observe_global::<Theme>(Self::rehighlight),
         }
+    }
+
+    fn rehighlight(&mut self, cx: &mut Context<Self>) {
+        let theme = cx.theme().highlight_theme.clone();
+        for entry in &mut self.entries {
+            entry.highlights = highlight(&self.language, &entry.text, &theme);
+        }
+        cx.notify();
     }
 
     /// Line-comment prefix for the view's language. Redis config-style `#`,
@@ -136,15 +145,8 @@ impl SqlView {
             SqlViewMessage::Comment(comment) => comment_lines(self.line_comment_prefix(), comment),
         };
 
-        // Create a new highlighter for this entry, parse, and compute styles once.
-        // Highlight ranges are cached on the entry so render() doesn't redo this work
-        // on every frame.
-        let mut highlighter = SyntaxHighlighter::new(self.language.as_ref());
-        let rope = ropey::Rope::from(&new_text[..]);
-        highlighter.update(None, &rope, None);
-        let highlights = highlighter
-            .styles(&(0..new_text.len()), self.theme.as_ref())
-            .into_boxed_slice();
+        // Highlights are kept on the entry so render() doesn't parse every frame.
+        let highlights = highlight(&self.language, &new_text, &cx.theme().highlight_theme);
 
         let text = SharedString::from(new_text);
         let selection = TextSelectionHandle::new(text.clone(), cx);
@@ -451,6 +453,18 @@ impl Element for SelectableLogEntry {
     }
 }
 
+fn highlight(
+    language: &str,
+    text: &str,
+    theme: &HighlightTheme,
+) -> Box<[(Range<usize>, HighlightStyle)]> {
+    let mut highlighter = SyntaxHighlighter::new(language);
+    highlighter.update(None, &ropey::Rope::from(text), None);
+    highlighter
+        .styles(&(0..text.len()), theme)
+        .into_boxed_slice()
+}
+
 /// Comment out every line of `text`, not just the first. Log messages carry
 /// multi-line payloads (a JS stack trace, a driver error with detail lines),
 /// and prefixing only the first line leaves the rest highlighted as code and
@@ -477,7 +491,31 @@ mod tests {
     use super::{SqlView, SqlViewMessage, comment_lines};
     use gpui::{AppContext as _, Modifiers, MouseButton, TestAppContext, VisualTestContext, px};
     use gpui_base::TextSelection;
-    use gpui_component::ActiveTheme as _;
+
+    /// Entries are highlighted when they are appended, so a theme applied
+    /// later has to recolor the ones already in the log.
+    #[gpui::test]
+    fn a_theme_change_recolors_logged_entries(cx: &mut TestAppContext) {
+        let view = cx.update(|cx| {
+            gpui_component::init(cx);
+            gpui_component::Theme::change(gpui_component::ThemeMode::Light, None, cx);
+            // The SQL grammars are registered by the app, so this crate's tests
+            // use a language gpui-component has built in.
+            let view = cx.new(|cx| SqlView::new(10, "javascript", cx));
+            view.update(cx, |view, cx| {
+                view.append_text(&SqlViewMessage::SqlStatement("const total = 1;".into()), cx)
+            });
+            view
+        });
+        let light = view.read_with(cx, |view, _| view.entries[0].highlights.clone());
+        assert!(!light.is_empty(), "the statement should be highlighted");
+
+        cx.update(|cx| gpui_component::Theme::change(gpui_component::ThemeMode::Dark, None, cx));
+        cx.run_until_parked();
+
+        let dark = view.read_with(cx, |view, _| view.entries[0].highlights.clone());
+        assert_ne!(light, dark);
+    }
 
     /// Dragging across the log selects its text through the window's selection
     /// layer, which is what the copy shortcut reads.
@@ -487,7 +525,7 @@ mod tests {
             gpui_component::init(cx);
             cx.open_window(Default::default(), |window, cx| {
                 let view = cx.new(|cx| {
-                    let mut view = SqlView::new(10, cx.theme().highlight_theme.clone(), "sql", cx);
+                    let mut view = SqlView::new(10, "sql", cx);
                     view.append_text(&SqlViewMessage::SqlStatement("SELECT 1".into()), cx);
                     view.append_text(&SqlViewMessage::Comment("1 row".into()), cx);
                     view
@@ -526,8 +564,7 @@ mod tests {
             let window = cx
                 .open_window(Default::default(), |window, cx| {
                     let log = cx.new(|cx| {
-                        let mut log =
-                            SqlView::new(10, cx.theme().highlight_theme.clone(), "sql", cx);
+                        let mut log = SqlView::new(10, "sql", cx);
                         log.append_text(&SqlViewMessage::SqlStatement("SELECT 1".into()), cx);
                         log.append_text(&SqlViewMessage::Comment("1 row".into()), cx);
                         log

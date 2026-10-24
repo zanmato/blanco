@@ -28,9 +28,8 @@ impl ObjectDdlTab {
         cx: &mut Context<Self>,
     ) -> Self {
         let title = format!("{}: {}", kind.display_name().to_lowercase(), object_name);
-        let highlight_theme = cx.theme().highlight_theme.clone();
         let language = crate::sql::highlight_language(context.db_type);
-        let sql_view = cx.new(|cx| SqlView::new(1, highlight_theme, language, cx));
+        let sql_view = cx.new(|cx| SqlView::new(1, language, cx));
         Self {
             title,
             kind,
