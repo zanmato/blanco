@@ -14,6 +14,10 @@ use blanco_ui::draggable_tree::{
     DraggableTreeDelegate, DraggedTreeItem, InsertPosition, TreeEntry,
 };
 
+/// How far the rename field's text sits inside its box: an extra-small
+/// input's padding and its border.
+const RENAME_FIELD_INSET: gpui::Pixels = px(5.);
+
 /// Metadata for snippet items in the tree
 #[derive(Clone, Debug)]
 pub struct SnippetItemMetadata {
@@ -141,9 +145,32 @@ impl DraggableTreeDelegate for SnippetsTreeDelegate {
                     })
                     .child(Icon::new(icon_name).text_color(icon_color))
                     .map(|this| match rename_input {
-                        Some(input) => {
-                            this.child(div().flex_1().min_w_0().child(Input::new(&input).xsmall()))
-                        }
+                        // The field is laid over the hidden label, so the row
+                        // keeps its height and nothing in it moves. It is taller
+                        // than the label and overflows it evenly, and it starts
+                        // its padding and border to the left so the name stays
+                        // where it was.
+                        Some(input) => this.child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .relative()
+                                .child(
+                                    div()
+                                        .invisible()
+                                        .child(Label::new(item.label.clone()).text_sm()),
+                                )
+                                .child(
+                                    h_flex()
+                                        .absolute()
+                                        .top_0()
+                                        .bottom_0()
+                                        .left(-RENAME_FIELD_INSET)
+                                        .right_0()
+                                        .items_center()
+                                        .child(Input::new(&input).xsmall()),
+                                ),
+                        ),
                         None => this
                             .child(Label::new(item.label.clone()).text_sm())
                             .child(div().flex_1()),
