@@ -8,7 +8,10 @@
 # filter chart explain schema-graph history palette settings export import
 # (default: all).
 # Writes docs/images/screenshots/<scene>-<theme>.webp, and a lossless
-# <scene>-<theme>.png per capture into $PNG_DIR when that is set.
+# <scene>-<theme>.png per capture into $PNG_DIR when that is set. With
+# $SNAPSHOT_DIR set, also writes a vector snapshot of each capture there as
+# <scene>-<theme>.json, for scripts/motion; that needs the `scene-export`
+# feature as well.
 #
 # Needs Xvfb, ImageMagick, x11-utils, sqlite3, python3, dbus-run-session and Mesa's
 # lavapipe Vulkan driver. The terminal scene starts Claude Code, which needs
@@ -35,7 +38,9 @@ themes=("latte:Catppuccin Latte" "mocha:Catppuccin Mocha")
 editor_themes=("macchiato:Catppuccin Macchiato")
 
 if [[ -z "${BLANCO_BIN:-}" ]]; then
-  cargo build --release -p blanco --features screenshots
+  features=screenshots
+  [[ -n "${SNAPSHOT_DIR:-}" ]] && features+=,scene-export
+  cargo build --release -p blanco --features "$features"
   BLANCO_BIN="$root/target/release/blanco"
 fi
 
@@ -138,7 +143,7 @@ cat > "$work/dbus.conf" <<'EOF'
 EOF
 
 lavapipe=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json 2>/dev/null | head -n1 || true)
-mkdir -p "$out" ${PNG_DIR:+"$PNG_DIR"}
+mkdir -p "$out" ${PNG_DIR:+"$PNG_DIR"} ${SNAPSHOT_DIR:+"$SNAPSHOT_DIR"}
 
 # Give the throwaway home just enough Claude Code setup to start straight into
 # a session: the login, onboarding done, the agent workspace trusted and
@@ -227,6 +232,7 @@ EOF
     BLANCO_THEME="$theme" \
     BLANCO_DEMO_DB="$work/groove-records.db" \
     BLANCO_SCENE_READY="$run/ready" \
+    ${SNAPSHOT_DIR:+BLANCO_SCENE_EXPORT="$SNAPSHOT_DIR/$scene-$slug.json"} \
     dbus-run-session --config-file="$work/dbus.conf" -- "$BLANCO_BIN" >"$run/app.log" 2>&1 &
   app_pid=$!
   DISPLAY="$display" "$root/scripts/screenshots/focus-window" 60

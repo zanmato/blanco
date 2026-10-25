@@ -29,6 +29,8 @@ mod redis_completion;
 mod redis_syntax;
 mod result_ext;
 mod results_panel;
+#[cfg(all(feature = "scene-export", not(target_os = "windows")))]
+mod scene_export;
 #[cfg(feature = "screenshots")]
 mod screenshots;
 mod script_completion;
@@ -49,6 +51,7 @@ use assets::Assets;
 use database::DatabaseService;
 use gpui::AssetSource as _;
 use gpui_component::ThemeRegistry;
+#[cfg(not(all(feature = "scene-export", not(target_os = "windows"))))]
 use gpui_platform::application;
 
 use crate::{app_settings::AppSettings, settings::Settings};
@@ -70,7 +73,13 @@ fn main() {
         None => subscriber.init(),
     }
     logging::install_panic_hook();
-    let app = application()
+    #[cfg(all(feature = "scene-export", not(target_os = "windows")))]
+    let app = gpui::Application::with_platform(scene_export::wrap(
+        gpui_platform::current_platform(false),
+    ));
+    #[cfg(not(all(feature = "scene-export", not(target_os = "windows"))))]
+    let app = application();
+    let app = app
         .with_quit_mode(gpui::QuitMode::LastWindowClosed)
         .with_assets(Assets);
 

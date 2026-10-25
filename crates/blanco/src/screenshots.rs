@@ -4,7 +4,10 @@
 //!
 //! `BLANCO_SCENE` names the scene to stage, `BLANCO_DEMO_DB` the SQLite file
 //! the demo connection opens, `BLANCO_THEME` the theme and `BLANCO_SCENE_READY`
-//! the file written once the window shows the scene.
+//! the file written once the window shows the scene. With the `scene-export`
+//! feature, `BLANCO_SCENE_EXPORT` names a file the shown frame is written to
+//! as a vector snapshot first. `BLANCO_FONT` and `BLANCO_MONO_FONT`, when set,
+//! replace the theme's fonts.
 
 use std::time::Duration;
 
@@ -13,7 +16,7 @@ use app_database::{
 };
 use blanco_core::ddl::{ColumnOperation, ColumnSpec, IndexOperation, IndexSpec};
 use blanco_core::{ConnectionContext, DatabaseType};
-use gpui::{App, AppContext, AsyncWindowContext, Entity, Window};
+use gpui::{App, AppContext, AsyncWindowContext, Entity, Focusable as _, Window};
 use tokio::runtime::Handle;
 
 use crate::app::{
@@ -91,6 +94,34 @@ console.log(`${restock.length} need restocking`);
 db.display(restock);
 "#;
 
+/// [`Scene::Motion`] starts the low stock tab with these statements, then
+/// types [`MOTION_STATEMENT`] after them a line at a time.
+const MOTION_DOCUMENT: &str = r#"-- Orders waiting to ship
+SELECT COUNT(*) AS pending FROM orders WHERE status = 'pending';
+
+-- Best sellers of all time
+SELECT title, artist, copies FROM album_sales ORDER BY copies DESC LIMIT 20;
+
+-- Albums about to sell out
+"#;
+
+const MOTION_STATEMENT: [&str; 4] = [
+    "SELECT id, title, format, price, stock, details\n",
+    "FROM albums\n",
+    "WHERE stock < 3\n",
+    "ORDER BY stock, title;",
+];
+
+/// The stock cell [`Scene::Motion`] edits, and what it types into it.
+const MOTION_EDIT_CELL: (usize, usize) = (0, 4);
+const MOTION_EDIT_VALUE: &str = "25";
+/// The details cell [`Scene::Motion`] opens in the expanded JSON editor.
+const MOTION_JSON_CELL: (usize, usize) = (0, 5);
+/// The cell [`Scene::Motion`] right clicks for its context menu, by its text,
+/// and the menu item it then points at.
+const MOTION_MENU_CELL: &str = "Blue Room";
+const MOTION_MENU_ITEM: &str = "Copy as";
+
 /// [`Scene::JsonEdit`] opens this in a tab of its own and expands the
 /// preferences of the row at [`JSON_EDIT_CELL`].
 const CUSTOMERS_QUERY: &str = "SELECT id, first_name, last_name, city, preferences FROM customers";
@@ -158,6 +189,14 @@ pub(crate) enum Scene {
     Export,
     /// The import dialog with a CSV of new releases loaded.
     Import,
+    /// Not a screenshot: the keyframes of the website's motion demo, each
+    /// exported as a snapshot into the directory `BLANCO_SCENE_EXPORT` names.
+    /// A statement typed a line at a time, which the editor frames as it
+    /// grows; its result; a stock cell in that result edited in place; and a
+    /// JSON cell opened in the expanded editor. Then, for the hotspots shown
+    /// when the demo stops, a cell's context menu with Copy as open, and the
+    /// script tab.
+    Motion,
     /// Not a screenshot: a grid of 1 MB text values, scrolled and then
     /// redrawn in place, after which the app quits. Run with
     /// `ZED_MEASUREMENTS=1` to time each frame (scripts/measure-frames).
@@ -188,6 +227,7 @@ impl Scene {
             "settings" => Some(Self::Settings),
             "export" => Some(Self::Export),
             "import" => Some(Self::Import),
+            "motion" => Some(Self::Motion),
             "large-values" => Some(Self::LargeValues),
             "large-query" => Some(Self::LargeQuery),
             _ => {
@@ -214,7 +254,7 @@ impl Scene {
             | Self::Export
             | Self::Import
             | Self::JsonEdit => 0,
-            Self::InlineEdit | Self::LargeValues | Self::Filter => 1,
+            Self::InlineEdit | Self::LargeValues | Self::Filter | Self::Motion => 1,
             Self::Script => 2,
         }
     }
@@ -244,6 +284,16 @@ async fn seed_database(database: &AppDatabase) -> anyhow::Result<()> {
         ("mcp.enabled", "false"),
     ] {
         database.save_setting(key, value, false).await?;
+    }
+    // The theme's fonts are installed where the screenshots are taken. A run
+    // elsewhere can name ones it has, so text keeps its look and metrics.
+    for (key, variable) in [
+        ("appearance.font_family", "BLANCO_FONT"),
+        ("appearance.mono_font_family", "BLANCO_MONO_FONT"),
+    ] {
+        if let Ok(family) = std::env::var(variable) {
+            database.save_setting(key, &family, false).await?;
+        }
     }
     let window_id = database
         .create_window(
@@ -348,6 +398,12 @@ pub(crate) fn stage(scene: Scene, app: Entity<BlancoApp>, window: &Window, cx: &
             if let Err(error) = stage_scene(scene, &app, cx).await {
                 tracing::error!("Failed to stage the screenshot scene: {error:#}");
                 return;
+            }
+            // The motion scene exports its keyframes as it goes.
+            if scene != Scene::Motion
+                && let Some(path) = std::env::var_os("BLANCO_SCENE_EXPORT")
+            {
+                export_frame(path.into(), cx).await;
             }
             if let Ok(path) = std::env::var("BLANCO_SCENE_READY")
                 && let Err(error) = std::fs::write(&path, "ready")
@@ -630,6 +686,151 @@ async fn stage_scene(
                 window.dispatch_action(Box::new(ToggleCommandPalette), cx);
             })?;
         }
+        Scene::Motion => {
+            hide_sql_log(&editor_panel, cx)?;
+            let editor = editor_panel
+                .read_with(cx, |panel, _| {
+                    panel.active_query_tab().map(|tab| tab.editor.clone())
+                })
+                .ok_or_else(|| anyhow::anyhow!("no query tab"))?;
+            editor.update_in(cx, |editor, window, cx| {
+                editor.set_value(MOTION_DOCUMENT, window, cx);
+                let end = MOTION_DOCUMENT.len();
+                editor.set_selected_range(end..end, window, cx);
+                editor.focus(window, cx);
+            })?;
+            settle(cx, 300).await;
+            export_keyframe("01-start", cx).await;
+            for (ix, line) in MOTION_STATEMENT.iter().enumerate() {
+                editor.update_in(cx, |editor, window, cx| editor.insert(*line, window, cx))?;
+                settle(cx, 300).await;
+                export_keyframe(&format!("{:02}-line-{}", ix + 2, ix + 1), cx).await;
+            }
+
+            run_active_tab(&editor_panel, cx).await?;
+            settle(cx, 300).await;
+            export_keyframe("06-results", cx).await;
+
+            let results_panel = editor_panel
+                .read_with(cx, |panel, _| panel.active_results_panel())
+                .ok_or_else(|| anyhow::anyhow!("no results panel"))?;
+            let (row, col) = MOTION_EDIT_CELL;
+            results_panel.update_in(cx, |panel, window, cx| {
+                panel.table_state().update(cx, |state, cx| {
+                    state.set_selected_cell(row, col, cx);
+                });
+                panel.table_state().focus_handle(cx).focus(window, cx);
+            })?;
+            settle(cx, 200).await;
+            export_keyframe("07-selected", cx).await;
+
+            results_panel.update_in(cx, |panel, window, cx| {
+                panel.start_cell_edit(row, col, window, cx);
+            })?;
+            settle(cx, 200).await;
+            let table_state = results_panel.read_with(cx, |panel, _| panel.table_state().clone());
+            let input = table_state.read_with(cx, |state, _| {
+                state.delegate().edit_state.get_editing_input()
+            });
+            let Some(CellInput::Inline(input)) = input else {
+                anyhow::bail!("the stock cell did not open for editing");
+            };
+            export_keyframe("08-editing", cx).await;
+            input.update_in(cx, |input, window, cx| {
+                input.replace_all(MOTION_EDIT_VALUE, window, cx);
+            })?;
+            settle(cx, 200).await;
+            export_keyframe("09-typed", cx).await;
+
+            results_panel.update_in(cx, |panel, _, cx| {
+                panel.commit_cell_edit(row, col, MOTION_EDIT_VALUE.to_string(), cx);
+            })?;
+            settle(cx, 200).await;
+            export_keyframe("10-edited", cx).await;
+
+            let (row, col) = MOTION_JSON_CELL;
+            results_panel.update_in(cx, |panel, _, cx| {
+                panel.table_state().update(cx, |state, cx| {
+                    state.set_selected_cell(row, col, cx);
+                });
+            })?;
+            settle(cx, 200).await;
+            export_keyframe("11-json-selected", cx).await;
+            results_panel.update_in(cx, |panel, window, cx| {
+                panel.start_cell_edit(row, col, window, cx);
+            })?;
+            settle(cx, 200).await;
+            export_keyframe("12-json-inline", cx).await;
+            table_state.update_in(cx, |state, window, cx| {
+                ResultsTableDelegate::handle_maximize(state, row, col, false, window, cx);
+                // Drag the grip out a little, so the whole document shows.
+                let size = &mut state.delegate_mut().edit_state.expanded_size;
+                size.start_drag();
+                size.drag_to(gpui::point(gpui::px(0.), gpui::px(0.)));
+                size.drag_to(gpui::point(gpui::px(-60.), gpui::px(40.)));
+                cx.notify();
+            })?;
+            settle(cx, 300).await;
+            export_keyframe("13-json-expanded", cx).await;
+
+            // A cell's context menu, opened the way a user does: a right click
+            // where the last keyframe shows the cell, then the pointer on an
+            // item with a submenu.
+            results_panel.update_in(cx, |panel, _, cx| panel.cancel_cell_edit(row, col, cx))?;
+            settle(cx, 300).await;
+            if let Some(at) = keyframe_text_position("13-json-expanded", MOTION_MENU_CELL) {
+                cx.update(|window, cx| {
+                    let click = |button_down: bool| {
+                        if button_down {
+                            gpui::PlatformInput::MouseDown(gpui::MouseDownEvent {
+                                button: gpui::MouseButton::Right,
+                                position: at,
+                                modifiers: gpui::Modifiers::default(),
+                                click_count: 1,
+                                first_mouse: false,
+                            })
+                        } else {
+                            gpui::PlatformInput::MouseUp(gpui::MouseUpEvent {
+                                button: gpui::MouseButton::Right,
+                                position: at,
+                                modifiers: gpui::Modifiers::default(),
+                                click_count: 1,
+                            })
+                        }
+                    };
+                    window.dispatch_event(click(true), cx);
+                    window.dispatch_event(click(false), cx);
+                })?;
+                settle(cx, 300).await;
+                export_keyframe("14-context-menu", cx).await;
+                if let Some(at) = keyframe_text_position("14-context-menu", MOTION_MENU_ITEM) {
+                    cx.update(|window, cx| {
+                        window.dispatch_event(
+                            gpui::PlatformInput::MouseMove(gpui::MouseMoveEvent {
+                                position: at,
+                                pressed_button: None,
+                                modifiers: gpui::Modifiers::default(),
+                            }),
+                            cx,
+                        );
+                    })?;
+                    settle(cx, 500).await;
+                    export_keyframe("15-copy-as", cx).await;
+                }
+            }
+
+            // The script tab, for its JavaScript, from its first line.
+            editor_panel.update_in(cx, |panel, window, cx| {
+                panel.activate_tab(Scene::Script.tab_index(), window, cx);
+                if let Some(tab) = panel.active_script_tab() {
+                    tab.editor.update(cx, |editor, cx| {
+                        editor.set_selected_range(0..0, window, cx);
+                    });
+                }
+            })?;
+            settle(cx, 500).await;
+            export_keyframe("16-script", cx).await;
+        }
         Scene::Settings => {
             cx.update(|window, cx| {
                 window.dispatch_action(Box::new(OpenSettings), cx);
@@ -835,6 +1036,50 @@ async fn wait_for_run(
         }
     }
     anyhow::bail!("the run did not finish")
+}
+
+/// Write the frame the window shows next to `path`, with the `scene-export`
+/// feature; without it there is nothing to write.
+async fn export_frame(path: std::path::PathBuf, cx: &mut AsyncWindowContext) {
+    #[cfg(all(feature = "scene-export", not(target_os = "windows")))]
+    {
+        let written = crate::scene_export::request(path);
+        cx.update(|window, _| window.refresh()).ok();
+        match written.await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => tracing::error!("Failed to export the scene: {error:#}"),
+            Err(_) => tracing::error!("The scene export was dropped"),
+        }
+    }
+    #[cfg(not(all(feature = "scene-export", not(target_os = "windows"))))]
+    let _ = (path, cx);
+}
+
+/// Export the frame the window shows next as `<name>.json` in the directory
+/// `BLANCO_SCENE_EXPORT` names, if it names one.
+async fn export_keyframe(name: &str, cx: &mut AsyncWindowContext) {
+    if let Some(dir) = std::env::var_os("BLANCO_SCENE_EXPORT") {
+        let path = std::path::Path::new(&dir).join(format!("{name}.json"));
+        export_frame(path, cx).await;
+    }
+}
+
+/// Where an exported keyframe shows `text`: the middle of the first text run
+/// holding it, in window coordinates. None without the keyframe.
+fn keyframe_text_position(name: &str, text: &str) -> Option<gpui::Point<gpui::Pixels>> {
+    let dir = std::env::var_os("BLANCO_SCENE_EXPORT")?;
+    let path = std::path::Path::new(&dir).join(format!("{name}.json"));
+    let snapshot: serde_json::Value = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
+    snapshot["items"].as_array()?.iter().find_map(|item| {
+        let run = item["text"].as_str()?;
+        let start = run.find(text)?;
+        let first = run[..start].chars().count();
+        let last = first + text.chars().count() - 1;
+        let xs = item["x"].as_array()?;
+        let x = (xs.get(first)?.as_f64()? + xs.get(last)?.as_f64()?) / 2.;
+        let y = item["y"].as_f64()? - item["size"].as_f64()? * 0.35;
+        Some(gpui::point(gpui::px(x as f32), gpui::px(y as f32)))
+    })
 }
 
 async fn settle(cx: &mut AsyncWindowContext, millis: u64) {

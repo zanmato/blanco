@@ -26,7 +26,10 @@ CREATE TABLE albums (
     release_year INTEGER NOT NULL,
     format TEXT NOT NULL CHECK (format IN ('LP', '2LP', '7"', '12"')),
     price NUMERIC(6, 2) NOT NULL,
-    stock INTEGER NOT NULL DEFAULT 0
+    stock INTEGER NOT NULL DEFAULT 0,
+    -- A JSON document about the pressing, which the motion demo opens in the
+    -- grid's JSON editor.
+    details TEXT
 );
 
 CREATE TABLE customers (
@@ -118,7 +121,7 @@ SELECT
 FROM seq;
 
 WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM seq WHERE n < 1800)
-INSERT INTO albums (id, artist_id, genre_id, title, release_year, format, price, stock)
+INSERT INTO albums (id, artist_id, genre_id, title, release_year, format, price, stock, details)
 SELECT
     n,
     1 + (n * 37) % 240,
@@ -142,7 +145,16 @@ SELECT
     1962 + (n * 29) % 63,
     CASE n % 9 WHEN 0 THEN '2LP' WHEN 4 THEN '7"' WHEN 7 THEN '12"' ELSE 'LP' END,
     ROUND(19.99 + 2 * ((n * 7) % 12) + CASE WHEN n % 9 = 0 THEN 10 ELSE 0 END, 2),
-    (n * 19) % 41
+    (n * 19) % 41,
+    json_object(
+        'catalog', 'GRV-' || printf('%04d', n),
+        'pressing', json_object(
+            'weight_g', CASE WHEN n % 3 = 0 THEN 180 ELSE 140 END,
+            'colour', CASE n % 5 WHEN 0 THEN 'clear' WHEN 1 THEN 'black' WHEN 2 THEN 'marbled' WHEN 3 THEN 'black' ELSE 'smoke' END,
+            'rpm', CASE n % 9 WHEN 4 THEN 45 ELSE 33 END),
+        'sleeve', CASE WHEN n % 9 = 0 THEN 'gatefold' ELSE 'single' END,
+        'tracks', 6 + (n * 5) % 9,
+        'reissue', json(CASE WHEN n % 4 = 0 THEN 'true' ELSE 'false' END))
 FROM seq;
 
 WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM seq WHERE n < 6000)
