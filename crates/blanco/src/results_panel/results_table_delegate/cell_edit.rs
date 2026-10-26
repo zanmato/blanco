@@ -148,6 +148,9 @@ impl ResultsTableDelegate {
         state: &mut TableState<ResultsTableDelegate>,
         cx: &mut Context<'_, TableState<ResultsTableDelegate>>,
     ) {
+        if !state.delegate().is_editable() {
+            return;
+        }
         let edit_state = &mut state.delegate_mut().edit_state;
         let Some(cell) = edit_state.editing_cell else {
             return;

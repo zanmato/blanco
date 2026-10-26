@@ -204,8 +204,10 @@ impl ResultsTableDelegate {
                             v_flex()
                                 .size_full()
                                 .child(
+                                    // Read only rather than disabled: a read only
+                                    // value can still be selected and copied.
                                     Editor::new(&input)
-                                        .disabled(!self.is_editable())
+                                        .readonly(!self.is_editable())
                                         .flex_1()
                                         .min_h_0()
                                         .font_family(cx.theme().mono_font_family.clone())
@@ -269,7 +271,11 @@ impl ResultsTableDelegate {
                                         ),
                                     )
                                 })
-                                .child(self.render_expression_button("ExpandedCellEditor", cx))
+                                .when(self.is_editable(), |this| {
+                                    this.child(
+                                        self.render_expression_button("ExpandedCellEditor", cx),
+                                    )
+                                })
                                 .child(
                                     div()
                                         .cursor_pointer()
@@ -470,8 +476,10 @@ impl ResultsTableDelegate {
                 this.text_color(cx.theme().blue)
             })
             .child(
+                // A disabled input swallows every mouse down, the expand
+                // affordance's included, and its text cannot be selected.
                 Input::new(&input)
-                    .disabled(!self.is_editable())
+                    .readonly(!self.is_editable())
                     // The cell is the frame here: an input border and the
                     // focus ring outside it would sit on top of the grid.
                     .bordered(false)

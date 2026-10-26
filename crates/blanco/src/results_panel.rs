@@ -574,7 +574,7 @@ impl ResultsPanel {
         }
     }
 
-    /// Start editing the table's selected cell (Enter / F2 on the table).
+    /// Open the table's selected cell in its editor (Enter / F2 on the table).
     fn on_start_cell_edit(
         &mut self,
         _action: &crate::app::StartCellEdit,
@@ -584,16 +584,11 @@ impl ResultsPanel {
         if self.commit_in_progress || self.get_current_editing_cell(cx).is_some() {
             return;
         }
-        let (selected_cell, is_editable) = {
-            let state = self.table_state.read(cx);
-            (state.selected_cell(), state.delegate().is_editable())
-        };
-        let Some((row, col)) = selected_cell else {
+        // A read only grid opens the cell too, so its value can be expanded,
+        // selected and copied.
+        let Some((row, col)) = self.table_state.read(cx).selected_cell() else {
             return;
         };
-        if !is_editable {
-            return;
-        }
         self.table_state.update(cx, |state, _cx| {
             state.delegate_mut().clear_selection();
         });

@@ -514,6 +514,83 @@ async fn test_maximize_restores_line_breaks_from_inline_input(cx: &mut TestAppCo
     );
 }
 
+/// A read only grid still opens a cell and expands it, so a long value can
+/// be read and copied, but nothing done there becomes a pending change.
+#[gpui::test]
+async fn test_read_only_cell_expands_without_editing(cx: &mut TestAppContext) {
+    use gpui::Focusable as _;
+
+    let harness = TestHarness::new(cx);
+    let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+
+    let results_panel = setup_editable_table(&harness, &mut cx).await;
+    // Without the primary key the rows cannot be addressed.
+    set_editor_text(&harness, "SELECT v FROM items", &mut cx);
+    run_query(&harness, &mut cx);
+    wait_for_query(&harness, &mut cx).await;
+    assert!(
+        !results_panel.read_with(&cx, |panel, cx| panel.is_editable(cx)),
+        "a read without the primary key should be read only"
+    );
+
+    let table_state = results_panel.read_with(&cx, |panel, _| panel.table_state().clone());
+    table_state.update_in(&mut cx, |state, window, cx| {
+        state.set_selected_cell(0, 0, cx);
+        state.focus_handle(cx).focus(window, cx);
+    });
+    cx.run_until_parked();
+    cx.dispatch_action(crate::app::StartCellEdit);
+    cx.run_until_parked();
+
+    let inline_text = table_state.read_with(&cx, |state, cx| {
+        match state
+            .delegate()
+            .edit_state
+            .get_editing_input()
+            .expect("Enter should open the cell on a read only grid")
+        {
+            CellInput::Inline(input) => input.read(cx).value().to_string(),
+            CellInput::Expanded(_) => panic!("a fresh cell edit is inline"),
+        }
+    });
+    assert_eq!(inline_text, "orig");
+
+    table_state.update_in(&mut cx, |state, window, cx| {
+        ResultsTableDelegate::handle_maximize(state, 0, 0, false, window, cx);
+    });
+    cx.run_until_parked();
+    let expanded_text = table_state.read_with(&cx, |state, cx| {
+        match state
+            .delegate()
+            .edit_state
+            .get_editing_input()
+            .expect("expanded editing input should exist")
+        {
+            CellInput::Expanded(editor) => editor.read(cx).text().to_string(),
+            CellInput::Inline(_) => panic!("maximize switches the cell to the expanded editor"),
+        }
+    });
+    assert_eq!(expanded_text, "orig");
+
+    cx.dispatch_action(crate::app::ToggleCellExpression);
+    cx.run_until_parked();
+    let (as_expression, edited) = table_state.read_with(&cx, |state, _| {
+        let edit_state = &state.delegate().edit_state;
+        (
+            edit_state.editing_as_expression,
+            edit_state.edited_values.contains_key(&(0, 0)),
+        )
+    });
+    assert!(!as_expression, "a read only cell cannot become SQL");
+    assert!(!edited, "a read only cell should hold no edit");
+
+    let statements = results_panel.update(&mut cx, |panel, cx| {
+        panel.finalize_active_cell_edit(cx);
+        panel.preview_pending_sql(cx)
+    });
+    assert!(statements.is_empty(), "nothing should be pending");
+}
+
 /// The toolbar Delete button acts on the whole row selection.
 #[gpui::test]
 async fn test_delete_marks_every_selected_row(cx: &mut TestAppContext) {
