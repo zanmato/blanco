@@ -6,7 +6,10 @@
 #
 # Scenes: editor inline-edit json-edit terminal script snippets structure
 # filter chart explain schema-graph history palette settings export import
-# (default: all).
+# (default: all), and motion, which is not a screenshot: it bundles the
+# keyframes of the website's motion demo into
+# docs/images/screenshots/motion-mocha.json with scripts/motion/bundle.mjs,
+# which needs node, and builds with the `scene-export` feature.
 # Writes docs/images/screenshots/<scene>-<theme>.webp, and a lossless
 # <scene>-<theme>.png per capture into $PNG_DIR when that is set. With
 # $SNAPSHOT_DIR set, also writes a vector snapshot of each capture there as
@@ -39,7 +42,9 @@ editor_themes=("macchiato:Catppuccin Macchiato")
 
 if [[ -z "${BLANCO_BIN:-}" ]]; then
   features=screenshots
-  [[ -n "${SNAPSHOT_DIR:-}" ]] && features+=,scene-export
+  if [[ -n "${SNAPSHOT_DIR:-}" ]] || [[ " ${scenes[*]} " == *" motion "* ]]; then
+    features+=,scene-export
+  fi
   cargo build --release -p blanco --features "$features"
   BLANCO_BIN="$root/target/release/blanco"
 fi
@@ -212,6 +217,10 @@ EOF
     setup_claude "$run/home" "$run/home/.local/share/blanco/agent-workspace" "$mode"
   fi
 
+  # The motion scene exports its keyframes into a directory as it goes.
+  local export_path="${SNAPSHOT_DIR:+$SNAPSHOT_DIR/$scene-$slug.json}"
+  [[ "$scene" == motion ]] && export_path="$run/keyframes"
+
   echo "Capturing $scene in $theme"
   # Its own process group, so stopping it takes down the bus and the app.
   setsid env -i \
@@ -232,7 +241,7 @@ EOF
     BLANCO_THEME="$theme" \
     BLANCO_DEMO_DB="$work/groove-records.db" \
     BLANCO_SCENE_READY="$run/ready" \
-    ${SNAPSHOT_DIR:+BLANCO_SCENE_EXPORT="$SNAPSHOT_DIR/$scene-$slug.json"} \
+    ${export_path:+BLANCO_SCENE_EXPORT="$export_path"} \
     dbus-run-session --config-file="$work/dbus.conf" -- "$BLANCO_BIN" >"$run/app.log" 2>&1 &
   app_pid=$!
   DISPLAY="$display" "$root/scripts/screenshots/focus-window" 60
@@ -249,6 +258,15 @@ EOF
   done
   # One more frame for anything the last update scheduled.
   sleep 0.5
+
+  if [[ "$scene" == motion ]]; then
+    kill -- "-$app_pid" 2>/dev/null || true
+    wait "$app_pid" 2>/dev/null || true
+    stop_run "$run_home"
+    app_pid=""
+    node "$root/scripts/motion/bundle.mjs" "$run/keyframes" "$out/$scene-$slug.json"
+    return
+  fi
 
   local window extents left right top bottom
   window=$(DISPLAY="$display" xwininfo -name Blanco | awk '/Window id:/ { print $4 }')
@@ -275,6 +293,11 @@ EOF
 }
 
 for scene in "${scenes[@]}"; do
+  # The demo's own styling is drawn for the dark theme.
+  if [[ "$scene" == motion ]]; then
+    capture "$scene" mocha "Catppuccin Mocha"
+    continue
+  fi
   for theme in "${themes[@]}"; do
     capture "$scene" "${theme%%:*}" "${theme#*:}"
   done

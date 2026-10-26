@@ -4,9 +4,9 @@
 #
 # Usage: scripts/build-site [version]
 # The version defaults to the workspace version in Cargo.toml. Preview with
-# `python3 -m http.server -d _site`. The screenshots come from
-# docs/images/screenshots, see scripts/screenshots/capture. Needs mdbook on
-# PATH, or its path in MDBOOK.
+# `python3 -m http.server -d _site`. The screenshots and the motion demo's
+# keyframes come from docs/images/screenshots, see scripts/screenshots/capture.
+# Needs mdbook on PATH, or its path in MDBOOK.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -23,6 +23,10 @@ fi
 rm -rf "$out"
 mkdir -p "$out/images"
 cp docs/images/screenshots/*.webp "$out/images/"
+# The motion demo: its player and the keyframes `capture motion` bundled.
+mkdir -p "$out/motion"
+cp scripts/motion/demo.mjs scripts/motion/render.mjs "$out/motion/"
+cp docs/images/screenshots/motion-mocha.json "$out/motion/demo.json"
 cp site/favicon.svg site/logo.svg "$out/"
 
 notes="$(mktemp)"

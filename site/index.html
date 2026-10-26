@@ -33,7 +33,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
       rel="stylesheet"
-      href="https://fonts.googleapis.com/css2?family=Red+Hat+Display:wght@500..900&family=Figtree:ital,wght@0,400..700;1,400..700&family=JetBrains+Mono:wght@400;500;700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Red+Hat+Display:wght@500..900&family=Figtree:ital,wght@0,400..700;1,400..700&family=JetBrains+Mono:wght@400;500;700&family=Ubuntu+Sans:wght@400&family=Fira+Code:wght@400&display=swap"
     />
     <style>
       :root {
@@ -780,7 +780,14 @@
       </section>
 
       <figure class="wrap shot">
-        <picture>
+        <div
+          id="motion-demo"
+          role="img"
+          aria-label="Blanco playing a demo: a statement typed into the editor and framed as it grows, its results, a stock cell edited in place and a JSON cell opened in the expanded editor"
+          hidden
+        ></div>
+        <!-- Shown until the motion demo has loaded, and without scripts. -->
+        <picture id="motion-fallback">
           <source
             media="(prefers-color-scheme: dark)"
             srcset="images/editor-mocha.webp"
@@ -793,8 +800,9 @@
           />
         </picture>
         <figcaption>
-          The statement under the cursor is outlined, and that is what Run
-          executes. The sidebar shows the size of each table.
+          The statement under the cursor is framed, and that is what Run
+          executes. Point at a dot once the demo stops to read more about a
+          feature.
         </figcaption>
       </figure>
 
@@ -1324,6 +1332,28 @@
             });
           });
       })();
+    </script>
+    <script type="module">
+      // The motion demo replaces the screenshot once its keyframes and the
+      // fonts its text is drawn in have loaded. Until then, or if either
+      // fails, the screenshot stays.
+      import { mountDemo } from "./motion/demo.mjs";
+
+      try {
+        const [response] = await Promise.all([
+          fetch("motion/demo.json"),
+          document.fonts.load('14px "Ubuntu Sans"'),
+          document.fonts.load('14px "Fira Code"'),
+        ]);
+        if (!response.ok) throw new Error(`motion/demo.json: ${response.status}`);
+        const bundle = await response.json();
+        const root = document.getElementById("motion-demo");
+        mountDemo(root, bundle, { docs: "docs/" });
+        root.hidden = false;
+        document.getElementById("motion-fallback").remove();
+      } catch (error) {
+        console.error("The motion demo did not load", error);
+      }
     </script>
   </body>
 </html>
