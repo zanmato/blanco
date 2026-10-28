@@ -839,10 +839,14 @@ impl ResultsPanel {
                 let editing_cell = table.delegate_mut().edit_state.editing_cell;
 
                 if let Some((row, col)) = editing_cell {
-                    // The expanded editor and the date picker take focus from
-                    // the inline input while the edit is still in progress.
+                    // The expanded editor and the date and enum pickers take
+                    // focus from the inline input while the edit is still in
+                    // progress.
                     let edit_state = &table.delegate().edit_state;
-                    if edit_state.is_expanded(row, col) || edit_state.date_picker.is_some() {
+                    if edit_state.is_expanded(row, col)
+                        || edit_state.date_picker.is_some()
+                        || edit_state.enum_picker_open
+                    {
                         return;
                     }
 
