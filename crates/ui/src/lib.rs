@@ -13,5 +13,5 @@ pub use diff_view::{DiffSource, DiffView};
 pub use graph_view::{GraphEdge, GraphModel, GraphNode, GraphNodeField, GraphView};
 pub use icon::IconName;
 pub use size_indicator::SizeIndicator;
-pub use sql_view::{SqlView, SqlViewMessage};
+pub use sql_view::{SqlView, SqlViewMessage, highlight_each};
 pub use tab::{Tab, TabBar, TabVariant};

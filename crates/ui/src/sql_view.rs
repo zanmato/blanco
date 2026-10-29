@@ -458,7 +458,28 @@ fn highlight(
     text: &str,
     theme: &HighlightTheme,
 ) -> Box<[(Range<usize>, HighlightStyle)]> {
+    highlight_with(&mut SyntaxHighlighter::new(language), text, theme)
+}
+
+/// The syntax highlights of each of `texts`, made with one highlighter of
+/// `language`, which compiles its queries once for the whole list.
+pub fn highlight_each<'a>(
+    language: &str,
+    texts: impl IntoIterator<Item = &'a str>,
+    theme: &HighlightTheme,
+) -> Vec<Box<[(Range<usize>, HighlightStyle)]>> {
     let mut highlighter = SyntaxHighlighter::new(language);
+    texts
+        .into_iter()
+        .map(|text| highlight_with(&mut highlighter, text, theme))
+        .collect()
+}
+
+fn highlight_with(
+    highlighter: &mut SyntaxHighlighter,
+    text: &str,
+    theme: &HighlightTheme,
+) -> Box<[(Range<usize>, HighlightStyle)]> {
     highlighter.update(None, &ropey::Rope::from(text), None);
     highlighter
         .styles(&(0..text.len()), theme)

@@ -48,6 +48,41 @@ impl AppDatabase {
         limit: i64,
         search: Option<String>,
     ) -> Result<Vec<QueryHistoryData>, sqlx::Error> {
+        self.load_history_rows(limit, search, None).await
+    }
+
+    /// Like [`Self::load_query_history`], with `query_text` holding at most
+    /// the first `preview_chars` characters of each query. A script that
+    /// inserted thousands of rows is hundreds of kilobytes, which a list of
+    /// entries never shows; [`Self::query_history_text`] reads the whole.
+    pub async fn load_query_history_previews(
+        &self,
+        limit: i64,
+        search: Option<String>,
+        preview_chars: i64,
+    ) -> Result<Vec<QueryHistoryData>, sqlx::Error> {
+        self.load_history_rows(limit, search, Some(preview_chars))
+            .await
+    }
+
+    /// The whole query text of a history entry, `None` once it is deleted.
+    pub async fn query_history_text(&self, id: i64) -> Result<Option<String>, sqlx::Error> {
+        let pool = self.pool();
+        self.run(async move {
+            sqlx::query_scalar("SELECT query_text FROM query_history WHERE id = ?")
+                .bind(id)
+                .fetch_optional(&pool)
+                .await
+        })
+        .await
+    }
+
+    async fn load_history_rows(
+        &self,
+        limit: i64,
+        search: Option<String>,
+        text_chars: Option<i64>,
+    ) -> Result<Vec<QueryHistoryData>, sqlx::Error> {
         let pool = self.pool();
         self.run(async move {
             let search = search
@@ -58,7 +93,7 @@ impl AppDatabase {
                 let pattern = format!("%{}%", search.replace('%', "\\%").replace('_', "\\_"));
                 sqlx::query(
                     r#"
-                    SELECT id, query_text, executed_at, duration_ms, rows_affected,
+                    SELECT id, substr(query_text, 1, coalesce(?, length(query_text))), executed_at, duration_ms, rows_affected,
                            row_count, success, error_message, connection_id,
                            connection_name, database_name, execution_us, fetch_us
                     FROM query_history
@@ -67,6 +102,7 @@ impl AppDatabase {
                     LIMIT ?
                     "#,
                 )
+                .bind(text_chars)
                 .bind(pattern)
                 .bind(limit)
                 .fetch_all(&pool)
@@ -74,7 +110,7 @@ impl AppDatabase {
             } else {
                 sqlx::query(
                     r#"
-                    SELECT id, query_text, executed_at, duration_ms, rows_affected,
+                    SELECT id, substr(query_text, 1, coalesce(?, length(query_text))), executed_at, duration_ms, rows_affected,
                            row_count, success, error_message, connection_id,
                            connection_name, database_name, execution_us, fetch_us
                     FROM query_history
@@ -82,6 +118,7 @@ impl AppDatabase {
                     LIMIT ?
                     "#,
                 )
+                .bind(text_chars)
                 .bind(limit)
                 .fetch_all(&pool)
                 .await?
@@ -159,5 +196,52 @@ impl AppDatabase {
             Ok(())
         })
         .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(query_text: &str) -> QueryHistoryData {
+        QueryHistoryData {
+            id: None,
+            query_text: query_text.to_string(),
+            executed_at: 1,
+            duration_ms: None,
+            execution_us: None,
+            fetch_us: None,
+            rows_affected: None,
+            row_count: None,
+            success: true,
+            error_message: None,
+            connection_id: None,
+            connection_name: None,
+            database_name: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn previews_hold_the_start_and_the_text_is_read_whole() {
+        let db = AppDatabase::new_in_memory(tokio::runtime::Handle::current())
+            .await
+            .expect("app database");
+        let rows: Vec<String> = (0..2_633).map(|ix| format!("({ix}, 'name')")).collect();
+        let query = format!("INSERT INTO t VALUES {};", rows.join(", "));
+        let id = db
+            .record_query_history(&entry(&query))
+            .await
+            .expect("record");
+
+        let previews = db
+            .load_query_history_previews(10, Some("(2632,".to_string()), 150)
+            .await
+            .expect("previews");
+        assert_eq!(previews.len(), 1, "the search reads past the preview");
+        assert_eq!(previews[0].query_text, query[..150]);
+
+        let whole = db.load_query_history(10, None).await.expect("history");
+        assert_eq!(whole[0].query_text, query);
+        assert_eq!(db.query_history_text(id).await.expect("text"), Some(query));
     }
 }
