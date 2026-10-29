@@ -17,8 +17,13 @@
 
 import { renderSvg } from "./render.mjs";
 
-const WIDTH = 1640;
-const HEIGHT = 984;
+// A keyframe is the whole surface Blanco paints, which on Linux holds the
+// window's 1600x1000 frame inside a 20px margin for its shadow. The demo
+// shows the frame alone, as the screenshots do.
+const SNAPSHOT_WIDTH = 1640;
+const SNAPSHOT_HEIGHT = 1040;
+const WINDOW = { x: 20, y: 20, width: 1600, height: 1000 };
+const CENTER = { x: WINDOW.x + WINDOW.width / 2, y: WINDOW.y + WINDOW.height / 2 };
 
 /// What the scene types, line by line, as the keyframes `02-line-1` to
 /// `05-line-4` hold it.
@@ -205,8 +210,8 @@ export function mountDemo(root, bundle, options = {}) {
 
   let scale = 1;
   const resize = () => {
-    scale = viewport.clientWidth / WIDTH;
-    stage.style.transform = `scale(${scale})`;
+    scale = viewport.clientWidth / WINDOW.width;
+    stage.style.transform = `scale(${scale}) translate(${-WINDOW.x}px, ${-WINDOW.y}px)`;
   };
   new ResizeObserver(resize).observe(viewport);
   resize();
@@ -226,10 +231,12 @@ export function mountDemo(root, bundle, options = {}) {
     // zoom.
     const view = interpolate(plan.camera, t);
     const zoom = view.z;
-    const tx = clamp(WIDTH / 2 - view.x * zoom, WIDTH - WIDTH * zoom, 0);
-    const ty = clamp(HEIGHT / 2 - view.y * zoom, HEIGHT - HEIGHT * zoom, 0);
+    const right = WINDOW.x + WINDOW.width;
+    const bottom = WINDOW.y + WINDOW.height;
+    const tx = clamp(CENTER.x - view.x * zoom, right * (1 - zoom), WINDOW.x * (1 - zoom));
+    const ty = clamp(CENTER.y - view.y * zoom, bottom * (1 - zoom), WINDOW.y * (1 - zoom));
     camera.style.transform = `translate(${tx}px, ${ty}px) scale(${zoom})`;
-    const toScreen = (x, y) => [(x * zoom + tx) * scale, (y * zoom + ty) * scale];
+    const toScreen = (x, y) => [(x * zoom + tx - WINDOW.x) * scale, (y * zoom + ty - WINDOW.y) * scale];
 
     // Keyframes: the one shown, and the one under it while it fades in or
     // is revealed character by character.
@@ -307,7 +314,7 @@ export function mountDemo(root, bundle, options = {}) {
       // otherwise push the ring out of.
       const [x0, y0] = toScreen(highlight.b[0] - 4, highlight.b[1] - 4).map((v) => Math.max(v, 3));
       const [x1, y1] = toScreen(highlight.b[0] + highlight.b[2] + 4, highlight.b[1] + highlight.b[3] + 4).map(
-        (v, ix) => Math.min(v, (ix ? HEIGHT : WIDTH) * scale - 3),
+        (v, ix) => Math.min(v, (ix ? WINDOW.height : WINDOW.width) * scale - 3),
       );
       const p = clamp(Math.min(t - highlight.from, highlight.to - t) / 0.3, 0, 1);
       ring.style.display = "";
@@ -433,11 +440,13 @@ function buildHotspots(container, dim, keyframes, lastKey, { docs, scale, media 
     const id = `bd-card-${Math.random().toString(36).slice(2, 8)}`;
     const element = document.createElement("div");
     element.className = "bd-spot";
-    element.style.left = `${(at.x / WIDTH) * 100}%`;
-    element.style.top = `${(at.y / HEIGHT) * 100}%`;
+    const left = ((at.x - WINDOW.x) / WINDOW.width) * 100;
+    const top = ((at.y - WINDOW.y) / WINDOW.height) * 100;
+    element.style.left = `${left}%`;
+    element.style.top = `${top}%`;
     element.style.setProperty("--i", index++);
-    element.dataset.side = at.x > WIDTH * 0.55 ? "left" : "right";
-    element.dataset.rise = at.y > HEIGHT * 0.55 ? "up" : "down";
+    element.dataset.side = left > 55 ? "left" : "right";
+    element.dataset.rise = top > 55 ? "up" : "down";
     element.innerHTML = `
       <button class="bd-dot" type="button" aria-label="${spot.title}" aria-describedby="${id}"></button>
       <div class="bd-card${figure ? " bd-wide" : ""}" role="tooltip" id="${id}">
@@ -452,7 +461,7 @@ function buildHotspots(container, dim, keyframes, lastKey, { docs, scale, media 
       }
       element.classList.add("bd-open");
       const radius = 70 * scale();
-      dim.style.background = `radial-gradient(circle at ${(at.x / WIDTH) * 100}% ${(at.y / HEIGHT) * 100}%, transparent ${radius}px, rgb(17 17 27 / 0.62) ${radius + 70 * scale()}px)`;
+      dim.style.background = `radial-gradient(circle at ${left}% ${top}%, transparent ${radius}px, rgb(17 17 27 / 0.62) ${radius + 70 * scale()}px)`;
       dim.classList.add("bd-on");
     };
     const hide = () => {
@@ -624,8 +633,8 @@ function makePlan(keyframes) {
       right: valueChars[valueChars.length - 1].x + value.size * 0.7,
     },
     camera: [
-      { t: 0, x: WIDTH / 2, y: HEIGHT / 2, z: 1 },
-      { t: 0.7, x: WIDTH / 2, y: HEIGHT / 2, z: 1 },
+      { t: 0, x: CENTER.x, y: CENTER.y, z: 1 },
+      { t: 0.7, x: CENTER.x, y: CENTER.y, z: 1 },
       { t: 1.8, x: statement.x, y: statement.y, z: 2.1 },
       { t: typed + 0.3, x: statement.x + 30, y: statement.y + 20, z: 2.1 },
       // Out to the Run button and the empty results.
@@ -643,8 +652,8 @@ function makePlan(keyframes) {
       // Back far enough to take in the pending change and Apply edits.
       { t: toApply + 1.0, x: 820, y: 790, z: 1.5 },
       { t: outro, x: 820, y: 790, z: 1.5 },
-      { t: outro + 1.3, x: WIDTH / 2, y: HEIGHT / 2, z: 1 },
-      { t: duration, x: WIDTH / 2, y: HEIGHT / 2, z: 1 },
+      { t: outro + 1.3, x: CENTER.x, y: CENTER.y, z: 1 },
+      { t: duration, x: CENTER.x, y: CENTER.y, z: 1 },
     ],
     pointer: [
       { t: 0, x: 1200, y: 860, o: 0 },
@@ -699,7 +708,7 @@ function layerState(plan, t) {
     if (t < line.start) return { base: below };
     if (t < line.end) {
       const shown = line.chars.filter((c) => c.t <= t).length;
-      const x = shown < line.chars.length ? line.chars[shown].x : WIDTH;
+      const x = shown < line.chars.length ? line.chars[shown].x : SNAPSHOT_WIDTH;
       return { base: below, top: line.key, opacity: 1, reveal: { x, ...line.hidden } };
     }
   }
@@ -712,7 +721,7 @@ function layerState(plan, t) {
   if (t < value.chars[0].t) return { base: "08-editing" };
   if (t < plan.commit) {
     const shown = value.chars.filter((c) => c.t <= t).length;
-    const x = shown < value.chars.length ? value.chars[shown].x : WIDTH;
+    const x = shown < value.chars.length ? value.chars[shown].x : SNAPSHOT_WIDTH;
     return { base: "08-editing", top: "09-typed", opacity: 1, reveal: { x, top: value.top, bottom: value.bottom, right: value.right } };
   }
   if (t < plan.jsonSelect) return { base: "10-edited" };
@@ -789,7 +798,7 @@ function findRun(snapshot, test) {
 /// line, the text still to be typed.
 function notch({ x, top, bottom, right }) {
   if (x >= right) return "";
-  return `polygon(evenodd, 0 0, ${WIDTH}px 0, ${WIDTH}px ${HEIGHT}px, 0 ${HEIGHT}px, 0 0, ${x}px ${top}px, ${right}px ${top}px, ${right}px ${bottom}px, ${x}px ${bottom}px, ${x}px ${top}px)`;
+  return `polygon(evenodd, 0 0, ${SNAPSHOT_WIDTH}px 0, ${SNAPSHOT_WIDTH}px ${SNAPSHOT_HEIGHT}px, 0 ${SNAPSHOT_HEIGHT}px, 0 0, ${x}px ${top}px, ${right}px ${top}px, ${right}px ${bottom}px, ${x}px ${bottom}px, ${x}px ${top}px)`;
 }
 
 /// The value of keyed `frames` at `t`, eased between keys.
@@ -828,11 +837,11 @@ function injectStyles() {
   style.textContent = `
     .bd-root { container-type: inline-size; position: relative; }
     .bd-viewport {
-      position: relative; aspect-ratio: ${WIDTH} / ${HEIGHT}; overflow: hidden;
+      position: relative; aspect-ratio: ${WINDOW.width} / ${WINDOW.height}; overflow: hidden;
       border-radius: 12px; background: #11111b;
       box-shadow: 0 0 0 1px rgb(255 255 255 / 0.08), 0 40px 80px -30px rgb(0 0 0 / 0.6);
     }
-    .bd-stage { position: absolute; left: 0; top: 0; width: ${WIDTH}px; height: ${HEIGHT}px; transform-origin: 0 0; }
+    .bd-stage { position: absolute; left: 0; top: 0; width: ${SNAPSHOT_WIDTH}px; height: ${SNAPSHOT_HEIGHT}px; transform-origin: 0 0; }
     .bd-camera { position: absolute; inset: 0; transform-origin: 0 0; will-change: transform; }
     .bd-layer { position: absolute; inset: 0; }
     .bd-layer svg { display: block; }
