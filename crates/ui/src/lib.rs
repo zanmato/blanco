@@ -5,6 +5,7 @@ pub mod graph_view;
 pub mod icon;
 pub mod size_indicator;
 pub mod sql_view;
+mod sticky_rows;
 pub mod tab;
 pub mod tree;
 

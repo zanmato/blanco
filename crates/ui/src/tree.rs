@@ -1,10 +1,10 @@
 use std::{cell::RefCell, ops::Range, rc::Rc};
 
 use gpui::{
-    App, Context, ElementId, Entity, EventEmitter, FocusHandle, InteractiveElement as _,
-    IntoElement, KeyBinding, ListSizingBehavior, MouseButton, ParentElement, Render, RenderOnce,
-    SharedString, StyleRefinement, Styled, UniformListScrollHandle, Window, div,
-    prelude::FluentBuilder as _, px, uniform_list,
+    AnyElement, App, Context, Div, ElementId, Entity, EventEmitter, FocusHandle,
+    InteractiveElement as _, IntoElement, KeyBinding, ListSizingBehavior, MouseButton,
+    ParentElement, Render, RenderOnce, ScrollStrategy, SharedString, Stateful, StyleRefinement,
+    Styled, UniformListScrollHandle, Window, div, prelude::FluentBuilder as _, px, uniform_list,
 };
 
 use gpui_component::{
@@ -14,7 +14,10 @@ use gpui_component::{
     scroll::Scrollbar,
 };
 
-use crate::actions::{Confirm, SelectDown, SelectLeft, SelectRight, SelectUp};
+use crate::{
+    actions::{Confirm, SelectDown, SelectLeft, SelectRight, SelectUp},
+    sticky_rows::{StickyRows, StickyRowsHost, scroll_to_entry},
+};
 
 const CONTEXT: &str = "BroTree";
 pub fn init(cx: &mut App) {
@@ -326,8 +329,13 @@ impl<D: TreeDelegate> TreeState<D> {
             .and_then(|id| self.entries.iter().position(|e| &e.item.id == id));
     }
 
-    pub fn scroll_to_item(&mut self, ix: usize, strategy: gpui::ScrollStrategy) {
-        self.scroll_handle.scroll_to_item(ix, strategy);
+    pub fn scroll_to_item(&mut self, ix: usize, strategy: ScrollStrategy) {
+        self.scroll_to_entry(ix, strategy);
+    }
+
+    fn scroll_to_entry(&self, ix: usize, strategy: ScrollStrategy) {
+        let depth = self.entries.get(ix).map_or(0, TreeEntry::depth);
+        scroll_to_entry(&self.scroll_handle, ix, depth, strategy);
     }
 
     /// Get the currently selected entry, if any.
@@ -427,8 +435,7 @@ impl<D: TreeDelegate> TreeState<D> {
         }
 
         self.select(Some(selected_ix));
-        self.scroll_handle
-            .scroll_to_item(selected_ix, gpui::ScrollStrategy::Top);
+        self.scroll_to_entry(selected_ix, ScrollStrategy::Top);
         cx.notify();
     }
 
@@ -441,8 +448,7 @@ impl<D: TreeDelegate> TreeState<D> {
         }
 
         self.select(Some(selected_ix));
-        self.scroll_handle
-            .scroll_to_item(selected_ix, gpui::ScrollStrategy::Bottom);
+        self.scroll_to_entry(selected_ix, ScrollStrategy::Bottom);
         cx.notify();
     }
 
@@ -450,6 +456,73 @@ impl<D: TreeDelegate> TreeState<D> {
         self.select(Some(ix));
         self.toggle_expand(ix, cx);
         cx.notify();
+    }
+
+    /// Closes a pinned folder and scrolls its row back into the slot it was
+    /// pinned in, so the rows after it come up under the pointer.
+    fn on_sticky_click(&mut self, ix: usize, slot: usize, cx: &mut Context<Self>) {
+        self.select(Some(ix));
+        self.toggle_expand(ix, cx);
+        self.scroll_handle
+            .scroll_to_item_strict_with_offset(ix, ScrollStrategy::Top, slot);
+        cx.notify();
+    }
+
+    /// The row of entry `ix`, or its copy pinned in `pinned_slot`.
+    fn render_entry(
+        &mut self,
+        ix: usize,
+        pinned_slot: Option<usize>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Stateful<Div>> {
+        let entry = self.entries.get(ix)?;
+        let selected = Some(ix) == self.selected_ix;
+        let disabled = entry.item().is_disabled();
+        let item = self.delegate.render_item(ix, entry, selected, window, cx);
+
+        Some(
+            div()
+                .id(ix)
+                .child(item.disabled(disabled).selected(selected))
+                .when(!disabled, |this| {
+                    this.on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _, window, cx| match pinned_slot {
+                            Some(slot) => this.on_sticky_click(ix, slot, cx),
+                            None => this.on_entry_click(ix, window, cx),
+                        }),
+                    )
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |this, _, _window, cx| {
+                            this.right_clicked_index = Some(ix);
+                            cx.notify();
+                        }),
+                    )
+                }),
+        )
+    }
+}
+
+impl<D: TreeDelegate> StickyRowsHost for TreeState<D> {
+    fn entry_count(&self) -> usize {
+        self.entries.len()
+    }
+
+    fn entry_depth(&self, ix: usize) -> usize {
+        self.entries.get(ix).map_or(0, TreeEntry::depth)
+    }
+
+    fn render_sticky_row(
+        &mut self,
+        ix: usize,
+        slot: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        self.render_entry(ix, Some(slot), window, cx)
+            .map_or_else(|| div().into_any_element(), IntoElement::into_any_element)
     }
 }
 
@@ -480,42 +553,12 @@ impl<D: TreeDelegate> Render for TreeState<D> {
             .child(
                 uniform_list("entries", self.entries.len(), {
                     cx.processor(move |state, visible_range: Range<usize>, window, cx| {
-                        let mut items = Vec::with_capacity(visible_range.len());
-                        for ix in visible_range {
-                            let entry = &state.entries[ix];
-                            let selected = Some(ix) == state.selected_ix;
-
-                            let item = state.delegate.render_item(ix, entry, selected, window, cx);
-
-                            let el = div()
-                                .id(ix)
-                                .child(item.disabled(entry.item().is_disabled()).selected(selected))
-                                .when(!entry.item().is_disabled(), |this| {
-                                    this.on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener({
-                                            move |this, _, window, cx| {
-                                                this.on_entry_click(ix, window, cx);
-                                            }
-                                        }),
-                                    )
-                                    .on_mouse_down(
-                                        MouseButton::Right,
-                                        cx.listener({
-                                            move |this, _, _window, cx| {
-                                                this.right_clicked_index = Some(ix);
-                                                cx.notify();
-                                            }
-                                        }),
-                                    )
-                                });
-
-                            items.push(el)
-                        }
-
-                        items
+                        visible_range
+                            .filter_map(|ix| state.render_entry(ix, None, window, cx))
+                            .collect::<Vec<_>>()
                     })
                 })
+                .with_decoration(StickyRows(cx.entity()))
                 .flex_grow(1.)
                 .size_full()
                 .track_scroll(&self.scroll_handle)
@@ -663,6 +706,63 @@ mod tests {
             assert_eq!(tree.select_id("leaf", cx), None);
             tree.set_items(items(true), cx);
             assert_eq!(tree.selected_index(), Some(2));
+        });
+    }
+
+    struct TreeHost {
+        state: Entity<TreeState<Plain>>,
+    }
+
+    impl Render for TreeHost {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            Tree::new(&self.state)
+        }
+    }
+
+    #[gpui::test]
+    fn clicking_a_pinned_folder_closes_it(cx: &mut TestAppContext) {
+        use gpui::{Modifiers, VisualTestContext, point};
+
+        let leaves = (0..200).map(|ix| TreeItem::new(format!("leaf-{ix}"), "leaf", ()));
+        let items = vec![
+            TreeItem::new("group", "group", ())
+                .expanded(true)
+                .children(leaves),
+        ];
+        let (state, window) = cx.update(|cx| {
+            gpui_component::init(cx);
+            let state = cx.new(|cx| {
+                let mut state = TreeState::new(Plain, cx);
+                state.set_items(items, cx);
+                state
+            });
+            let window = cx
+                .open_window(Default::default(), |window, cx| {
+                    let host = cx.new(|_| TreeHost {
+                        state: state.clone(),
+                    });
+                    cx.new(|cx| gpui_component::Root::new(host, window, cx))
+                })
+                .expect("failed to open window");
+            (state, window)
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        cx.run_until_parked();
+
+        state.update(&mut cx, |state, _| {
+            state.scroll_to_item(150, ScrollStrategy::Top);
+        });
+        cx.run_until_parked();
+
+        // The group's own row is far above, so this click lands on its pinned copy.
+        let top_row = point(px(40.), px(4.));
+        cx.simulate_mouse_move(top_row, None, Modifiers::none());
+        cx.simulate_click(top_row, Modifiers::none());
+        cx.run_until_parked();
+
+        state.update(&mut cx, |state, _| {
+            assert_eq!(state.entries().len(), 1, "the pinned group should close");
+            assert_eq!(state.selected_index(), Some(0));
         });
     }
 }
