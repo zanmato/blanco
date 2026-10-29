@@ -6,6 +6,46 @@ All notable changes to this project will be documented in this file.
 
 ### Features
 
+- Dashboards lay out panels of query results on a grid, each a table, a
+  single number or a chart, and each running on a connection of its own. A
+  dashboard connects only while it refreshes, by hand or on an interval, and
+  only while it is shown. Its time range and variables are written into the
+  panels' queries as Grafana writes them (`$__timeFilter(column)`, `$name`),
+  and a variable's choices can come from a query. Panels are added from a
+  query tab's result, edited in a query tab, and moved and resized by
+  dragging. Stat and table panels can color numbers by thresholds.
+  Dashboards are listed in the sidebar and reopen after a restart
+- Query tabs color the brackets of the statement under the cursor by how
+  deeply they nest, and a bracket without a partner in the error color.
+  Colorize Brackets in the Editor settings turns it off
+- The sidebar trees pin the folders scrolled past to their top, so the
+  folder holding the rows on screen stays in reach. Clicking a pinned folder
+  closes it
+- The structure tab shows one part of a table at a time: columns, indexes,
+  foreign keys, the table's details (row estimate, sizes, creation and last
+  change, engine settings) and its create statement with comments, triggers
+  and grants. A selected row opens in a side panel, whose type field
+  suggests the database's type names. On PostgreSQL 15 and later a unique
+  index can treat NULLs as equal
+- New Table on a connection, database, schema or Tables folder opens the
+  structure tab for a table that does not exist yet, and Create Table runs
+  its `CREATE TABLE` with the primary key and foreign keys declared inline,
+  so SQLite and DuckDB tables get foreign keys too
+- Virtual foreign keys declare where a column of a view or a table without
+  constraints points. They live in Blanco only, are followed by the grid like
+  declared keys and are drawn dashed in the schema graph
+- On MySQL, MariaDB and ClickHouse a new column can be placed among the
+  others, and a column is moved by dragging its number in the structure tab
+- Upper Case Keywords and Lower Case Keywords (Shift+Alt+U and Shift+Alt+L)
+  change the case of keywords only, in the selection or the statement under
+  the cursor, leaving strings, comments and identifiers as they are
+- A tab's menu closes the tabs to its left, its right, all but it or all of
+  them. Pinned tabs stay open, and a tab with unsaved changes to its file
+  asks to save them first
+- The Snippets panel names a new snippet or group in place, renames with F2
+  and duplicates a snippet with Ctrl+D (Cmd+D on macOS)
+- Connecting opens the connection's default database and schema in the
+  sidebar. A switch in the connection dialog turns it off
 - Redis: Filter Keys on a connection lists only keys matching a pattern,
   matched on the server, and Load More Keys lists the next 1000 when there
   are more. The key inspector can set or remove a key's TTL. Connections
@@ -17,11 +57,17 @@ All notable changes to this project will be documented in this file.
   opens its DDL in a read only tab. The labels of an enum column are offered
   when typing a value for it in the editor (`status = '`, `status IN (`,
   `SET status =`) and under Pick Value when editing one of its cells
-
+- PostGIS geometry and geography values read as WKT instead of hex, and a
+  point as its coordinates. The expanded cell shows the value's WKT with its
+  GeoJSON under it, and an edit takes WKT or EWKT, checked before it is
+  sent. WKT typed over a value keeps that value's SRID. Text filters on a
+  geometry column match its WKT
 - Tokyo Night, Tokyo Night Storm and Tokyo Night Light themes
 - Settings, Appearance has a VS Code Themes group that searches Open VSX for
   VS Code color themes, previews them, lets you try one across the app
   before installing, and installs them converted to Blanco's theme format
+- Blanco installs with Nix on x86_64 and aarch64 Linux
+  (`nix run github:zanmato/blanco`), and the flake has an overlay for NixOS
 
 ### Changes
 
@@ -30,9 +76,21 @@ All notable changes to this project will be documented in this file.
   `CREATE`/`ALTER` `USER`/`ROLE`, MySQL and MariaDB `CREATE`/`ALTER USER`,
   `GRANT` and `SET PASSWORD`, and SQL Server `CREATE`/`ALTER LOGIN`. The
   statement is sent to the server as typed
+- The history panel loads only the start of each query and highlights it,
+  so scrolling past very long queries no longer stutters. Copying or
+  inserting an entry reads its full text
+- Cells of a result that cannot be edited can still be expanded, to read
+  and copy a long value
+- A large script no longer stalls typing while the statement under the
+  cursor is found, which now happens off the main thread
 
 ### Fixes
 
+- The diagnostic tooltip in the editor was see through, so the code behind
+  it showed through its text
+- SQL views, such as an object's DDL, kept the previous theme's colors after
+  switching themes
+- The SQL log shows its selection while it is being dragged
 - The Catppuccin themes' error, warning, info and hint colors were ignored,
   so diagnostics used the default colors
 - Revealing a PostgreSQL object in the sidebar could stop before selecting
@@ -49,11 +107,6 @@ All notable changes to this project will be documented in this file.
 - Open Tabs in the sidebar rail lists the window's tabs grouped by
   connection. Tabs there switch on click, close with the middle button,
   reorder by dragging and have the same menu as in the tab strip
-- PostGIS geometry and geography values read as WKT instead of hex, and a
-  point as its coordinates. The expanded cell shows the value's WKT with its
-  GeoJSON under it, and an edit takes WKT or EWKT, checked before it is
-  sent. WKT typed over a value keeps that value's SRID. Text filters on a
-  geometry column match its WKT
 
 ### Changes
 
