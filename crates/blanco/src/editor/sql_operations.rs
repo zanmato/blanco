@@ -19,6 +19,11 @@ use super::{EditorPanel, LINT_DEBOUNCE_MS, TabType};
 /// rather than compete with the syntax colors.
 const STATEMENT_OUTLINE_OPACITY: f32 = 0.5;
 
+/// Documents above this size are parsed for the outline once typing pauses
+/// rather than on every keystroke.
+const OUTLINE_DEBOUNCED_BYTES: usize = 256 * 1024;
+const OUTLINE_DEBOUNCE: Duration = Duration::from_millis(150);
+
 impl EditorPanel {
     /// Re-frame the statement the cursor sits in, and re-lint when it moved.
     ///
@@ -26,9 +31,69 @@ impl EditorPanel {
     /// cursor moves. The editor also notifies for repaints that change
     /// neither, so the buffer is only parsed again when the document version
     /// or the selection has actually changed.
+    ///
+    /// Finding the statement parses the whole buffer, which takes seconds for
+    /// an INSERT of many megabytes, so it runs on a background thread, after
+    /// typing pauses in a large document. The frame moves with the edits
+    /// until the new one is in.
     pub(super) fn refresh_statement_outline(
         &mut self,
         editor: &Entity<EditorState>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(query_tab) = self.tabs.iter_mut().find_map(|tab| match tab {
+            TabType::Query(query_tab) if &query_tab.base.editor == editor => Some(query_tab),
+            _ => None,
+        }) else {
+            return;
+        };
+        if query_tab.statement_outline.is_none() {
+            return;
+        }
+
+        let state = editor.read(cx);
+        let selection = state.selected_range();
+        let parsed_from = (state.document_version(), selection.clone());
+        if query_tab.outlined_statement.parsed_from == Some(parsed_from.clone()) {
+            return;
+        }
+        query_tab.outlined_statement.parsed_from = Some(parsed_from.clone());
+
+        // A selection is the user's own statement of scope; outlining the
+        // statement around it would only compete with it.
+        if !selection.is_empty() {
+            query_tab.outlined_statement.parse = None;
+            self.finish_statement_outline(editor, parsed_from, None, cx);
+            return;
+        }
+
+        let grammar = query_tab.context.db_type.sql_grammar();
+        let text = state.text().clone();
+        let cursor = state.cursor();
+        let debounce = text.len() > OUTLINE_DEBOUNCED_BYTES;
+        let editor = editor.clone();
+        query_tab.outlined_statement.parse = Some(cx.spawn(async move |panel, cx| {
+            if debounce {
+                cx.background_executor().timer(OUTLINE_DEBOUNCE).await;
+            }
+            let range = cx
+                .background_spawn(async move { active_statement_range(grammar, &text, cursor) })
+                .await;
+            panel
+                .update(cx, |panel, cx| {
+                    panel.finish_statement_outline(&editor, parsed_from, range, cx)
+                })
+                .log_err();
+        }));
+    }
+
+    /// Frame `range`, found for the document version and selection in
+    /// `parsed_from`, unless the editor has moved on since.
+    fn finish_statement_outline(
+        &mut self,
+        editor: &Entity<EditorState>,
+        parsed_from: (u64, Range<usize>),
+        range: Option<Range<usize>>,
         cx: &mut Context<Self>,
     ) {
         let Some((tab_index, query_tab)) =
@@ -44,33 +109,12 @@ impl EditorPanel {
         else {
             return;
         };
+        if query_tab.outlined_statement.parsed_from.as_ref() != Some(&parsed_from) {
+            return;
+        }
         let Some(outline) = query_tab.statement_outline.clone() else {
             return;
         };
-
-        let range = {
-            let state = editor.read(cx);
-            let selection = state.selected_range();
-            let parsed_from = (state.document_version(), selection.clone());
-            if query_tab.outlined_statement.parsed_from == Some(parsed_from.clone()) {
-                return;
-            }
-            query_tab.outlined_statement.parsed_from = Some(parsed_from);
-
-            // A selection is the user's own statement of scope; outlining the
-            // statement around it would only compete with it.
-            selection
-                .is_empty()
-                .then(|| {
-                    active_statement_range(
-                        query_tab.context.db_type.sql_grammar(),
-                        state.text(),
-                        state.cursor(),
-                    )
-                })
-                .flatten()
-        };
-
         // Setting entries the collection already holds neither repaints nor
         // notifies the editor back, so the outline can be re-set from an
         // observer of that same editor.

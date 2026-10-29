@@ -1,3 +1,6 @@
+mod bracket_colors;
+#[cfg(test)]
+mod bracket_colors_test;
 pub(crate) mod dashboard;
 mod file_runner;
 mod object_ddl;
@@ -1123,6 +1126,7 @@ impl EditorPanel {
                 );
                 let accept_keys = crate::settings::completion_accept_keys(cx);
                 this.set_all_editors_completion_accept_keys(accept_keys, cx);
+                this.refresh_all_bracket_colors(cx);
             });
         panel._subscriptions.push(settings_subscription);
 
@@ -1310,6 +1314,8 @@ impl EditorPanel {
             })
         });
 
+        let bracket_colors = supports_sql.then(|| bracket_colors::BracketColors::new(&editor, cx));
+
         let subscription = cx.subscribe_in(&editor, window, |this, _editor, event, window, cx| {
             if let InputEvent::PressEnter { secondary, .. } = event
                 && *secondary
@@ -1325,6 +1331,7 @@ impl EditorPanel {
         // also keeps the Ln/Col indicator in the action bar on the cursor.
         let subscription = cx.observe(&editor, |this, editor, cx| {
             this.refresh_statement_outline(&editor, cx);
+            this.refresh_bracket_colors(&editor, cx);
             this.refresh_file_dirty(&editor, cx);
             cx.notify();
         });
@@ -1410,6 +1417,7 @@ impl EditorPanel {
             last_parameter_values: HashMap::new(),
             statement_outline,
             outlined_statement: OutlinedStatement::default(),
+            bracket_colors,
         };
 
         self.tabs.push(TabType::Query(Box::new(query_tab)));

@@ -208,6 +208,10 @@ pub(crate) enum Scene {
     /// line, redrawn plain, with whitespace shown and with invisible
     /// characters highlighted, after which the app quits.
     LargeQuery,
+    /// Not a screenshot: an INSERT of 100,000 rows typed into and scrolled,
+    /// with bracket colors off and on, after which the app quits. Besides
+    /// the frames it logs how long each keystroke keeps the main thread.
+    LargeInsert,
 }
 
 impl Scene {
@@ -234,6 +238,7 @@ impl Scene {
             "motion" => Some(Self::Motion),
             "large-values" => Some(Self::LargeValues),
             "large-query" => Some(Self::LargeQuery),
+            "large-insert" => Some(Self::LargeInsert),
             _ => {
                 tracing::error!("Unknown BLANCO_SCENE {scene:?}");
                 None
@@ -248,6 +253,7 @@ impl Scene {
             | Self::Terminal
             | Self::Snippets
             | Self::LargeQuery
+            | Self::LargeInsert
             | Self::Structure
             | Self::Chart
             | Self::Explain
@@ -1009,6 +1015,10 @@ async fn stage_scene(
             measure_large_query(&editor_panel, cx).await?;
             cx.update(|_, cx| cx.quit())?;
         }
+        Scene::LargeInsert => {
+            measure_large_insert(&editor_panel, cx).await?;
+            cx.update(|_, cx| cx.quit())?;
+        }
     }
 
     settle(cx, 1500).await;
@@ -1053,6 +1063,90 @@ async fn measure_large_query(
         tracing::info!("editor measurement: {phase}");
         for _ in 0..100 {
             cx.update(|window, _| window.refresh())?;
+            settle(cx, 16).await;
+        }
+        tracing::info!("editor measurement: done");
+    }
+    Ok(())
+}
+
+/// Type into and scroll an INSERT of 100,000 rows, about 4 MB, with bracket
+/// colors off and on. Each keystroke goes through the window as typing does,
+/// and its time, which covers the editor's own update and every observer of
+/// it, is logged as an edit duration beside the frames GPUI times.
+async fn measure_large_insert(
+    editor_panel: &Entity<EditorPanel>,
+    cx: &mut AsyncWindowContext,
+) -> anyhow::Result<()> {
+    let rows: Vec<String> = (0..100_000)
+        .map(|ix| format!("  ({ix}, 'album ({ix})', (({ix} * 3) % 7) + 1, ROUND({ix} / 3.0, 2))"))
+        .collect();
+    let query = format!(
+        "INSERT INTO albums (id, title, rating, price) VALUES\n{};",
+        rows.join(",\n")
+    );
+    let editor = editor_panel
+        .read_with(cx, |panel, _| {
+            panel.active_query_tab().map(|tab| tab.editor.clone())
+        })
+        .ok_or_else(|| anyhow::anyhow!("no query tab"))?;
+    editor.update_in(cx, |editor, window, cx| {
+        editor.set_value(query, window, cx);
+        editor.set_cursor_position(gpui_component::input::Position::new(4, 6), window, cx);
+        editor.focus(window, cx);
+    })?;
+    settle(cx, 3000).await;
+
+    // (phase, bracket colors, pause after each keystroke in milliseconds).
+    // The long pause lets every scan finish and its decorations be applied.
+    let phases = [
+        ("typing-off", false, 16),
+        ("typing-on", true, 16),
+        ("paused-on", true, 400),
+    ];
+    for (phase, colorize, pause) in phases {
+        cx.update(|_, cx| {
+            crate::app_settings::AppSettings::global_mut(cx)
+                .settings
+                .editor
+                .colorize_brackets = colorize;
+        })?;
+        settle(cx, 1000).await;
+        tracing::info!("editor measurement: {phase}");
+        let keystrokes = if pause > 100 { 20 } else { 60 };
+        for ix in 0..keystrokes {
+            let key = if ix % 2 == 0 { "1" } else { "backspace" };
+            let keystroke = gpui::Keystroke::parse(key)?;
+            let started = std::time::Instant::now();
+            cx.update(|window, cx| window.dispatch_keystroke(keystroke, cx))?;
+            // On stdout beside GPUI's frame durations, which
+            // scripts/measure-frames reads.
+            #[allow(clippy::print_stdout)]
+            {
+                println!("edit duration: {:?}", started.elapsed());
+            }
+            settle(cx, pause).await;
+        }
+        tracing::info!("editor measurement: done");
+    }
+
+    for (phase, colorize) in [("scroll-off", false), ("scroll-on", true)] {
+        cx.update(|_, cx| {
+            crate::app_settings::AppSettings::global_mut(cx)
+                .settings
+                .editor
+                .colorize_brackets = colorize;
+        })?;
+        editor.update_in(cx, |editor, _, cx| {
+            editor.set_scroll_offset(gpui::point(gpui::px(0.), gpui::px(0.)), cx)
+        })?;
+        settle(cx, 1000).await;
+        tracing::info!("editor measurement: {phase}");
+        for step in 1..=100 {
+            editor.update_in(cx, |editor, _, cx| {
+                editor
+                    .set_scroll_offset(gpui::point(gpui::px(0.), gpui::px(-60. * step as f32)), cx)
+            })?;
             settle(cx, 16).await;
         }
         tracing::info!("editor measurement: done");

@@ -337,6 +337,25 @@ rows and, within a long unwrapped row, only the visible columns. Measure
 changes to either with `scripts/measure-frames large-values` or
 `large-query`, which time frames under Xvfb with GPUI's `ZED_MEASUREMENTS`.
 
+## Bracket colors
+
+Query tabs color the brackets of the statement under the cursor by nesting
+depth, and brackets without a partner in the error color
+(`editor.colorize_brackets`, on by default). `blanco_core::brackets::script_brackets`
+pairs them over `statement_stream::sql_regions` and divides the script at
+the `;`s outside quotes and comments, rather than using the syntax tree,
+which while a statement is typed can leave out a stray `)` or find no
+statement behind an open string. `editor/bracket_colors.rs` scans each
+document version on a background thread (debounced for large documents),
+picks the statement from the cursor, and gives the editor text decorations
+only for the rows around the visible ones, because the editor moves every
+decoration it holds on each edit. The fork's `overlay_highlights` lays
+decorations over the syntax colors: `gpui::combine_highlights` folds
+overlapping styles in hash set order, so it cannot give one precedence.
+Measure changes with `scripts/measure-frames large-insert`, which types into
+and scrolls a 100,000 row INSERT with colors off and on and times each
+keystroke's main thread work beside the frames.
+
 ## Query timing
 
 `QueryResult::timing` is measured by each driver around its own row loop with

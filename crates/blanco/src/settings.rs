@@ -207,6 +207,9 @@ impl Settings {
                 "editor.highlight_invisible_characters" => {
                     settings.editor.highlight_invisible_characters = value.parse().unwrap_or(true);
                 }
+                "editor.colorize_brackets" => {
+                    settings.editor.colorize_brackets = value.parse().unwrap_or(true);
+                }
                 "editor.folding" => {
                     settings.editor.folding = value.parse().unwrap_or(true);
                 }
@@ -509,6 +512,10 @@ pub struct EditorSettings {
     /// the code editors, which otherwise look like nothing or a plain space.
     #[serde(default = "default_true")]
     pub highlight_invisible_characters: bool,
+    /// Color brackets by how deeply they nest, and brackets without a
+    /// partner in the error color.
+    #[serde(default = "default_true")]
+    pub colorize_brackets: bool,
     pub folding: bool,
     pub hard_tabs: bool,
     pub tab_size: u32,
@@ -737,6 +744,7 @@ impl Default for EditorSettings {
             word_wrap: false,
             show_whitespace: false,
             highlight_invisible_characters: true,
+            colorize_brackets: true,
             folding: true,
             hard_tabs: false,
             tab_size: 2,

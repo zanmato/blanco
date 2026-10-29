@@ -5,6 +5,7 @@
 //! and database service traits.
 
 pub mod binary;
+pub mod brackets;
 pub mod connection_context;
 pub mod connection_trait;
 pub mod database_service;

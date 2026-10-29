@@ -423,6 +423,36 @@ impl SettingsView {
                          the SQL editor, which otherwise look like a plain space or nothing.",
                     ),
                     SettingItem::new(
+                        "Colorize Brackets",
+                        SettingField::switch(
+                            move |cx: &App| {
+                                AppSettings::global(cx).settings.editor.colorize_brackets
+                            },
+                            {
+                                let view_handle = view_handle.clone();
+                                move |val: bool, cx: &mut App| {
+                                    AppSettings::global_mut(cx)
+                                        .settings
+                                        .editor
+                                        .colorize_brackets = val;
+
+                                    let key = "editor.colorize_brackets".to_string();
+                                    let value = val.to_string();
+                                    if let Some(view) = view_handle.upgrade() {
+                                        view.update(cx, |view, cx| {
+                                            view.save_setting_debounced(key, value, false, cx);
+                                        });
+                                    }
+                                }
+                            },
+                        )
+                        .default_value(default_settings.editor.colorize_brackets),
+                    )
+                    .description(
+                        "Color brackets in the SQL editor by how deeply they nest, and brackets \
+                         without a partner in the error color.",
+                    ),
+                    SettingItem::new(
                         "Folding",
                         SettingField::switch(
                             move |cx: &App| AppSettings::global(cx).settings.editor.folding,

@@ -12,6 +12,9 @@
 #                 characters marked (the default)
 #   large-query   the SQL editor with a 1 MB one line query: redrawing plain,
 #                 with whitespace shown and with invisible characters shown
+#   large-insert  the SQL editor with a 4 MB INSERT of 100,000 rows: typing
+#                 and scrolling with bracket colors off and on, timing each
+#                 keystroke's main thread work ("edit") beside the frames
 #
 # Needs Xvfb, xdpyinfo, sqlite3 and dbus-run-session, plus Mesa's lavapipe
 # Vulkan driver when there is no GPU. Set BLANCO_BIN to measure an existing
@@ -85,14 +88,16 @@ timeout 600 env -i \
 
 awk '
   / measurement: done/ { phase = ""; next }
-  / measurement: / { phase = $NF; order[++phases] = phase; next }
-  phase != "" && /^frame duration: / {
+  / measurement: / { phase = $NF; next }
+  phase != "" && /^[a-z]+ duration: / {
+    key = phase " " $1
+    if (!(key in count)) order[++phases] = key
     value = $3
     if (value ~ /ms$/) { sub(/ms$/, "", value); ms = value + 0 }
     else if (value ~ /µs$/) { sub(/µs$/, "", value); ms = value / 1000 }
     else if (value ~ /ns$/) { sub(/ns$/, "", value); ms = value / 1000000 }
     else if (value ~ /s$/) { sub(/s$/, "", value); ms = value * 1000 }
-    frames[phase, ++count[phase]] = ms
+    frames[key, ++count[key]] = ms
   }
   END {
     found = 0
@@ -109,7 +114,7 @@ awk '
       }
       total = 0
       for (i = 1; i <= n; i++) total += sorted[i]
-      printf "%-14s %4d frames  median %8.2f ms  p95 %8.2f ms  max %8.2f ms  mean %8.2f ms\n", \
+      printf "%-20s %4d samples  median %8.2f ms  p95 %8.2f ms  max %8.2f ms  mean %8.2f ms\n", \
         p, n, sorted[int((n + 1) / 2)], sorted[int(n * 0.95 + 0.5)], sorted[n], total / n
     }
     if (!found) exit 1

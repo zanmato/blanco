@@ -125,6 +125,8 @@ pub struct QueryTab {
     pub statement_outline: Option<RangeDecorationCollection>,
     /// The statement the outline currently frames.
     pub outlined_statement: OutlinedStatement,
+    /// Absent for backends without SQL (Redis).
+    pub bracket_colors: Option<super::bracket_colors::BracketColors>,
 }
 
 /// The statement outline's last parse: the editor state it was made from, and
@@ -134,9 +136,11 @@ pub struct QueryTab {
 /// cursor moves, so the outline checks this before parsing the buffer again.
 #[derive(Default)]
 pub struct OutlinedStatement {
-    /// Document version and selection the range was parsed from, or `None`
-    /// before the first parse.
+    /// Document version and selection of the latest parse, or `None` before
+    /// the first. A parse that finishes for an older one is dropped.
     pub parsed_from: Option<(u64, Range<usize>)>,
+    /// The parse running on a background thread.
+    pub parse: Option<gpui::Task<()>>,
     /// Byte range of the statement under the cursor, when there is one.
     pub range: Option<Range<usize>>,
 }
