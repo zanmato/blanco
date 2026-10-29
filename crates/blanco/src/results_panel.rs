@@ -8,10 +8,11 @@ use gpui::{
     Subscription, Window, div, prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
-    ActiveTheme, Icon, Selectable as _, Sizable as _,
+    ActiveTheme, Disableable as _, Icon, Selectable as _, Sizable as _,
     button::{Button, ButtonVariants as _},
     h_flex,
     input::{Input, InputEvent, InputState},
+    menu::DropdownMenu as _,
     scroll::Scrollbar,
     table::{DataTable, TableEvent, TableState},
     tooltip::Tooltip,
@@ -36,7 +37,7 @@ mod cell_edit_state;
 mod cell_edit_test;
 mod chart_view;
 mod clipboard;
-mod column_copy;
+pub(crate) mod column_copy;
 mod column_layout;
 #[cfg(test)]
 mod column_layout_test;
@@ -68,9 +69,15 @@ mod temporal;
 
 // Re-exports
 pub use cell_edit_state::{CellInput, ChangeType, TableChange};
-#[cfg(feature = "screenshots")]
 pub use chart_view::ChartKind;
-pub use chart_view::{ChartView, ResultViewMode};
+pub use chart_view::{Aggregate, ChartChanged, ChartSpec, ChartView, ResultViewMode};
+
+/// Emitted when the way the active result is shown changes.
+pub enum ResultsPanelEvent {
+    ViewChanged,
+}
+
+impl gpui::EventEmitter<ResultsPanelEvent> for ResultsPanel {}
 pub use column_layout::ColumnLayouts;
 pub use results_table_delegate::{ColumnLayout, ResultsTableDelegate};
 
@@ -143,6 +150,12 @@ pub struct ResultsPanel {
     filter_bar_open: bool,
     /// Search field of the Columns menu.
     column_search: Entity<InputState>,
+    /// The dashboard panel the tab's query belongs to, or the dashboard a
+    /// tab was opened to add a panel to.
+    dashboard_link: Option<crate::editor::dashboard::DashboardLink>,
+    /// A view to apply to the next result: the linked panel's, or the one a
+    /// restored tab had.
+    pending_view: Option<crate::editor::dashboard::PanelView>,
     _subscriptions: Vec<Subscription>, // Store subscriptions to prevent them from being dropped
 }
 
@@ -190,6 +203,8 @@ impl ResultsPanel {
             last_diff_view: None,
             filter_bar_open: AppSettings::global(cx).settings.results.filter_bar_open,
             column_search,
+            dashboard_link: None,
+            pending_view: None,
             _subscriptions: vec![
                 column_search_subscription,
                 // The row number setting applies to open grids at once.
@@ -256,6 +271,16 @@ impl ResultsPanel {
         );
 
         let chart_view = cx.new(|cx| ChartView::new(table_state.clone(), window, cx));
+        let chart_subscription =
+            cx.subscribe(&chart_view, |panel, chart_view, _: &ChartChanged, cx| {
+                let active = panel
+                    .result_tabs
+                    .get(panel.active_tab)
+                    .is_some_and(|tab| tab.chart_view == chart_view);
+                if active {
+                    cx.emit(ResultsPanelEvent::ViewChanged);
+                }
+            });
 
         let filter_input = cx.new(|cx| InputState::new(window, cx).placeholder("Filter rows"));
         let filter_subscription = cx.subscribe_in(
@@ -280,7 +305,7 @@ impl ResultsPanel {
             filter_input,
             filter_bar: None,
             filter_base_query: None,
-            _subscriptions: vec![subscription, filter_subscription],
+            _subscriptions: vec![subscription, filter_subscription, chart_subscription],
         }
     }
 
@@ -317,6 +342,107 @@ impl ResultsPanel {
         }
     }
 
+    pub fn set_dashboard_link(
+        &mut self,
+        link: Option<crate::editor::dashboard::DashboardLink>,
+        apply_view: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(view) = apply_view
+            .then(|| {
+                link.as_ref()?
+                    .panel
+                    .as_ref()
+                    .map(|panel| panel.view.clone())
+            })
+            .flatten()
+        {
+            self.pending_view = Some(view);
+        }
+        self.dashboard_link = link;
+        cx.notify();
+    }
+
+    /// Show the next result as `view`, as a restored tab showed its own.
+    pub fn set_pending_view(&mut self, view: crate::editor::dashboard::PanelView) {
+        self.pending_view = Some(view);
+    }
+
+    /// How the active result is shown, for a tab to remember: its chart, or
+    /// `None` for the table.
+    pub fn remembered_view(&self, cx: &App) -> Option<crate::editor::dashboard::PanelView> {
+        let tab = self.result_tabs.get(self.active_tab)?;
+        match tab.view_mode {
+            ResultViewMode::Chart => Some(crate::editor::dashboard::PanelView::Chart(
+                tab.chart_view.read(cx).spec(cx),
+            )),
+            ResultViewMode::Table | ResultViewMode::Plan => None,
+        }
+    }
+
+    pub fn dashboard_link(&self) -> Option<&crate::editor::dashboard::DashboardLink> {
+        self.dashboard_link.as_ref()
+    }
+
+    pub fn dashboard_link_mut(&mut self) -> Option<&mut crate::editor::dashboard::DashboardLink> {
+        self.dashboard_link.as_mut()
+    }
+
+    /// The query of the active result and how it is shown, for a dashboard
+    /// panel. `None` without a tabular result, or while it shows a plan.
+    pub fn dashboard_panel_source(
+        &self,
+        cx: &App,
+    ) -> Option<(String, crate::editor::dashboard::PanelView)> {
+        use crate::editor::dashboard::PanelView;
+
+        let tab = self.result_tabs.get(self.active_tab)?;
+        if tab.key_value.is_some() || !self.has_results {
+            return None;
+        }
+        let query = tab.filter_base_query.clone()?;
+        let view = match tab.view_mode {
+            ResultViewMode::Table => PanelView::Table {
+                layout: tab.table_state.read(cx).delegate().column_layout(),
+                thresholds: None,
+            },
+            ResultViewMode::Chart => PanelView::Chart(tab.chart_view.read(cx).spec(cx)),
+            ResultViewMode::Plan => return None,
+        };
+        Some((query, view))
+    }
+
+    /// Show the active result as a dashboard panel shows it. A stat has no
+    /// view of its own here and shows as the table it reads.
+    fn apply_dashboard_view(
+        &mut self,
+        view: &crate::editor::dashboard::PanelView,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::editor::dashboard::PanelView;
+
+        let Some(tab) = self.result_tabs.get_mut(self.active_tab) else {
+            return;
+        };
+        match view {
+            PanelView::Table { layout, .. } => {
+                tab.view_mode = ResultViewMode::Table;
+                tab.table_state.update(cx, |state, cx| {
+                    state.delegate_mut().apply_column_layout(layout);
+                    state.refresh(cx);
+                });
+            }
+            PanelView::Chart(spec) => {
+                tab.view_mode = ResultViewMode::Chart;
+                tab.chart_view
+                    .update(cx, |chart, cx| chart.apply_spec(spec, window, cx));
+            }
+            PanelView::Stat(_) => tab.view_mode = ResultViewMode::Table,
+        }
+        cx.notify();
+    }
+
     #[cfg(any(test, feature = "screenshots"))]
     pub(crate) fn active_chart_view(&self) -> Option<Entity<ChartView>> {
         Some(self.result_tabs.get(self.active_tab)?.chart_view.clone())
@@ -327,6 +453,7 @@ impl ResultsPanel {
             && tab.view_mode != mode
         {
             tab.view_mode = mode;
+            cx.emit(ResultsPanelEvent::ViewChanged);
             cx.notify();
         }
     }
@@ -461,6 +588,18 @@ impl ResultsPanel {
         self.active_tab = first_new_index;
         self.table_state = self.result_tabs[self.active_tab].table_state.clone();
         self.has_results = true;
+        // A plan shows as a plan, whatever view was waiting for the result.
+        if let Some(view) = self.pending_view.take()
+            && self
+                .result_tabs
+                .get(self.active_tab)
+                .is_some_and(|tab| tab.view_mode != ResultViewMode::Plan)
+        {
+            self.apply_dashboard_view(&view, window, cx);
+        }
+        // A new result shows its own view, so a chart saved for the last one
+        // must not come back on it after a restart.
+        cx.emit(ResultsPanelEvent::ViewChanged);
         self.sync_compare_selection_kind(cx);
         let _ = connection_id; // accepted for API parity with single-result path
         cx.notify();
@@ -1123,43 +1262,7 @@ impl ResultsPanel {
         selected_rows: &HashSet<usize>,
         delegate: &ResultsTableDelegate,
     ) -> SelectedTableData {
-        let mut selected_rows_data = Vec::new();
-
-        // In grid order: the selection is a set, and not every format sorts
-        // the rows it is handed.
-        let mut ordered_rows: Vec<usize> = selected_rows.iter().copied().collect();
-        ordered_rows.sort_unstable();
-        for row in ordered_rows {
-            if let Some(row_data) = delegate.rows.get(row) {
-                // Hidden columns sit after the visible ones and stay out of
-                // copies and exports.
-                let cells: Vec<SelectedCell> = row_data
-                    .iter()
-                    .take(delegate.visible_column_count())
-                    .enumerate()
-                    .map(|(col, value)| SelectedCell {
-                        col,
-                        value: value.clone(),
-                        column_name: delegate.columns.get(col).map(|c| c.name.to_string()),
-                        column_type: delegate.column_types.get(col).cloned(),
-                    })
-                    .collect();
-
-                selected_rows_data.push(SelectedRow { row, cells });
-            }
-        }
-
-        SelectedTableData {
-            table_name: delegate.table_name.clone(),
-            db_type: delegate.db_type,
-            columns: delegate
-                .columns
-                .iter()
-                .take(delegate.visible_column_count())
-                .map(|c| c.name.to_string())
-                .collect::<Vec<_>>(),
-            selected_rows: selected_rows_data,
-        }
+        selected_table_data(selected_rows, delegate)
     }
 
     /// Build the result tab strip: one entry per result tab plus the
@@ -1380,6 +1483,9 @@ impl ResultsPanel {
                         .gap_1()
                         .px_2()
                         .when(is_table, |this| this.child(self.render_column_menu(cx)))
+                        .when(self.db_type.supports_sql(), |this| {
+                            this.child(self.render_dashboard_menu(cx))
+                        })
                         .when(has_plan, |this| {
                             this.child(
                                 Button::new("view-mode-plan")
@@ -1415,6 +1521,62 @@ impl ResultsPanel {
                                     this.set_view_mode(ResultViewMode::Chart, cx);
                                 })),
                         ),
+                )
+            })
+    }
+
+    /// Adding the result to a dashboard, or saving it back into the panel
+    /// it came from.
+    fn render_dashboard_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        use crate::app::{AddToDashboard, UpdateDashboardPanel};
+
+        let available = self.dashboard_panel_source(cx).is_some();
+        let link = self.dashboard_link.clone();
+        let dashboards = crate::editor::dashboard::DashboardDirectory::dashboards(cx).to_vec();
+        Button::new("add-to-dashboard")
+            .ghost()
+            .xsmall()
+            .icon(IconName::LayoutDashboard)
+            .tooltip("Add to Dashboard")
+            .disabled(!available)
+            .dropdown_menu(move |menu, _, _| {
+                let linked_panel = link.as_ref().and_then(|link| {
+                    Some((
+                        link.dashboard_name.clone(),
+                        link.panel.as_ref()?.title.clone(),
+                    ))
+                });
+                let linked_dashboard = link.as_ref().map(|link| link.dashboard_id);
+                let menu = match linked_panel {
+                    Some((dashboard, panel)) => menu
+                        .menu(
+                            format!("Save to \"{panel}\" on {dashboard}"),
+                            Box::new(UpdateDashboardPanel),
+                        )
+                        .separator(),
+                    None => menu,
+                };
+                // The dashboard the tab came from comes first.
+                let mut dashboards = dashboards.clone();
+                dashboards.sort_by_key(|dashboard| Some(dashboard.id) != linked_dashboard);
+                let menu = if dashboards.is_empty() {
+                    menu
+                } else {
+                    dashboards
+                        .iter()
+                        .fold(menu.label("Add to Dashboard"), |menu, dashboard| {
+                            menu.menu(
+                                dashboard.name.clone(),
+                                Box::new(AddToDashboard {
+                                    dashboard_id: Some(dashboard.id),
+                                }),
+                            )
+                        })
+                        .separator()
+                };
+                menu.menu(
+                    "New Dashboard…",
+                    Box::new(AddToDashboard { dashboard_id: None }),
                 )
             })
     }
@@ -1903,4 +2065,48 @@ fn is_explain_statement(text: &str) -> bool {
         .split_whitespace()
         .next()
         .is_some_and(|first| first.eq_ignore_ascii_case("EXPLAIN"))
+}
+
+/// The rows of `delegate` in `selected_rows`, as copies and exports take them.
+pub(crate) fn selected_table_data(
+    selected_rows: &HashSet<usize>,
+    delegate: &ResultsTableDelegate,
+) -> SelectedTableData {
+    let mut selected_rows_data = Vec::new();
+
+    // In grid order: the selection is a set, and not every format sorts
+    // the rows it is handed.
+    let mut ordered_rows: Vec<usize> = selected_rows.iter().copied().collect();
+    ordered_rows.sort_unstable();
+    for row in ordered_rows {
+        if let Some(row_data) = delegate.rows.get(row) {
+            // Hidden columns sit after the visible ones and stay out of
+            // copies and exports.
+            let cells: Vec<SelectedCell> = row_data
+                .iter()
+                .take(delegate.visible_column_count())
+                .enumerate()
+                .map(|(col, value)| SelectedCell {
+                    col,
+                    value: value.clone(),
+                    column_name: delegate.columns.get(col).map(|c| c.name.to_string()),
+                    column_type: delegate.column_types.get(col).cloned(),
+                })
+                .collect();
+
+            selected_rows_data.push(SelectedRow { row, cells });
+        }
+    }
+
+    SelectedTableData {
+        table_name: delegate.table_name.clone(),
+        db_type: delegate.db_type,
+        columns: delegate
+            .columns
+            .iter()
+            .take(delegate.visible_column_count())
+            .map(|c| c.name.to_string())
+            .collect::<Vec<_>>(),
+        selected_rows: selected_rows_data,
+    }
 }

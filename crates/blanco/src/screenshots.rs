@@ -12,7 +12,8 @@
 use std::time::Duration;
 
 use app_database::{
-    AppDatabase, ConnectionData, EditorKind, QueryTabData, SnippetData, WindowGeometry,
+    AppDatabase, ConnectionData, DashboardPanelData, EditorKind, PanelConnection, QueryTabData,
+    SnippetData, WindowGeometry,
 };
 use blanco_core::ddl::{ColumnOperation, ColumnSpec, IndexOperation, IndexSpec};
 use blanco_core::{ConnectionContext, DatabaseType};
@@ -20,8 +21,8 @@ use gpui::{App, AppContext, AsyncWindowContext, Entity, Focusable as _, Window};
 use tokio::runtime::Handle;
 
 use crate::app::{
-    BlancoApp, ConnectToConnection, OpenSchemaGraph, OpenSettings, OpenTableStructure,
-    ShowQueryInNewTab, SidebarTab, ToggleCommandPalette,
+    BlancoApp, ConnectToConnection, OpenDashboard, OpenSchemaGraph, OpenSettings,
+    OpenTableStructure, ShowQueryInNewTab, SidebarTab, ToggleCommandPalette,
 };
 use crate::app_settings::AppSettings;
 use crate::editor::EditorPanel;
@@ -189,6 +190,8 @@ pub(crate) enum Scene {
     Export,
     /// The import dialog with a CSV of new releases loaded.
     Import,
+    /// A dashboard of the shop's numbers: stats, charts and a table.
+    Dashboard,
     /// Not a screenshot: the keyframes of the website's motion demo, each
     /// exported as a snapshot into the directory `BLANCO_SCENE_EXPORT` names.
     /// A statement typed a line at a time, which the editor frames as it
@@ -227,6 +230,7 @@ impl Scene {
             "settings" => Some(Self::Settings),
             "export" => Some(Self::Export),
             "import" => Some(Self::Import),
+            "dashboard" => Some(Self::Dashboard),
             "motion" => Some(Self::Motion),
             "large-values" => Some(Self::LargeValues),
             "large-query" => Some(Self::LargeQuery),
@@ -253,6 +257,7 @@ impl Scene {
             | Self::Settings
             | Self::Export
             | Self::Import
+            | Self::Dashboard
             | Self::JsonEdit => 0,
             Self::InlineEdit | Self::LargeValues | Self::Filter | Self::Motion => 1,
             Self::Script => 2,
@@ -330,9 +335,12 @@ async fn seed_database(database: &AppDatabase) -> anyhow::Result<()> {
                 last_run_at: None,
                 file_path: None,
                 window_id: Some(window_id),
+                result_view: None,
             })
             .await?;
     }
+
+    seed_dashboard(database, connection_id, &connection.name).await?;
 
     let groups: [(&str, &[(&str, &str, EditorKind)]); 2] = [
         (
@@ -388,6 +396,119 @@ async fn seed_database(database: &AppDatabase) -> anyhow::Result<()> {
         }
     }
 
+    Ok(())
+}
+
+/// The shop's dashboard, which [`Scene::Dashboard`] opens: what the panels
+/// show, their width and height on the grid, and the query each runs.
+const DASHBOARD_PANELS: [(&str, &str, u8, u8, &str); 8] = [
+    (
+        "Orders waiting to ship",
+        r#"{"type":"stat","thresholds":{"warning":200,"critical":400}}"#,
+        3,
+        2,
+        "SELECT COUNT(*) AS pending FROM orders WHERE status = 'pending'",
+    ),
+    (
+        "Revenue this year",
+        r#"{"type":"stat"}"#,
+        3,
+        2,
+        "SELECT ROUND(SUM(oi.quantity * oi.unit_price), 2) AS revenue\nFROM order_items oi\nJOIN orders o ON o.id = oi.order_id\nWHERE o.ordered_at >= '2026-01-01' AND o.status <> 'returned'",
+    ),
+    (
+        "Orders this year",
+        r#"{"type":"stat"}"#,
+        3,
+        2,
+        "SELECT COUNT(*) AS orders FROM orders WHERE ordered_at >= '2026-01-01'",
+    ),
+    (
+        "Customers",
+        r#"{"type":"stat"}"#,
+        3,
+        2,
+        "SELECT COUNT(*) AS customers FROM customers",
+    ),
+    (
+        "Monthly revenue",
+        r#"{"type":"chart","kind":"line","axis":"month","value":"revenue","series":null,"line_show_points":true}"#,
+        8,
+        4,
+        "SELECT substr(o.ordered_at, 1, 7) AS month,\n  ROUND(SUM(oi.quantity * oi.unit_price), 2) AS revenue\nFROM order_items oi\nJOIN orders o ON o.id = oi.order_id\nWHERE $__timeFilter(o.ordered_at) AND o.status <> 'returned'\nGROUP BY month\nORDER BY month",
+    ),
+    (
+        "Copies by format",
+        r#"{"type":"chart","kind":"pie","axis":"format","value":"copies","series":null}"#,
+        4,
+        4,
+        "SELECT al.format, SUM(oi.quantity) AS copies\nFROM order_items oi\nJOIN albums al ON al.id = oi.album_id\nGROUP BY al.format\nORDER BY copies DESC",
+    ),
+    (
+        "Revenue by genre",
+        r#"{"type":"chart","kind":"bar","axis":"genre","value":"revenue","series":null}"#,
+        6,
+        4,
+        "SELECT g.name AS genre, ROUND(SUM(oi.quantity * oi.unit_price), 2) AS revenue\nFROM order_items oi\nJOIN albums al ON al.id = oi.album_id\nJOIN genres g ON g.id = al.genre_id\nGROUP BY g.name\nORDER BY revenue DESC",
+    ),
+    (
+        "Out of stock",
+        r#"{"type":"table","thresholds":{"column":"price","warning":30,"critical":40}}"#,
+        6,
+        4,
+        "SELECT al.title, ar.name AS artist, al.price\nFROM albums al\nJOIN artists ar ON ar.id = al.artist_id\nWHERE al.stock = 0 AND al.format = $format\nORDER BY al.title",
+    ),
+];
+
+async fn seed_dashboard(
+    database: &AppDatabase,
+    connection_id: i64,
+    connection_name: &str,
+) -> anyhow::Result<()> {
+    let dashboard_id = database
+        .create_dashboard("Shop overview", Some(connection_id))
+        .await?;
+    // A year of monthly revenue, and the out of stock list for one format.
+    if let Some(mut dashboard) = database.load_dashboard(dashboard_id).await? {
+        dashboard.time_range = "1y".to_string();
+        dashboard.variables = serde_json::json!([{
+            "name": "format",
+            "source": {
+                "type": "query",
+                "connection_id": connection_id,
+                "database_name": "main",
+                "query": "SELECT DISTINCT format FROM albums ORDER BY format",
+            },
+            "current": "LP",
+        }])
+        .to_string();
+        database.update_dashboard(&dashboard).await?;
+    }
+    for name in ["Sales", "Inventory"] {
+        database.create_dashboard(name, Some(connection_id)).await?;
+    }
+    for (title, view, width, height, query) in DASHBOARD_PANELS {
+        database
+            .insert_dashboard_panel(&DashboardPanelData {
+                id: 0,
+                dashboard_id,
+                title: title.to_string(),
+                connection: Some(PanelConnection {
+                    id: connection_id,
+                    name: connection_name.to_string(),
+                    db_type: DatabaseType::SQLite.as_str().to_string(),
+                    environment_type: app_database::EnvironmentType::DEV,
+                }),
+                database_name: "main".to_string(),
+                schema_name: None,
+                query: query.to_string(),
+                view: view.to_string(),
+                position: 0,
+                width,
+                height,
+            })
+            .await?;
+    }
     Ok(())
 }
 
@@ -646,6 +767,25 @@ async fn stage_scene(
                 panel.on_explain_query(blanco_core::ExplainMode::Estimated, window, cx);
             })?;
             wait_for_run(&editor_panel, cx).await?;
+        }
+        Scene::Dashboard => {
+            cx.update(|window, cx| {
+                window.dispatch_action(Box::new(OpenDashboard { dashboard_id: 1 }), cx);
+            })?;
+            app.update_in(cx, |app, _, cx| {
+                app.select_sidebar_tab(SidebarTab::Dashboards, cx);
+            })?;
+            settle(cx, 500).await;
+            let dashboard = editor_panel
+                .read_with(cx, |panel, _| panel.active_dashboard_tab())
+                .ok_or_else(|| anyhow::anyhow!("no dashboard tab"))?;
+            for _ in 0..200 {
+                settle(cx, 50).await;
+                if dashboard.read_with(cx, |dashboard, cx| dashboard.is_settled(cx)) {
+                    break;
+                }
+            }
+            settle(cx, 500).await;
         }
         Scene::SchemaGraph => {
             cx.update(|window, cx| {

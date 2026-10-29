@@ -681,6 +681,13 @@ pub trait Connection: Send + Sync {
         self.get_schemas().await.map(|_| ())
     }
 
+    /// End the connection's sessions with the server now, rather than
+    /// whenever the last handle to it is dropped. Backends that hold no
+    /// session between calls have nothing to close.
+    async fn close(&self) -> Result<(), anyhow::Error> {
+        Ok(())
+    }
+
     /// The server behind this connection where servers of one database type
     /// differ in syntax (MariaDB behind a MySQL connection).
     async fn server_variant(&self) -> Result<crate::ServerVariant, anyhow::Error> {

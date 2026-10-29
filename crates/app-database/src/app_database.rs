@@ -1,5 +1,6 @@
 pub mod connection_transfer;
 mod connections;
+mod dashboards;
 mod environment_tags;
 mod query_history;
 mod query_tabs;
@@ -11,6 +12,7 @@ mod virtual_foreign_keys;
 mod windows;
 
 pub use connections::LegacyConnectionCredentials;
+pub use dashboards::{DASHBOARD_COLUMNS, DashboardData, DashboardPanelData, PanelConnection};
 pub use schema::{app_db_path, init_schema};
 pub use types::{
     ConnectionData, EditorKind, EnvironmentType, QueryHistoryData, QueryTabData, SnippetData,

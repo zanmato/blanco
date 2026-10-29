@@ -52,6 +52,68 @@ type SharedActionSender = Arc<StdMutex<Option<channel::Sender<DatabaseServiceMes
 pub type DatabaseConfigId = i64; // Connection ID from app_database
 pub type ConnectionId = (DatabaseConfigId, String); // (config_id, database_name)
 
+/// How a connection is opened.
+#[derive(Clone, Copy)]
+struct ConnectOptions {
+    /// Kept as the shared connection for its database.
+    cache: bool,
+    /// Writes refused whatever the config says.
+    refuse_writes: bool,
+}
+
+impl ConnectOptions {
+    const SHARED: Self = Self {
+        cache: true,
+        refuse_writes: false,
+    };
+    const UNCACHED: Self = Self {
+        cache: false,
+        refuse_writes: false,
+    };
+}
+
+/// Numbers the connections opened outside the shared cache, whose SSH tunnel
+/// use is tracked under a key of their own.
+static OWN_CONNECTIONS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// A connection from [`DatabaseService::open_dedicated_connection`]. Its SSH
+/// tunnel, when it has one, is held until it is dropped.
+pub struct DedicatedConnection {
+    pub connection: Arc<dyn Connection>,
+    _tunnel: Option<TunnelUser>,
+}
+
+impl std::ops::Deref for DedicatedConnection {
+    type Target = dyn Connection;
+
+    fn deref(&self) -> &Self::Target {
+        self.connection.as_ref()
+    }
+}
+
+/// A hold on an SSH tunnel, let go when dropped.
+struct TunnelUser {
+    key: ConnectionId,
+    service: DatabaseService,
+}
+
+impl Drop for TunnelUser {
+    fn drop(&mut self) {
+        let service = self.service.clone();
+        let key = self.key.clone();
+        self.service.runtime_handle.spawn(async move {
+            service.release_tunnel_users(&[key]).await;
+        });
+    }
+}
+
+/// A connection from [`DatabaseService::open_short_lived_read_connection`].
+pub struct ShortLivedConnection {
+    pub connection: Arc<dyn Connection>,
+    /// What it holds its SSH tunnel under, when it goes through one.
+    tunnel_key: Option<ConnectionId>,
+}
+
 /// How an external client tool reaches one database. Holds the password, so
 /// it is built right before the tool starts and dropped with it.
 #[derive(Clone, Debug)]
@@ -77,6 +139,9 @@ pub struct DatabaseService {
     // Internal SSH management (private)
     ssh_tunnels: Arc<RwLock<HashMap<DatabaseConfigId, Arc<StdMutex<SshTunnel>>>>>,
     tunnel_connections: Arc<RwLock<HashMap<ConnectionId, DatabaseConfigId>>>,
+    // Held while a config's tunnel is checked and built, so connections
+    // opening together share one tunnel instead of replacing each other's.
+    tunnel_creation: Arc<StdMutex<HashMap<DatabaseConfigId, Arc<tokio::sync::Mutex<()>>>>>,
 
     // Channel sender for dispatching actions from any context (shared via Arc)
     action_sender: SharedActionSender,
@@ -132,6 +197,7 @@ impl DatabaseService {
             connection_factories: Arc::new(factories),
             ssh_tunnels: Arc::new(RwLock::new(HashMap::new())),
             tunnel_connections: Arc::new(RwLock::new(HashMap::new())),
+            tunnel_creation: Arc::new(StdMutex::new(HashMap::new())),
             action_sender: Arc::new(StdMutex::new(None)),
             secret_store: Arc::new(NoSecretStore),
             secret_prompt: Arc::new(NoSecretPrompt),
@@ -368,7 +434,8 @@ impl DatabaseService {
             }
         }
 
-        self.connect_with_secrets(&config, database, true).await
+        self.connect_with_secrets(&config, database, ConnectOptions::SHARED)
+            .await
     }
 
     /// A connection of its own to `database`, kept out of the shared cache
@@ -380,20 +447,106 @@ impl DatabaseService {
         &self,
         config_id: DatabaseConfigId,
         database: Option<&str>,
-    ) -> Result<Arc<dyn Connection>> {
+    ) -> Result<DedicatedConnection> {
         let config = self.get_connection_config(config_id).await.ok_or_else(|| {
             anyhow::anyhow!("Connection configuration not found for ID: {}", config_id)
         })?;
-        self.connect_with_secrets(&config, database, false).await
+        let tunnel = self
+            .register_tunnel_user(&config)
+            .await
+            .map(|key| TunnelUser {
+                key,
+                service: self.clone(),
+            });
+        let connection = self
+            .connect_with_secrets(&config, database, ConnectOptions::UNCACHED)
+            .await?;
+        Ok(DedicatedConnection {
+            connection,
+            _tunnel: tunnel,
+        })
+    }
+
+    /// Count a connection of its own as a user of `config`'s SSH tunnel, so
+    /// the tunnel stays while it is open. Registered before connecting, so a
+    /// disconnect of the shared connection meanwhile does not take down the
+    /// tunnel it is opening on.
+    async fn register_tunnel_user(&self, config: &ConnectionConfig) -> Option<ConnectionId> {
+        if !config.requires_ssh_tunnel() {
+            return None;
+        }
+        let key = (
+            config.id,
+            format!(
+                "\0own:{}",
+                OWN_CONNECTIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            ),
+        );
+        self.tunnel_connections
+            .write()
+            .await
+            .insert(key.clone(), config.id);
+        Some(key)
+    }
+
+    /// A connection of its own to `database` for one job, such as a dashboard
+    /// refresh, that only reads: the classifier refuses anything it does not
+    /// recognise as a read, whatever the connection allows. Hand it back to
+    /// [`Self::close_short_lived_connection`] when the job is done, which ends
+    /// its sessions and lets its SSH tunnel go when nothing else uses it.
+    pub async fn open_short_lived_read_connection(
+        &self,
+        config_id: DatabaseConfigId,
+        database: Option<&str>,
+    ) -> Result<ShortLivedConnection> {
+        let config = self.get_connection_config(config_id).await.ok_or_else(|| {
+            anyhow::anyhow!("Connection configuration not found for ID: {}", config_id)
+        })?;
+        let tunnel_key = self.register_tunnel_user(&config).await;
+        // Writes are refused by the connection wrapper alone. The config's
+        // own read only flag would also open a DuckDB file read only, and
+        // the process shares that one instance with every other connection
+        // to the file.
+        let options = ConnectOptions {
+            cache: false,
+            refuse_writes: true,
+        };
+        match self.connect_with_secrets(&config, database, options).await {
+            Ok(connection) => Ok(ShortLivedConnection {
+                connection,
+                tunnel_key,
+            }),
+            Err(error) => {
+                if let Some(key) = tunnel_key {
+                    self.release_tunnel_users(&[key]).await;
+                }
+                Err(error)
+            }
+        }
+    }
+
+    /// Close a connection from [`Self::open_short_lived_read_connection`].
+    pub async fn close_short_lived_connection(&self, connection: ShortLivedConnection) {
+        let ShortLivedConnection {
+            connection,
+            tunnel_key,
+        } = connection;
+        if let Err(error) = connection.close().await {
+            tracing::warn!("Failed to close a short lived connection: {error:#}");
+        }
+        drop(connection);
+        if let Some(key) = tunnel_key {
+            self.release_tunnel_users(&[key]).await;
+        }
     }
 
     /// Open a connection for `config`, asking for a secret the server
-    /// refuses. With `cache` it becomes the shared connection for `database`.
+    /// refuses. With `options.cache` it becomes the shared connection for `database`.
     async fn connect_with_secrets(
         &self,
         config: &ConnectionConfig,
         database: Option<&str>,
-        cache: bool,
+        options: ConnectOptions,
     ) -> Result<Arc<dyn Connection>> {
         let config_id = config.id;
         // Secrets are resolved only now, after the cache misses, and live in
@@ -409,7 +562,7 @@ impl DatabaseService {
                 .await?;
             self.apply_password_file(&mut attempt_config, database);
             match self
-                .open_connection(&attempt_config, database, &from_user, cache)
+                .open_connection(&attempt_config, database, &from_user, options)
                 .await
             {
                 Ok(connection) => return Ok(connection),
@@ -464,7 +617,7 @@ impl DatabaseService {
         config: &ConnectionConfig,
         database: Option<&str>,
         from_user: &[SecretKind],
-        cache: bool,
+        options: ConnectOptions,
     ) -> Result<Arc<dyn Connection>> {
         let config_id = config.id;
         let connection_id = (config_id, database.unwrap_or("default").to_string());
@@ -544,7 +697,7 @@ impl DatabaseService {
         let conn_arc: Arc<dyn Connection> = Arc::new(TokioConnection::new(
             inner_arc,
             runtime_handle,
-            config.read_only,
+            config.read_only || options.refuse_writes,
         ));
 
         let password_unverified = config.uses_secret(SecretKind::Password)
@@ -562,7 +715,7 @@ impl DatabaseService {
             }
         }
 
-        if !cache {
+        if !options.cache {
             return Ok(conn_arc);
         }
 
@@ -673,52 +826,7 @@ impl DatabaseService {
             }
         }
 
-        // First, remove from tunnel_connections tracking to get accurate tunnel usage
-        let tunnels_to_check: std::collections::HashSet<DatabaseConfigId> = {
-            let tunnel_connections = self.tunnel_connections.read().await;
-
-            disconnected_connections
-                .iter()
-                .filter_map(|connection_id| tunnel_connections.get(connection_id))
-                .copied()
-                .collect()
-        };
-
-        // Remove the disconnected connections from tunnel_connections tracking
-        {
-            let mut tunnel_connections = self.tunnel_connections.write().await;
-            for connection_id in &disconnected_connections {
-                tunnel_connections.remove(connection_id);
-            }
-        }
-
-        // Now check if we need to clean up SSH tunnels (after removal)
-        for tunnel_config_id in tunnels_to_check {
-            let should_remove_tunnel;
-
-            {
-                let tunnel_connections = self.tunnel_connections.read().await;
-
-                // Check if any other connections are using this tunnel
-                let tunnels_in_use = tunnel_connections
-                    .values()
-                    .any(|&id| id == tunnel_config_id);
-
-                should_remove_tunnel = !tunnels_in_use;
-            }
-
-            if should_remove_tunnel {
-                // No other connections using this tunnel, remove it
-                let mut tunnels = self.ssh_tunnels.write().await;
-                if let Some(_tunnel_mutex) = tunnels.remove(&tunnel_config_id) {
-                    // The tunnel will be disconnected when Arc is dropped
-                    tracing::info!(
-                        "Removed SSH tunnel for connection config {}",
-                        tunnel_config_id
-                    );
-                }
-            }
-        }
+        self.release_tunnel_users(&disconnected_connections).await;
 
         tracing::info!(
             "Disconnected {} connections for config {:?}",
@@ -726,6 +834,39 @@ impl DatabaseService {
             config_id
         );
         Ok(())
+    }
+
+    /// Forget that `users` hold their SSH tunnels, and close each tunnel no
+    /// one holds any more.
+    async fn release_tunnel_users(&self, users: &[ConnectionId]) {
+        let tunnels_to_check: HashSet<DatabaseConfigId> = {
+            let mut tunnel_connections = self.tunnel_connections.write().await;
+            users
+                .iter()
+                .filter_map(|user| tunnel_connections.remove(user))
+                .collect()
+        };
+        for tunnel_config_id in tunnels_to_check {
+            let in_use = self
+                .tunnel_connections
+                .read()
+                .await
+                .values()
+                .any(|&id| id == tunnel_config_id);
+            if in_use {
+                continue;
+            }
+            // The tunnel disconnects when its last handle is dropped.
+            if self
+                .ssh_tunnels
+                .write()
+                .await
+                .remove(&tunnel_config_id)
+                .is_some()
+            {
+                tracing::info!("Removed SSH tunnel for connection config {tunnel_config_id}");
+            }
+        }
     }
 
     /// Record that `connection_id` is in use now.
@@ -860,6 +1001,15 @@ impl DatabaseService {
         remote_host: &str,
         remote_port: u16,
     ) -> Result<TunnelInfo> {
+        let creation = self
+            .tunnel_creation
+            .lock()
+            .map_err(|error| anyhow::anyhow!("Failed to lock SSH tunnel creation: {error}"))?
+            .entry(config.id)
+            .or_default()
+            .clone();
+        let _creating = creation.lock().await;
+
         // Check if tunnel already exists and is healthy
         {
             let tunnels = self.ssh_tunnels.read().await;
@@ -1195,6 +1345,7 @@ impl Clone for DatabaseService {
             connection_factories: Arc::clone(&self.connection_factories),
             ssh_tunnels: Arc::clone(&self.ssh_tunnels),
             tunnel_connections: Arc::clone(&self.tunnel_connections),
+            tunnel_creation: Arc::clone(&self.tunnel_creation),
             action_sender: Arc::clone(&self.action_sender),
             secret_store: Arc::clone(&self.secret_store),
             secret_prompt: Arc::clone(&self.secret_prompt),

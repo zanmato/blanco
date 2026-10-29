@@ -28,6 +28,7 @@ pub enum TabType {
     ObjectDdl(Entity<ObjectDdlTab>),
     SchemaGraph(Entity<super::schema_graph::SchemaGraphTab>),
     ProcessList(Entity<super::process_list::ProcessListTab>),
+    Dashboard(Entity<super::dashboard::DashboardTab>),
 }
 
 /// What every tab bound to a connection has in common: the identity it works
@@ -189,6 +190,7 @@ impl TabType {
             TabType::ObjectDdl(tab) => tab.read(cx).title.clone(),
             TabType::SchemaGraph(tab) => tab.read(cx).title.clone(),
             TabType::ProcessList(tab) => tab.read(cx).title.clone(),
+            TabType::Dashboard(tab) => tab.read(cx).title.clone(),
         }
     }
 
@@ -218,7 +220,7 @@ impl TabType {
             TabType::ObjectDdl(tab) => Some(tab.read(cx).context.clone()),
             TabType::SchemaGraph(tab) => Some(tab.read(cx).context.clone()),
             TabType::ProcessList(tab) => Some(tab.read(cx).context.clone()),
-            TabType::Settings(_) | TabType::Snippet(_) => None,
+            TabType::Settings(_) | TabType::Snippet(_) | TabType::Dashboard(_) => None,
         }
     }
 

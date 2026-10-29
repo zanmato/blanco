@@ -201,6 +201,84 @@ per-type overloads CockroachDB lists into polymorphic signatures. The compose
 process list test needs. `test_cockroachdb_catalog_differences` covers the
 driver's differences.
 
+## Dashboards
+
+A dashboard (`editor/dashboard.rs`, a `TabType::Dashboard`) lays out panels on
+a grid of `app_database::DASHBOARD_COLUMNS` columns, each panel a query on a
+connection of its own with the way its result is shown. The app database
+keeps them in `dashboards` and `dashboard_panels`, a panel's view as JSON
+(`dashboard/panel.rs`, `PanelView`: a table with its `ColumnLayout`, a stat,
+or a chart's `ChartSpec`). A panel outlives its deleted connection without
+one. Columns are named, not numbered, so a view still fits after the query
+changes, and `ChartView` keeps its choices by name across a new result too.
+
+A refresh holds no connection open between runs: it groups the panels by
+connection and database, opens one connection per group with
+`DatabaseService::open_short_lived_read_connection`, runs the group's panels
+on it one after another under the query timeout, and closes it with
+`close_short_lived_connection`, which ends the sessions (`Connection::close`)
+and lets an SSH tunnel go once nothing else holds it. That connection is read
+only whatever its config says, so a panel cannot write. The refresh runs as a
+detached tokio task, so it closes its connections even when the tab closes
+meanwhile. Each query ends at the query timeout or, with none set, when the
+tab is dropped (`bounded_run` and the tab's `TabClosed`), so a hung query
+does not keep its connection. Tunnels are built under a lock per config
+(`tunnel_creation`), so groups connecting at once through one SSH host
+share a tunnel instead of replacing each other's. A refresh reports to the status bar (`ActivityReporter`): the
+whole refresh, connecting and running per server, and how many panels
+failed. Automatic refresh (30 seconds at least) only marks the tab due,
+and a tab refreshes when it is drawn, so a hidden dashboard queries nothing.
+
+Add Panel asks where the panel runs with `dashboard/connection_picker.rs`, a
+tree like the sidebar's: connections, and under one whose server holds
+several databases, its databases, listed through a connection opened for
+that and closed again. Panels are made from a query tab: the results strip's dashboard menu adds the
+active result as a panel, or saves it back into the panel the tab came from.
+Edit Query on a panel (or a double click on its title) opens its query in a
+query tab carrying a `DashboardLink` on its `ResultsPanel`, which applies the
+panel's view to the next result, and shows a bar over the tab with Save to
+Panel and Back to Dashboard. The dashboard tab holds a weak handle to its
+`EditorPanel` and opens these tabs through it rather than through window
+actions, which reach the app only from a focused element inside it. A panel grid is a `ResultsTableDelegate` in `presentation` mode,
+whose menus offer only copying, and the dashboard answers those copy actions
+for it, since the app routes them to a query tab's results.
+`scripts/screenshots/capture dashboard` shows one on the demo database.
+
+A dashboard has a time range and variables (`dashboard/parameters.rs`), kept
+in `dashboards.time_range` and `dashboards.variables`. A refresh writes them
+into each query as Grafana's SQL data sources do: `$__timeFilter(column)`,
+`$__timeFrom()` and `$__timeTo()` as `Dialect::timestamp_literal`, an instant
+the backend reads in UTC whatever the session's zone (MySQL's zoneless
+`DATETIME` reads it in the session's zone), `$name` and `${name}` as the
+backend's string literal, `${name:raw}` as it is. Anything else after a `$`
+is left alone, so PostgreSQL's `$1` still works. The query is lexed with
+`statement_stream::sql_regions`: within a string literal a variable is
+written as escaped text of that literal (`'%$name%'`), and comments, quoted
+identifiers and dollar-quoted bodies are not touched. Short-lived connections
+refuse writes in the connection wrapper rather than through the config's
+read only flag, which would open a DuckDB file read only for every
+connection to it. A variable's choices
+are a list or the first column of a query (`dashboard/variables.rs`), which
+runs read only when the dashboard loads, grouped by connection and database
+like the panels. A query
+tab opened from a panel carries the dashboard's values in its
+`DashboardLink`, writes them out when it runs, keeps the query as written,
+and does not ask for those names as bind parameters.
+
+Panels move by dragging their header and size by dragging their corner
+(`dashboard/layout.rs`), snapped to the grid. Stat and table panels can color
+numbers by thresholds (`panel::Thresholds`). The sidebar's Dashboards section
+(`dashboards_panel.rs`) lists them and renames them in place, as the
+snippets list does. A dashboard tab whose dashboard leaves the list asks the
+database whether it is gone before closing, since a list read just before a
+dashboard was made lacks it too. Saving a query tab to a panel saves what
+the editor holds: when that is not the query of the result shown, the save
+runs it first and finishes on its `QueryRunEnded` (`PendingPanelSave`). The dashboards a window has open are kept
+in `window_dashboards` and reopen after a restart, refreshing only once shown.
+A query tab remembers its chart in `query_tabs.result_view`, written on its
+own when the view changes (`ResultsPanelEvent::ViewChanged`) and applied to
+the first result after a restart.
+
 ## Rich clipboard
 
 GPUI's `ClipboardItem` holds only text and images, so Copy as HTML writes
@@ -236,7 +314,9 @@ Process list). The listing query and the cancel and kill statements are
 MariaDB, SQL Server (kill only) and ClickHouse (cancel only, as it has no
 sessions). The statements accept only ids of the backend's form. The tab
 works through `DatabaseService::open_dedicated_connection`, a connection of
-its own outside the shared cache: PostgreSQL's pool holds one connection and
+its own outside the shared cache that holds its SSH tunnel until it is
+dropped (`DedicatedConnection`), so closing other connections leaves the
+tunnel up: PostgreSQL's pool holds one connection and
 SQL Server's client serves one request at a time, so on the shared
 connection the listing would wait behind the query it is meant to cancel.
 Actions are confirmed and refused on read-only connections, which the

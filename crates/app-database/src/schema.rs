@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 /// Schema version stored in SQLite's `PRAGMA user_version`. Bump it and append
 /// a step to [`MIGRATIONS`] for every schema change.
-pub const SCHEMA_VERSION: i64 = 13;
+pub const SCHEMA_VERSION: i64 = 14;
 
 /// The complete schema for a fresh database, at [`SCHEMA_VERSION`]. Keep it in
 /// sync with the migrations: a database created from this must be identical
@@ -58,6 +58,7 @@ const BASELINE: &[&str] = &[
         updated_at INTEGER NOT NULL,
         file_path TEXT,
         window_id INTEGER REFERENCES windows(id) ON DELETE CASCADE,
+        result_view TEXT,
         FOREIGN KEY (connection_id) REFERENCES connections(id) ON DELETE SET NULL
     )
     "#,
@@ -112,7 +113,54 @@ const BASELINE: &[&str] = &[
     )
     "#,
     VIRTUAL_FOREIGN_KEYS_TABLE,
+    DASHBOARDS_TABLE,
+    DASHBOARD_PANELS_TABLE,
+    WINDOW_DASHBOARDS_TABLE,
 ];
+
+/// The dashboards a window has open as tabs, after its query tabs.
+const WINDOW_DASHBOARDS_TABLE: &str = r#"
+    CREATE TABLE window_dashboards (
+        window_id INTEGER NOT NULL REFERENCES windows(id) ON DELETE CASCADE,
+        dashboard_id INTEGER NOT NULL REFERENCES dashboards(id) ON DELETE CASCADE,
+        position INTEGER NOT NULL,
+        active INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (window_id, dashboard_id)
+    )
+    "#;
+
+/// Dashboards of panels, each panel a query on a connection of its own. A
+/// panel whose connection is deleted stays, without one.
+const DASHBOARDS_TABLE: &str = r#"
+    CREATE TABLE dashboards (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        default_connection_id INTEGER REFERENCES connections(id) ON DELETE SET NULL,
+        refresh_seconds INTEGER,
+        time_range TEXT NOT NULL DEFAULT '7d',
+        variables TEXT NOT NULL DEFAULT '[]',
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+    )
+    "#;
+
+const DASHBOARD_PANELS_TABLE: &str = r#"
+    CREATE TABLE dashboard_panels (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        dashboard_id INTEGER NOT NULL REFERENCES dashboards(id) ON DELETE CASCADE,
+        title TEXT NOT NULL,
+        connection_id INTEGER REFERENCES connections(id) ON DELETE SET NULL,
+        database_name TEXT NOT NULL,
+        schema_name TEXT,
+        query TEXT NOT NULL,
+        view TEXT NOT NULL,
+        position INTEGER NOT NULL,
+        width INTEGER NOT NULL,
+        height INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+    )
+    "#;
 
 /// Foreign keys declared in Blanco only. Column lists are JSON arrays, and a
 /// table without a schema stores an empty one so the unique key holds.
@@ -169,6 +217,7 @@ const MIGRATIONS: &[Migration] = &[
     |pool| Box::pin(migrate_v10_to_v11(pool)),
     |pool| Box::pin(migrate_v11_to_v12(pool)),
     |pool| Box::pin(migrate_v12_to_v13(pool)),
+    |pool| Box::pin(migrate_v13_to_v14(pool)),
 ];
 
 /// Columns that may be missing from an unversioned database, per table, in the
@@ -361,6 +410,23 @@ async fn migrate_v12_to_v13(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     Ok(())
 }
 
+async fn migrate_v13_to_v14(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    let mut transaction = pool.begin().await?;
+    sqlx::query(DASHBOARDS_TABLE)
+        .execute(&mut *transaction)
+        .await?;
+    sqlx::query(DASHBOARD_PANELS_TABLE)
+        .execute(&mut *transaction)
+        .await?;
+    sqlx::query(WINDOW_DASHBOARDS_TABLE)
+        .execute(&mut *transaction)
+        .await?;
+    sqlx::query("ALTER TABLE query_tabs ADD COLUMN result_view TEXT")
+        .execute(&mut *transaction)
+        .await?;
+    transaction.commit().await
+}
+
 async fn existing_columns(pool: &SqlitePool, table: &str) -> Result<Vec<String>, sqlx::Error> {
     use sqlx::Row as _;
     let rows = sqlx::query(&format!("PRAGMA table_info({table})"))
@@ -502,6 +568,9 @@ mod tests {
             "snippets",
             "settings",
             "environment_tags",
+            "dashboards",
+            "dashboard_panels",
+            "window_dashboards",
         ] {
             assert_eq!(
                 columns(&pool, table).await,

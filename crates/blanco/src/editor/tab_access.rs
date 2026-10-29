@@ -179,6 +179,7 @@ fn tab_kind(tab: &TabType) -> &'static str {
         TabType::ObjectDdl(_) => "object_ddl",
         TabType::SchemaGraph(_) => "schema_graph",
         TabType::ProcessList(_) => "process_list",
+        TabType::Dashboard(_) => "dashboard",
     }
 }
 

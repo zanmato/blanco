@@ -82,6 +82,20 @@ impl Connection for MysqlConnection {
         result.map(|_| ())
     }
 
+    async fn close(&self) -> Result<()> {
+        let pools: Vec<sqlx::MySqlPool> = self
+            .pools
+            .write()
+            .await
+            .drain()
+            .map(|(_, pool)| pool)
+            .collect();
+        for pool in pools {
+            pool.close().await;
+        }
+        Ok(())
+    }
+
     async fn server_variant(&self) -> Result<blanco_core::ServerVariant> {
         if let Some(variant) = *self.server_variant.read().await {
             return Ok(variant);

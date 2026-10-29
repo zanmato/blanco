@@ -837,6 +837,12 @@ impl ResultsTableDelegate {
             );
 
         let is_deleted = self.edit_state.is_row_deleted(row_ix);
+        let threshold_color = self
+            .thresholds
+            .as_ref()
+            .filter(|(column, _)| *column == col_ix)
+            .and_then(|(_, thresholds)| thresholds.level_of(&stored_text))
+            .map(|level| level.color(cx));
 
         div()
             .group("")
@@ -872,6 +878,9 @@ impl ResultsTableDelegate {
                     this.text_color(cx.theme().yellow)
                 },
             )
+            .when_some(threshold_color.filter(|_| !is_null), |this, color| {
+                this.text_color(color).font_weight(gpui::FontWeight::MEDIUM)
+            })
             .when(is_edited, |this| {
                 this.bg(cx.theme().yellow.opacity(0.3))
                     .pl_2()
@@ -1208,6 +1217,9 @@ impl TableDelegate for ResultsTableDelegate {
         _window: &mut Window,
         _cx: &mut Context<TableState<Self>>,
     ) -> PopupMenu {
+        if self.presentation {
+            return column_copy_items(menu, col_ix, false, false);
+        }
         self.column_layout_items(
             column_copy_items(menu, col_ix, false, false).separator(),
             col_ix,
@@ -1235,48 +1247,61 @@ impl TableDelegate for ResultsTableDelegate {
                 .table_column_info(cell.1)
                 .is_some_and(|info| info.default_value.is_some());
 
-        let follows_foreign_key = self.referenced_row_request(cell.0, cell.1).is_some();
-        menu.when(follows_foreign_key, |menu| {
-            menu.menu_with_icon(
-                "Open Referenced Row",
-                Icon::new(IconName::ExternalLink),
-                Box::new(OpenReferencedRow),
+        let follows_foreign_key =
+            !self.presentation && self.referenced_row_request(cell.0, cell.1).is_some();
+        let menu = menu
+            .when(follows_foreign_key, |menu| {
+                menu.menu_with_icon(
+                    "Open Referenced Row",
+                    Icon::new(IconName::ExternalLink),
+                    Box::new(OpenReferencedRow),
+                )
+                .separator()
+            })
+            .item(
+                PopupMenuItem::submenu(
+                    "Copy as",
+                    PopupMenu::build(window, cx, |menu, _, _| {
+                        menu.menu_with_icon("CSV", Icon::new(IconName::Sheet), Box::new(CopyAsCSV))
+                            .menu_with_icon("TSV", Icon::new(IconName::Sheet), Box::new(CopyAsTSV))
+                            .menu_with_icon(
+                                "JSON",
+                                Icon::new(IconName::Braces),
+                                Box::new(CopyAsJSON),
+                            )
+                            .menu_with_icon(
+                                "SQL",
+                                Icon::new(IconName::Database),
+                                Box::new(CopyAsSQL),
+                            )
+                            .menu_with_icon(
+                                "VALUES",
+                                Icon::new(IconName::Database),
+                                Box::new(CopyAsVALUES),
+                            )
+                            .menu_with_icon(
+                                "Markdown",
+                                Icon::new(IconName::Markdown),
+                                Box::new(CopyAsMarkdown),
+                            )
+                            .menu_with_icon("HTML", Icon::new(IconName::Code), Box::new(CopyAsHTML))
+                    }),
+                )
+                .icon(Icon::new(IconName::Copy)),
             )
-            .separator()
-        })
-        .item(
-            PopupMenuItem::submenu(
-                "Copy as",
-                PopupMenu::build(window, cx, |menu, _, _| {
-                    menu.menu_with_icon("CSV", Icon::new(IconName::Sheet), Box::new(CopyAsCSV))
-                        .menu_with_icon("TSV", Icon::new(IconName::Sheet), Box::new(CopyAsTSV))
-                        .menu_with_icon("JSON", Icon::new(IconName::Braces), Box::new(CopyAsJSON))
-                        .menu_with_icon("SQL", Icon::new(IconName::Database), Box::new(CopyAsSQL))
-                        .menu_with_icon(
-                            "VALUES",
-                            Icon::new(IconName::Database),
-                            Box::new(CopyAsVALUES),
-                        )
-                        .menu_with_icon(
-                            "Markdown",
-                            Icon::new(IconName::Markdown),
-                            Box::new(CopyAsMarkdown),
-                        )
-                        .menu_with_icon("HTML", Icon::new(IconName::Code), Box::new(CopyAsHTML))
-                }),
-            )
-            .icon(Icon::new(IconName::Copy)),
-        )
-        .item(
-            PopupMenuItem::submenu(
-                "Copy Column",
-                PopupMenu::build(window, cx, move |menu, _, _| {
-                    column_copy_items(menu, cell.1, true, true)
-                }),
-            )
-            .icon(Icon::new(IconName::List)),
-        )
-        .item(
+            .item(
+                PopupMenuItem::submenu(
+                    "Copy Column",
+                    PopupMenu::build(window, cx, move |menu, _, _| {
+                        column_copy_items(menu, cell.1, true, true)
+                    }),
+                )
+                .icon(Icon::new(IconName::List)),
+            );
+        if self.presentation {
+            return menu;
+        }
+        menu.item(
             PopupMenuItem::submenu(
                 "Export as",
                 PopupMenu::build(window, cx, |menu, _, _| {

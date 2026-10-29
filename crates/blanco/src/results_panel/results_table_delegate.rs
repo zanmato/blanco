@@ -73,6 +73,10 @@ pub struct ResultsTableDelegate {
     /// Mirrors the panel wide pending comparison selection so the context
     /// menu can offer "Compare with Selected" for the matching kind.
     pub compare_selection_kind: Option<CompareKind>,
+    /// Shown on a dashboard, which offers copying and nothing else.
+    pub presentation: bool,
+    /// A dashboard table's column whose numbers are colored by thresholds.
+    pub thresholds: Option<(usize, crate::editor::dashboard::Thresholds)>,
     /// Column metadata for tooltips and rendering
     table_columns: Vec<blanco_core::ColumnInfo>,
     /// The cells holding a preview of a value left on the server.

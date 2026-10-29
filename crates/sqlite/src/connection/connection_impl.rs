@@ -40,6 +40,13 @@ impl Connection for SqliteConnection {
         Ok(())
     }
 
+    async fn close(&self) -> Result<()> {
+        if let Some(pool) = &self.pool {
+            pool.close().await;
+        }
+        Ok(())
+    }
+
     async fn get_databases(&self) -> Result<Vec<String>> {
         // SQLite has a single database, so we return the current database name
         let db_name = std::path::Path::new(&self.database_path)

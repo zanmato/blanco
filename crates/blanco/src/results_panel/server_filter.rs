@@ -166,6 +166,12 @@ impl ResultsPanel {
             },
             None => base_query,
         };
+        // A query from a dashboard keeps its macros and variables, which the
+        // dashboard's values write out.
+        let query = match self.dashboard_link() {
+            Some(link) => link.parameters().apply(&query, self.db_type.dialect()),
+            None => query,
+        };
 
         let filter_input = tab.filter_input.clone();
         let chart_view = tab.chart_view.clone();

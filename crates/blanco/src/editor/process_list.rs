@@ -4,7 +4,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use blanco_core::{Connection, ConnectionContext, ServerSession};
+use blanco_core::{ConnectionContext, ServerSession};
+use database::DedicatedConnection;
 use gpui::{
     App, AppContext as _, ClipboardItem, Context, Entity, FocusHandle, Focusable,
     InteractiveElement as _, IntoElement, ParentElement, Render, SharedString, Styled,
@@ -44,7 +45,7 @@ pub struct ProcessListTab {
     /// A connection of the tab's own, so listing and killing never wait
     /// behind the query being killed. Opened on the first refresh and again
     /// after a refresh fails.
-    connection: Option<Arc<dyn Connection>>,
+    connection: Option<Arc<DedicatedConnection>>,
     sessions: Vec<ServerSession>,
     table_state: Entity<TableState<SessionsTableDelegate>>,
     interval_select: Entity<SelectState<Vec<String>>>,
@@ -156,11 +157,11 @@ impl ProcessListTab {
                     .is_some_and(|config| config.read_only);
                 let connection = match existing {
                     Some(connection) => connection,
-                    None => {
+                    None => Arc::new(
                         db_service
                             .open_dedicated_connection(connection_id, database.as_deref())
-                            .await?
-                    }
+                            .await?,
+                    ),
                 };
                 let result = connection
                     .execute_query(query, database.as_deref(), None)

@@ -809,6 +809,27 @@ impl Dialect {
         format!("'{}'", self.escape_string_literal(value))
     }
 
+    /// An instant as a value the backend compares with its date and time
+    /// columns as that instant, whatever the session's time zone. Columns
+    /// without a zone read it as UTC, except on MySQL, where `DATETIME`
+    /// reads it in the session's zone as `TIMESTAMP` does.
+    pub fn timestamp_literal(&self, time: chrono::DateTime<chrono::Utc>) -> String {
+        match self.0 {
+            DatabaseType::PostgreSQL
+            | DatabaseType::CockroachDb
+            | DatabaseType::DuckDb
+            | DatabaseType::MsSql => {
+                self.string_literal(&time.format("%Y-%m-%dT%H:%M:%SZ").to_string())
+            }
+            DatabaseType::MySQL => format!("FROM_UNIXTIME({})", time.timestamp()),
+            DatabaseType::ClickHouse => format!("toDateTime({})", time.timestamp()),
+            // SQLite keeps times as text, written in UTC by its own functions.
+            DatabaseType::SQLite | DatabaseType::Redis => {
+                self.string_literal(&time.format("%Y-%m-%d %H:%M:%S").to_string())
+            }
+        }
+    }
+
     /// A literal for the bytes written as `hex` digits (no prefix), in the
     /// backend's own spelling.
     pub fn binary_literal(&self, hex: &str) -> String {

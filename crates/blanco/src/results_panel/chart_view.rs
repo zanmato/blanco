@@ -28,9 +28,12 @@ use super::ResultsTableDelegate;
 
 const MAX_LABEL_CHARS: usize = 15;
 
-fn truncate_label(s: &str) -> SharedString {
-    truncate_label_to(s, MAX_LABEL_CHARS)
-}
+/// How long labels get in a dashboard panel, where a dozen share a few
+/// hundred pixels.
+const MAX_PANEL_LABEL_CHARS: usize = 9;
+
+/// How many axis labels a dashboard panel shows at most.
+const MAX_PANEL_LABELS: usize = 8;
 
 fn truncate_label_to(s: &str, max_chars: usize) -> SharedString {
     if s.chars().count() <= max_chars {
@@ -66,17 +69,17 @@ fn apply_aggregate(values: &[f64], agg: Aggregate) -> f64 {
 /// get distinct display labels and won't collapse onto the same point in a
 /// `ScalePoint`/`ScaleBand` (which resolve a value to the first matching entry).
 /// Returns `(display_label, full_label)` per input in the same order.
-fn assign_display_labels(labels: &[String]) -> Vec<(SharedString, SharedString)> {
+fn assign_display_labels(labels: &[String], max_chars: usize) -> Vec<(SharedString, SharedString)> {
     let mut seen: HashMap<String, usize> = HashMap::new();
     labels
         .iter()
         .map(|label| {
-            let truncated = truncate_label(label);
+            let truncated = truncate_label_to(label, max_chars);
             let count = seen.entry(truncated.to_string()).or_insert(0);
             *count += 1;
             if *count > 1 {
                 let suffix = format!(" ({})", count);
-                let budget = MAX_LABEL_CHARS.saturating_sub(suffix.chars().count());
+                let budget = max_chars.saturating_sub(suffix.chars().count());
                 let display =
                     SharedString::from(format!("{}{}", truncate_label_to(label, budget), suffix));
                 let full = SharedString::from(format!("{}{}", label, suffix));
@@ -134,7 +137,8 @@ pub enum ResultViewMode {
     Plan,
 }
 
-#[derive(Copy, Clone, Eq, PartialEq, Debug)]
+#[derive(Copy, Clone, Eq, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ChartKind {
     Line,
     Bar,
@@ -142,7 +146,7 @@ pub enum ChartKind {
 }
 
 impl ChartKind {
-    fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             ChartKind::Line => "Line",
             ChartKind::Bar => "Bar",
@@ -150,13 +154,15 @@ impl ChartKind {
         }
     }
 
-    fn all() -> [ChartKind; 3] {
+    pub fn all() -> [ChartKind; 3] {
         [ChartKind::Line, ChartKind::Bar, ChartKind::Pie]
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Aggregate {
+    #[default]
     None,
     Sum,
     Avg,
@@ -164,7 +170,7 @@ pub enum Aggregate {
 }
 
 impl Aggregate {
-    fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             Aggregate::None => "None",
             Aggregate::Sum => "Sum",
@@ -173,7 +179,7 @@ impl Aggregate {
         }
     }
 
-    fn all() -> [Aggregate; 4] {
+    pub fn all() -> [Aggregate; 4] {
         [
             Aggregate::None,
             Aggregate::Sum,
@@ -183,10 +189,45 @@ impl Aggregate {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ChartConfig {
+    #[serde(default)]
     pub line_stepped: bool,
+    #[serde(default)]
     pub line_show_points: bool,
+}
+
+/// What a chart draws, with columns named rather than numbered so it still
+/// fits a result whose columns moved. Columns the result lacks fall back to
+/// the first that fits, as a fresh chart picks them.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ChartSpec {
+    pub kind: ChartKind,
+    pub axis: Option<String>,
+    pub value: Option<String>,
+    #[serde(default)]
+    pub aggregate: Aggregate,
+    pub series: Option<String>,
+    #[serde(flatten)]
+    pub config: ChartConfig,
+}
+
+/// Emitted when the user changes what the chart draws.
+pub struct ChartChanged;
+
+impl gpui::EventEmitter<ChartChanged> for ChartView {}
+
+impl ChartSpec {
+    pub fn new(kind: ChartKind) -> Self {
+        Self {
+            kind,
+            axis: None,
+            value: None,
+            aggregate: Aggregate::None,
+            series: None,
+            config: ChartConfig::default(),
+        }
+    }
 }
 
 /// A single data point used by single-series charts (LineChart, BarChart, PieChart).
@@ -368,12 +409,35 @@ pub struct ChartView {
     axis_column_indices: Vec<usize>,
     value_column_indices: Vec<usize>,
     series_column_indices: Vec<usize>,
+    /// The result's column names when the selects were last filled, which
+    /// their indices point into.
+    column_names: Vec<String>,
+    /// Drawn without its settings, sized for a dashboard panel.
+    presentation: bool,
     _subscriptions: Vec<Subscription>,
 }
 
 impl ChartView {
     pub fn new(
         table_state: Entity<TableState<ResultsTableDelegate>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self::build(table_state, false, window, cx)
+    }
+
+    /// A chart without its settings, drawing what [`Self::apply_spec`] sets.
+    pub fn presentation(
+        table_state: Entity<TableState<ResultsTableDelegate>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self::build(table_state, true, window, cx)
+    }
+
+    fn build(
+        table_state: Entity<TableState<ResultsTableDelegate>>,
+        presentation: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -397,12 +461,10 @@ impl ChartView {
 
         let subs = vec![
             cx.subscribe_in(&kind_select, window, Self::on_kind_changed),
-            cx.subscribe(&axis_select, |_, _, _ev: &SelectEvent<_>, cx| cx.notify()),
-            cx.subscribe(&value_select, |_, _, _ev: &SelectEvent<_>, cx| cx.notify()),
-            cx.subscribe(&aggregate_select, |_, _, _ev: &SelectEvent<_>, cx| {
-                cx.notify()
-            }),
-            cx.subscribe(&series_select, |_, _, _ev: &SelectEvent<_>, cx| cx.notify()),
+            cx.subscribe(&axis_select, Self::on_choice_changed),
+            cx.subscribe(&value_select, Self::on_choice_changed),
+            cx.subscribe(&aggregate_select, Self::on_choice_changed),
+            cx.subscribe(&series_select, Self::on_choice_changed),
         ];
 
         let mut this = Self {
@@ -418,6 +480,8 @@ impl ChartView {
             axis_column_indices: Vec::new(),
             value_column_indices: Vec::new(),
             series_column_indices: Vec::new(),
+            column_names: Vec::new(),
+            presentation,
             _subscriptions: subs,
         };
         this.rebuild_column_selects(window, cx);
@@ -435,34 +499,71 @@ impl ChartView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.kind = kind;
-        let kind_ix = ChartKind::all().iter().position(|k| *k == kind);
-        let column_ix = |name: &str, cx: &App| {
-            self.table_state.read_with(cx, |state, _| {
-                state
-                    .delegate()
-                    .columns
-                    .iter()
-                    .position(|column| column.name.as_ref() == name)
-            })
+        let spec = ChartSpec {
+            axis: Some(axis.to_string()),
+            value: Some(value.to_string()),
+            ..ChartSpec::new(kind)
         };
-        let axis_ix = column_ix(axis, cx)
+        self.apply_spec(&spec, window, cx);
+    }
+
+    /// What the chart draws now.
+    pub fn spec(&self, cx: &App) -> ChartSpec {
+        let column_name = |column: Option<usize>| self.column_names.get(column?).cloned();
+        ChartSpec {
+            kind: self.kind,
+            axis: column_name(self.selected_axis_column(cx)),
+            value: column_name(self.selected_value_column(cx)),
+            aggregate: self.selected_aggregate(cx),
+            series: column_name(self.selected_series_column(cx)),
+            config: self.config.clone(),
+        }
+    }
+
+    /// Draw what `spec` names. A column the result lacks keeps the choice
+    /// the select has.
+    pub fn apply_spec(&mut self, spec: &ChartSpec, window: &mut Window, cx: &mut Context<Self>) {
+        self.kind = spec.kind;
+        self.config = spec.config.clone();
+        let column_ix = |name: Option<&str>, _: &App| {
+            let name = name?;
+            self.column_names.iter().position(|column| column == name)
+        };
+        let kind_ix = ChartKind::all().iter().position(|kind| *kind == spec.kind);
+        let aggregate_ix = Aggregate::all()
+            .iter()
+            .position(|aggregate| *aggregate == spec.aggregate);
+        let axis_ix = column_ix(spec.axis.as_deref(), cx)
             .and_then(|ix| self.axis_column_indices.iter().position(|i| *i == ix));
-        let value_ix = column_ix(value, cx)
+        let value_ix = column_ix(spec.value.as_deref(), cx)
             .and_then(|ix| self.value_column_indices.iter().position(|i| *i == ix));
+        // The first series entry is "None".
+        let series_ix = match spec.series.as_deref() {
+            None => Some(0),
+            series => column_ix(series, cx)
+                .and_then(|ix| self.series_column_indices.iter().position(|i| *i == ix)),
+        };
         for (select, ix) in [
             (&self.kind_select, kind_ix),
+            (&self.aggregate_select, aggregate_ix),
             (&self.axis_select, axis_ix),
             (&self.value_select, value_ix),
+            (&self.series_select, series_ix),
         ] {
+            let Some(ix) = ix else {
+                continue;
+            };
             select.update(cx, |state, cx| {
-                state.set_selected_index(ix.map(IndexPath::new), window, cx);
+                state.set_selected_index(Some(IndexPath::new(ix)), window, cx);
             });
         }
         cx.notify();
     }
 
+    /// Offer the result's columns again, keeping the columns chosen so far
+    /// where the result still has them.
     pub fn rebuild_column_selects(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let previous = self.spec(cx);
         let (axis_items, axis_indices, value_items, value_indices, all_items, all_indices) =
             self.table_state.read_with(cx, |state, _| {
                 let delegate = state.delegate();
@@ -506,6 +607,14 @@ impl ChartView {
                 )
             });
 
+        self.column_names = self.table_state.read_with(cx, |state, _| {
+            state
+                .delegate()
+                .columns
+                .iter()
+                .map(|column| column.name.to_string())
+                .collect()
+        });
         self.axis_column_indices = axis_indices;
         self.value_column_indices = value_indices;
         self.series_column_indices = all_indices;
@@ -525,6 +634,16 @@ impl ChartView {
             state.set_items(all_items, window, cx);
             state.set_selected_index(Some(IndexPath::new(0)), window, cx);
         });
+        self.apply_spec(&previous, window, cx);
+    }
+
+    fn on_choice_changed(
+        &mut self,
+        _: Entity<SelectState<Vec<SharedString>>>,
+        _: &SelectEvent<Vec<SharedString>>,
+        cx: &mut Context<Self>,
+    ) {
+        cx.emit(ChartChanged);
         cx.notify();
     }
 
@@ -544,6 +663,7 @@ impl ChartView {
             .map(|ip| ip.row)
             .unwrap_or(0);
         self.kind = kinds.get(idx).copied().unwrap_or(ChartKind::Line);
+        cx.emit(ChartChanged);
         // The available columns don't depend on chart kind, so we only re-render
         // (which re-labels the axis fields) instead of rebuilding the selects,
         // which would reset the user's column choices.
@@ -657,7 +777,7 @@ impl ChartView {
 
         let palette = pie_palette(cx, pairs.len());
         let labels: Vec<String> = pairs.iter().map(|(label, _)| label.clone()).collect();
-        let display = assign_display_labels(&labels);
+        let display = assign_display_labels(&labels, self.max_label_chars());
         let points: Vec<ChartPoint> = pairs
             .into_iter()
             .zip(display)
@@ -709,7 +829,7 @@ impl ChartView {
 
         let num_series = series_set.len();
         let palette = pie_palette(cx, num_series);
-        let x_display = assign_display_labels(&x_order);
+        let x_display = assign_display_labels(&x_order, self.max_label_chars());
         let rows: Vec<PivotedRow> = x_order
             .iter()
             .enumerate()
@@ -814,6 +934,7 @@ impl ChartView {
                         .checked(self.config.line_stepped)
                         .on_click(cx.listener(|view, checked: &bool, _window, cx| {
                             view.config.line_stepped = *checked;
+                            cx.emit(ChartChanged);
                             cx.notify();
                         })),
                 )
@@ -824,6 +945,7 @@ impl ChartView {
                         .checked(self.config.line_show_points)
                         .on_click(cx.listener(|view, checked: &bool, _window, cx| {
                             view.config.line_show_points = *checked;
+                            cx.emit(ChartChanged);
                             cx.notify();
                         })),
                 )
@@ -890,9 +1012,8 @@ impl ChartView {
 
         match self.kind {
             ChartKind::Line | ChartKind::Bar => {
-                const MIN_WIDTH_PER_POINT: f32 = 80.0;
-                let min_width = px(points.len() as f32 * MIN_WIDTH_PER_POINT);
-                let tick_margin = tick_margin_for(points.len());
+                let min_width = px(points.len() as f32 * self.min_width_per_point());
+                let tick_margin = self.tick_margin(points.len());
                 let chart_inner = div().h_full().w_full().min_w(min_width);
                 let chart_inner = match self.kind {
                     ChartKind::Line => {
@@ -938,7 +1059,7 @@ impl ChartView {
                     return make_placeholder("Pie charts require positive values.");
                 }
                 let pie = PieChart::new(points.clone())
-                    .outer_radius(140.0)
+                    .outer_radius(self.pie_radius())
                     .value(|p: &ChartPoint| p.value as f32)
                     .color(|p: &ChartPoint| p.color);
                 let legend = v_flex()
@@ -967,7 +1088,7 @@ impl ChartView {
                     .justify_center()
                     .gap_6()
                     .overflow_hidden()
-                    .child(div().w(px(320.)).h(px(320.)).child(pie))
+                    .child(div().size(px(self.pie_radius() * 2. + 40.)).child(pie))
                     .child(legend)
                     .into_any_element()
             }
@@ -988,10 +1109,9 @@ impl ChartView {
 
         match self.kind {
             ChartKind::Line => {
-                const MIN_WIDTH_PER_POINT: f32 = 80.0;
-                let min_width = px(grouped.rows.len() as f32 * MIN_WIDTH_PER_POINT);
+                let min_width = px(grouped.rows.len() as f32 * self.min_width_per_point());
 
-                let tick_margin = tick_margin_for(grouped.rows.len());
+                let tick_margin = self.tick_margin(grouped.rows.len());
                 // AreaChart defaults every series to the same translucent fill,
                 // so without an explicit per-series fill the series are
                 // indistinguishable. Give each series its own color, lightly
@@ -1083,7 +1203,7 @@ impl ChartView {
                     .collect();
 
                 let pie = PieChart::new(points.clone())
-                    .outer_radius(140.0)
+                    .outer_radius(self.pie_radius())
                     .value(|p: &ChartPoint| p.value as f32)
                     .color(|p: &ChartPoint| p.color);
                 let legend = v_flex()
@@ -1113,12 +1233,41 @@ impl ChartView {
                         .justify_center()
                         .gap_6()
                         .overflow_hidden()
-                        .child(div().w(px(320.)).h(px(320.)).child(pie))
+                        .child(div().size(px(self.pie_radius() * 2. + 40.)).child(pie))
                         .child(legend)
                         .into_any_element(),
                 )
             }
         }
+    }
+}
+
+impl ChartView {
+    /// How wide a line or bar chart gets per point before it scrolls. A
+    /// panel is small, so it squeezes points closer first.
+    fn min_width_per_point(&self) -> f32 {
+        if self.presentation { 24. } else { 80. }
+    }
+
+    fn max_label_chars(&self) -> usize {
+        if self.presentation {
+            MAX_PANEL_LABEL_CHARS
+        } else {
+            MAX_LABEL_CHARS
+        }
+    }
+
+    /// Show every `n`th axis label of `count`.
+    fn tick_margin(&self, count: usize) -> usize {
+        if self.presentation {
+            count.div_ceil(MAX_PANEL_LABELS).max(1)
+        } else {
+            tick_margin_for(count)
+        }
+    }
+
+    fn pie_radius(&self) -> f32 {
+        if self.presentation { 80. } else { 140. }
     }
 }
 
@@ -1167,7 +1316,9 @@ impl Render for ChartView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         h_flex()
             .size_full()
-            .child(self.render_settings(window, cx))
+            .when(!self.presentation, |this| {
+                this.child(self.render_settings(window, cx))
+            })
             .child(self.render_chart_canvas(window, cx))
     }
 }

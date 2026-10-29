@@ -306,6 +306,7 @@ impl EditorPanel {
             TabType::TableStructure(_) => Icon::new(IconName::Sheet).text_color(theme.blue),
             TabType::SchemaGraph(_) => Icon::new(IconName::Network).text_color(theme.cyan),
             TabType::ProcessList(_) => Icon::new(IconName::List).text_color(theme.magenta),
+            TabType::Dashboard(_) => Icon::new(IconName::LayoutDashboard).text_color(theme.green),
         })
     }
 
@@ -1081,9 +1082,17 @@ impl Render for EditorPanel {
                     .flex_1()
                     .overflow_hidden()
                     .when_some(current_tab, |this, tab| match tab {
-                        TabType::Query(query_tab) => {
-                            this.child(self.render_query_tab_content(query_tab, cx))
-                        }
+                        TabType::Query(query_tab) => this.child(
+                            v_flex()
+                                .size_full()
+                                .children(self.render_dashboard_link_bar(query_tab, cx))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_h_0()
+                                        .child(self.render_query_tab_content(query_tab, cx)),
+                                ),
+                        ),
                         TabType::Script(script_tab) => {
                             this.child(self.render_script_tab_content(script_tab, cx))
                         }
@@ -1128,6 +1137,13 @@ impl Render for EditorPanel {
                                 .h_full()
                                 .overflow_hidden()
                                 .child(process_list_tab.clone()),
+                        ),
+                        TabType::Dashboard(dashboard_tab) => this.child(
+                            div()
+                                .flex_1()
+                                .h_full()
+                                .overflow_hidden()
+                                .child(dashboard_tab.clone()),
                         ),
                     }),
             )

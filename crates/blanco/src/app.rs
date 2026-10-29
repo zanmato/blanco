@@ -120,8 +120,25 @@ actions!(
         EditPrevCell,
         ToggleCellExpression,
         ClearCompareSelection,
+        NewDashboard,
+        UpdateDashboardPanel,
     ]
 );
+
+/// Show a dashboard.
+#[derive(Action, Clone, PartialEq, Eq)]
+#[action(namespace = blanco_app, no_json)]
+pub struct OpenDashboard {
+    pub dashboard_id: i64,
+}
+
+/// Add the active query tab's result to a dashboard as a panel, or to a new
+/// dashboard for `None`.
+#[derive(Action, Clone, PartialEq, Eq)]
+#[action(namespace = blanco_app, no_json)]
+pub struct AddToDashboard {
+    pub dashboard_id: Option<i64>,
+}
 
 #[derive(Action, Clone, PartialEq, Eq)]
 #[action(namespace = blanco_app, no_json)]
@@ -437,13 +454,15 @@ pub(crate) enum SidebarTab {
     Snippets,
     History,
     OpenTabs,
+    Dashboards,
 }
 
 impl SidebarTab {
     /// Rail order, top to bottom.
-    const ALL: [SidebarTab; 4] = [
+    const ALL: [SidebarTab; 5] = [
         Self::Connections,
         Self::OpenTabs,
+        Self::Dashboards,
         Self::Snippets,
         Self::History,
     ];
@@ -454,6 +473,7 @@ impl SidebarTab {
             Self::Snippets => "Snippets",
             Self::History => "History",
             Self::OpenTabs => "Open Tabs",
+            Self::Dashboards => "Dashboards",
         }
     }
 
@@ -463,6 +483,7 @@ impl SidebarTab {
             Self::Snippets => BlancoIcon::Braces,
             Self::History => BlancoIcon::History,
             Self::OpenTabs => BlancoIcon::Files,
+            Self::Dashboards => BlancoIcon::LayoutDashboard,
         }
     }
 }
@@ -480,6 +501,7 @@ pub struct BlancoApp {
     snippets_panel: Entity<SnippetsPanel>,
     history_panel: Entity<HistoryPanel>,
     open_tabs_panel: Entity<OpenTabsPanel>,
+    dashboards_panel: Entity<crate::dashboards_panel::DashboardsPanel>,
     editor_panel: Entity<EditorPanel>,
     /// The object last selected in the sidebar for the active tab, so the
     /// sidebar is only moved when the active tab shows something else.
@@ -528,7 +550,16 @@ impl BlancoApp {
         let editor_panel = cx.new(|cx| {
             EditorPanel::new_with_saved_tabs(window, cx, saved.id, saved.active_tab_id, saved_tabs)
         });
+        let saved_dashboards = Self::load_saved_dashboards(saved.id, cx);
+        if !saved_dashboards.is_empty() {
+            editor_panel.update(cx, |panel, cx| {
+                panel.restore_dashboard_tabs(saved_dashboards, window, cx)
+            });
+        }
         let open_tabs_panel = cx.new(|cx| OpenTabsPanel::new(editor_panel.clone(), cx));
+        let dashboards_panel = cx.new(|cx| {
+            crate::dashboards_panel::DashboardsPanel::new(editor_panel.clone(), window, cx)
+        });
         let command_palette = cx.new(|cx| {
             CommandPalette::new(sidebar.downgrade(), editor_panel.downgrade(), window, cx)
         });
@@ -559,6 +590,7 @@ impl BlancoApp {
             snippets_panel,
             history_panel,
             open_tabs_panel,
+            dashboards_panel,
             editor_panel,
             revealed_target: None,
             command_palette,
@@ -1100,6 +1132,16 @@ impl BlancoApp {
     /// Synchronously load the persisted query tabs from the app database. Blocks
     /// on the tokio runtime because the app cannot render until it knows which
     /// tabs to restore. Load failures degrade to an empty tab set.
+    fn load_saved_dashboards(window_id: i64, cx: &mut Context<Self>) -> Vec<(i64, bool)> {
+        let app_database = AppDatabase::global(cx);
+        gpui_tokio::Tokio::handle(cx)
+            .block_on(app_database.load_window_dashboards(window_id))
+            .unwrap_or_else(|error| {
+                error!("Failed to load the open dashboards: {error}");
+                Vec::new()
+            })
+    }
+
     fn load_saved_tabs(window_id: i64, cx: &mut Context<Self>) -> Vec<app_database::QueryTabData> {
         info!("Loading saved tabs of window {window_id} from database");
         let app_database = AppDatabase::global(cx);
@@ -1682,6 +1724,9 @@ impl BlancoApp {
                                     SidebarTab::History => this.child(self.history_panel.clone()),
                                     SidebarTab::OpenTabs => {
                                         this.child(self.open_tabs_panel.clone())
+                                    }
+                                    SidebarTab::Dashboards => {
+                                        this.child(self.dashboards_panel.clone())
                                     }
                                 }),
                         ),
@@ -2406,6 +2451,43 @@ impl BlancoApp {
         crate::backup::open_restore(action.context.clone(), window, cx);
     }
 
+    fn on_new_dashboard(&mut self, _: &NewDashboard, window: &mut Window, cx: &mut Context<Self>) {
+        crate::editor::dashboard::new_dashboard(self.editor_panel.downgrade(), window, cx);
+    }
+
+    fn on_open_dashboard(
+        &mut self,
+        action: &OpenDashboard,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.editor_panel.update(cx, |panel, cx| {
+            panel.open_dashboard_tab(action.dashboard_id, window, cx);
+        });
+    }
+
+    fn on_add_to_dashboard(
+        &mut self,
+        action: &AddToDashboard,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.editor_panel.update(cx, |panel, cx| {
+            panel.add_result_to_dashboard(action.dashboard_id, window, cx);
+        });
+    }
+
+    fn on_update_dashboard_panel(
+        &mut self,
+        _: &UpdateDashboardPanel,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.editor_panel.update(cx, |panel, cx| {
+            panel.update_linked_dashboard_panel(window, cx);
+        });
+    }
+
     fn on_open_process_list(
         &mut self,
         action: &OpenProcessList,
@@ -3099,6 +3181,10 @@ impl Render for BlancoApp {
             .on_action(cx.listener(Self::on_open_schema_graph))
             .on_action(cx.listener(Self::on_new_table))
             .on_action(cx.listener(Self::on_open_process_list))
+            .on_action(cx.listener(Self::on_new_dashboard))
+            .on_action(cx.listener(Self::on_open_dashboard))
+            .on_action(cx.listener(Self::on_add_to_dashboard))
+            .on_action(cx.listener(Self::on_update_dashboard_panel))
             .on_action(cx.listener(Self::on_backup_database))
             .on_action(cx.listener(Self::on_restore_database))
             .on_action(cx.listener(Self::on_new_connection_modal))

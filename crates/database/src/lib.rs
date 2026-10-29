@@ -20,7 +20,8 @@ pub use factories::{MysqlConnectionFactory, PostgresConnectionFactory, SqliteCon
 pub use secret_prompt::{NoSecretPrompt, SecretPrompt, SecretPromptCancelled, SecretPromptRequest};
 pub use service::{
     ClientToolEndpoint, ConnectionId, DatabaseConfigId, DatabaseConnectedMessage,
-    DatabaseDisconnectedMessage, DatabaseService, DatabaseServiceMessage,
+    DatabaseDisconnectedMessage, DatabaseService, DatabaseServiceMessage, DedicatedConnection,
+    ShortLivedConnection,
 };
 pub use ssh_tunnel::{SshTunnel, SshTunnelConfig, TunnelInfo};
 

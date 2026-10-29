@@ -1601,7 +1601,7 @@ impl EventEmitter<ConnectionsPanelEvent> for ConnectionsPanel {}
 /// color silhouette (the SVG is tinted by the tree item's color), so the same
 /// icon serves both the connected and disconnected states, distinguished only
 /// by color.
-fn connection_type_icon(db_type: database::DatabaseType) -> IconName {
+pub(crate) fn connection_type_icon(db_type: database::DatabaseType) -> IconName {
     match db_type {
         database::DatabaseType::SQLite => IconName::Sqlite,
         database::DatabaseType::DuckDb => IconName::Duckdb,

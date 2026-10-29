@@ -23,11 +23,12 @@ use crate::{
         CreateNewScriptTab, ExplainAnalyzeQuery, ExplainQuery, ExportAsCSV, ExportAsHTML,
         ExportAsJSON, ExportAsMarkdown, ExportAsSQL, ExportAsTSV, ExportConnections,
         ExportTableData, FormatQuery, ImportConnections, ImportTableData, LowerCaseKeywords,
-        MoveTabToNewWindow, NewDuckdbDatabase, NewQueryTab, NewSnippet, NewSqliteDatabase,
-        NewWindow, OpenDatabaseFile, OpenNewConnectionModal, OpenProcessList, OpenSettings,
-        OpenSqlFile, OpenTerminal, RefreshConnections, ReopenClosedTab, RestoreDatabase,
-        RollbackChanges, RunQuery, RunSqlFile, SaveTab, SaveTabAs, SwitchTheme, ToggleFilterBar,
-        ToggleRenderWhitespace, ToggleResults, ToggleSidebar, ToggleWordWrap, UpperCaseKeywords,
+        MoveTabToNewWindow, NewDashboard, NewDuckdbDatabase, NewQueryTab, NewSnippet,
+        NewSqliteDatabase, NewWindow, OpenDashboard, OpenDatabaseFile, OpenNewConnectionModal,
+        OpenProcessList, OpenSettings, OpenSqlFile, OpenTerminal, RefreshConnections,
+        ReopenClosedTab, RestoreDatabase, RollbackChanges, RunQuery, RunSqlFile, SaveTab,
+        SaveTabAs, SwitchTheme, ToggleFilterBar, ToggleRenderWhitespace, ToggleResults,
+        ToggleSidebar, ToggleWordWrap, UpperCaseKeywords,
     },
     connections::ConnectionsPanel,
     editor::EditorPanel,
@@ -166,6 +167,8 @@ pub enum CommandType {
     BackupDatabase(DatabaseRef),
     RestoreDatabase(DatabaseRef),
     OpenProcessList(DatabaseRef),
+    NewDashboard,
+    OpenDashboard(i64),
 }
 
 /// One pushed level of the navigation stack. `crumb` labels the breadcrumb
@@ -912,6 +915,13 @@ fn execute_command(cmd: &CommandType, window: &mut Window, cx: &mut App) {
             }),
             cx,
         ),
+        CommandType::NewDashboard => window.dispatch_action(Box::new(NewDashboard), cx),
+        CommandType::OpenDashboard(dashboard_id) => window.dispatch_action(
+            Box::new(OpenDashboard {
+                dashboard_id: *dashboard_id,
+            }),
+            cx,
+        ),
         CommandType::OpenProcessList(database) => window.dispatch_action(
             Box::new(OpenProcessList {
                 context: database.context(),
@@ -1361,7 +1371,15 @@ fn build_commands(
             CommandType::RefreshConnections,
         ),
         leaf("Reopen Closed Tab", "Tab", CommandType::ReopenClosedTab),
+        leaf("New Dashboard…", "Dashboard", CommandType::NewDashboard),
     ];
+    for dashboard in crate::editor::dashboard::DashboardDirectory::dashboards(cx) {
+        commands.push(leaf(
+            format!("Open Dashboard: {}", dashboard.name),
+            "Dashboard",
+            CommandType::OpenDashboard(dashboard.id),
+        ));
+    }
 
     // Keyword case reads the grammar of an SQL editor tab, so Redis tabs and
     // tabs without an editor do without it.

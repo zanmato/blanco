@@ -62,6 +62,7 @@ impl Global for OpenWindows {}
 pub fn init(cx: &mut App) {
     cx.set_global(OpenWindows::default());
     StatusBarState::shared(cx);
+    crate::editor::dashboard::DashboardDirectory::reload(cx);
     cx.on_action(|_: &NewWindow, cx| {
         // The action arrives while its window is updating, and the new window
         // reads that window's bounds.

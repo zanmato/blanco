@@ -16,6 +16,7 @@ mod connection_modal;
 mod connections;
 mod copy_handler;
 mod custom_themes;
+mod dashboards_panel;
 mod database_file;
 mod editor;
 mod export;

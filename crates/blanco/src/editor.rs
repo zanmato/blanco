@@ -1,3 +1,4 @@
+pub(crate) mod dashboard;
 mod file_runner;
 mod object_ddl;
 pub(crate) mod open_tabs;
@@ -117,6 +118,12 @@ pub struct EditorPanel {
     closed_tabs: Vec<ClosedTab>,
     /// The active tab as last written to the window's row, to restore it.
     persisted_active_tab: Option<i64>,
+    /// The dashboards open as tabs as last written for the window, with
+    /// whether each was active.
+    persisted_dashboards: Vec<(i64, bool)>,
+    /// A save to a dashboard waiting for the run of the tab with these
+    /// results to end.
+    pending_panel_save: Option<(Entity<ResultsPanel>, dashboard::PendingPanelSave)>,
     /// The `windows` row this panel's tabs are stored under.
     window_id: i64,
 }
@@ -358,7 +365,17 @@ impl EditorPanel {
     }
 
     fn close_tab(&mut self, tab_index: usize, cx: &mut Context<Self>) {
-        if tab_index < self.tabs.len() && self.tabs.len() > 1 {
+        // The last tab stays, so a window is never left without an editor
+        // by the user's own close.
+        if self.tabs.len() > 1 {
+            self.remove_tab(tab_index, cx);
+        }
+    }
+
+    /// Take a tab out, even the last one, as for a dashboard that was
+    /// deleted.
+    fn remove_tab(&mut self, tab_index: usize, cx: &mut Context<Self>) {
+        if tab_index < self.tabs.len() {
             // Get the db_id before removing the tab
             let db_id = self.tabs.get(tab_index).and_then(TabType::db_id);
             if let Some(closed) = self.tabs.get(tab_index).and_then(|tab| {
@@ -517,6 +534,8 @@ impl EditorPanel {
             last_run_at: connection_tab.last_run_at,
             file_path: connection_tab.file.as_ref().map(|file| file.path_string()),
             window_id: Some(self.window_id),
+            // Written on its own when the view changes.
+            result_view: None,
         };
         let inserting = tab_data.id.is_none();
         if inserting {
@@ -568,6 +587,32 @@ impl EditorPanel {
     }
 
     /// Remember the active tab so the next start opens on it.
+    /// Save how a query tab shows its result, so the tab shows its next
+    /// result the same way after a restart.
+    fn remember_result_view(
+        &mut self,
+        results_panel: &Entity<ResultsPanel>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(db_id) = self.tabs.iter().find_map(|tab| match tab {
+            TabType::Query(tab) if &tab.results_panel == results_panel => tab.db_id,
+            _ => None,
+        }) else {
+            return;
+        };
+        let view = results_panel
+            .read(cx)
+            .remembered_view(cx)
+            .map(|view| view.to_json());
+        let app_database = AppDatabase::global(cx).clone();
+        cx.background_spawn(async move {
+            if let Err(error) = app_database.set_query_tab_result_view(db_id, view).await {
+                error!("Failed to remember how the tab shows its result: {error}");
+            }
+        })
+        .detach();
+    }
+
     fn persist_active_tab(&mut self, cx: &mut Context<Self>) {
         let active = self.tabs.get(self.active_tab_ix).and_then(TabType::db_id);
         if active.is_none() || active == self.persisted_active_tab {
@@ -1012,6 +1057,8 @@ impl EditorPanel {
             autosave_inserting: HashSet::new(),
             closed_tabs: Vec::new(),
             persisted_active_tab: active_tab,
+            persisted_dashboards: Vec::new(),
+            pending_panel_save: None,
             window_id,
         };
 
@@ -1026,7 +1073,22 @@ impl EditorPanel {
             panel.active_tab_ix = ix;
         }
         // Every change to the panel may have switched the active tab.
-        let active_tab_subscription = cx.observe_self(|this, cx| this.persist_active_tab(cx));
+        // A save to a dashboard can wait for a run, which ends in this event
+        // whichever way it goes.
+        let run_ended_subscription = cx.subscribe_in(
+            &cx.entity(),
+            window,
+            |this, _, event: &EditorPanelEvent, window, cx| {
+                if let EditorPanelEvent::QueryRunEnded { tab_index, outcome } = event {
+                    this.finish_pending_panel_save(*tab_index, outcome, window, cx);
+                }
+            },
+        );
+        panel._subscriptions.push(run_ended_subscription);
+        let active_tab_subscription = cx.observe_self(|this, cx| {
+            this.persist_active_tab(cx);
+            this.persist_open_dashboards(cx);
+        });
         panel._subscriptions.push(active_tab_subscription);
 
         // Enable linting after a short delay so that initial selection range events
@@ -1128,6 +1190,13 @@ impl EditorPanel {
                     self.create_and_add_script_tab(window, params, cx);
                 } else {
                     self.create_and_add_tab_with_connection(window, params, cx);
+                    if let Some(view) = &tab_data.result_view
+                        && let Some(TabType::Query(tab)) = self.tabs.last()
+                    {
+                        let view = dashboard::PanelView::from_json(view);
+                        tab.results_panel
+                            .update(cx, |results, _| results.set_pending_view(view));
+                    }
                 }
                 if let Some(path) = &tab_data.file_path {
                     self.restore_tab_file(self.tabs.len() - 1, path, cx);
@@ -1299,6 +1368,13 @@ impl EditorPanel {
         // in sync.
         self._subscriptions
             .push(cx.observe(&results_panel, |_, _, cx| cx.notify()));
+        self._subscriptions.push(cx.subscribe(
+            &results_panel,
+            |this, results_panel, event: &crate::results_panel::ResultsPanelEvent, cx| {
+                let crate::results_panel::ResultsPanelEvent::ViewChanged = event;
+                this.remember_result_view(&results_panel, cx);
+            },
+        ));
         let query_tab = QueryTab {
             base: ConnectionBackedTab {
                 title: params.title.clone(),
@@ -1690,6 +1766,15 @@ impl EditorPanel {
         self.editor_terminal_resize_state.update(cx, |state, cx| {
             state.resize_panel(1, height, window, cx);
         });
+    }
+
+    /// The active tab when it is a dashboard.
+    #[cfg(feature = "screenshots")]
+    pub(crate) fn active_dashboard_tab(&self) -> Option<Entity<dashboard::DashboardTab>> {
+        match self.tabs.get(self.active_tab_ix) {
+            Some(TabType::Dashboard(tab)) => Some(tab.clone()),
+            _ => None,
+        }
     }
 
     /// The active tab when it is a schema graph.

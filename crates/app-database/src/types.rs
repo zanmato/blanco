@@ -66,6 +66,10 @@ pub struct QueryTabData {
     pub file_path: Option<String>,
     /// The `windows` row of the window showing the tab.
     pub window_id: Option<i64>,
+    /// How the tab's result was shown, as JSON the app reads, applied to the
+    /// first result after the tab is restored. Written on its own by
+    /// [`crate::AppDatabase::set_query_tab_result_view`].
+    pub result_view: Option<String>,
 }
 
 /// A window's size and place, in the coordinates GPUI reports for the

@@ -84,6 +84,20 @@ impl Connection for PostgresConnection {
         result.map(|_| ())
     }
 
+    async fn close(&self) -> Result<()> {
+        let pools: Vec<sqlx::PgPool> = self
+            .pools
+            .write()
+            .await
+            .drain()
+            .map(|(_, pool)| pool)
+            .collect();
+        for pool in pools {
+            pool.close().await;
+        }
+        Ok(())
+    }
+
     async fn execute_query(
         &self,
         query: &str,

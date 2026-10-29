@@ -241,42 +241,132 @@ impl StatementSplitter {
     }
 
     fn quote_close(&self, c: char) -> Option<char> {
-        match (c, self.database_type) {
-            ('\'', _) | ('"', _) => Some(c),
-            ('`', DatabaseType::MySQL | DatabaseType::ClickHouse | DatabaseType::SQLite) => {
-                Some('`')
-            }
-            ('[', DatabaseType::MsSql | DatabaseType::SQLite) => Some(']'),
-            _ => None,
-        }
+        quote_close(self.database_type, c)
     }
 
     fn backslash_escapes(&self) -> bool {
-        matches!(
-            self.database_type,
-            DatabaseType::MySQL | DatabaseType::ClickHouse
-        )
+        backslash_escapes(self.database_type)
     }
 
-    /// A dollar-quote opener (`$$` or `$tag$`) at the start of `rest`. `$1`
-    /// is a parameter, not a quote.
     fn dollar_tag(&self, rest: &str) -> Option<String> {
-        if !self.database_type.dialect().supports_dollar_quotes() || !rest.starts_with('$') {
-            return None;
-        }
-        let body = &rest[1..];
-        let end = body.find('$')?;
-        let tag = &body[..end];
-        let valid = tag.chars().enumerate().all(|(ix, c)| {
-            c == '_'
-                || if ix == 0 {
-                    c.is_alphabetic()
-                } else {
-                    c.is_alphanumeric()
-                }
-        });
-        valid.then(|| format!("${tag}$"))
+        dollar_tag(self.database_type, rest)
     }
+}
+
+/// The character that closes a quote opened by `c`.
+fn quote_close(database_type: DatabaseType, c: char) -> Option<char> {
+    match (c, database_type) {
+        ('\'', _) | ('"', _) => Some(c),
+        ('`', DatabaseType::MySQL | DatabaseType::ClickHouse | DatabaseType::SQLite) => Some('`'),
+        ('[', DatabaseType::MsSql | DatabaseType::SQLite) => Some(']'),
+        _ => None,
+    }
+}
+
+fn backslash_escapes(database_type: DatabaseType) -> bool {
+    matches!(
+        database_type,
+        DatabaseType::MySQL | DatabaseType::ClickHouse
+    )
+}
+
+/// A dollar-quote opener (`$$` or `$tag$`) at the start of `rest`. `$1` is a
+/// parameter, not a quote.
+fn dollar_tag(database_type: DatabaseType, rest: &str) -> Option<String> {
+    if !database_type.dialect().supports_dollar_quotes() || !rest.starts_with('$') {
+        return None;
+    }
+    let body = &rest[1..];
+    let end = body.find('$')?;
+    let tag = &body[..end];
+    let valid = tag.chars().enumerate().all(|(ix, c)| {
+        c == '_'
+            || if ix == 0 {
+                c.is_alphabetic()
+            } else {
+                c.is_alphanumeric()
+            }
+    });
+    valid.then(|| format!("${tag}$"))
+}
+
+/// What a stretch of SQL text is to the backend.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SqlRegionKind {
+    Code,
+    /// A string literal, its quotes included.
+    String,
+    /// A comment, a quoted identifier or a dollar-quoted body.
+    Other,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SqlRegion {
+    pub range: std::ops::Range<usize>,
+    pub kind: SqlRegionKind,
+}
+
+/// `sql` cut into consecutive regions of code, string literals and the rest,
+/// lexed as the backend lexes them. An unterminated quote or comment runs to
+/// the end.
+pub fn sql_regions(dialect: Dialect, sql: &str) -> Vec<SqlRegion> {
+    let database_type = dialect.database_type();
+    let mut regions: Vec<SqlRegion> = Vec::new();
+    let mut push = |range: std::ops::Range<usize>, kind: SqlRegionKind| {
+        if range.is_empty() {
+            return;
+        }
+        match regions.last_mut() {
+            Some(last) if last.kind == kind && kind == SqlRegionKind::Code => {
+                last.range.end = range.end;
+            }
+            _ => regions.push(SqlRegion { range, kind }),
+        }
+    };
+    let mut position = 0;
+    while let Some(c) = sql[position..].chars().next() {
+        let start = position;
+        let rest = &sql[position..];
+        let (end, kind) =
+            if rest.starts_with("--") || (c == '#' && database_type == DatabaseType::MySQL) {
+                let end = rest.find('\n').map_or(sql.len(), |ix| start + ix);
+                (end, SqlRegionKind::Other)
+            } else if let Some(body) = rest.strip_prefix("/*") {
+                let end = body.find("*/").map_or(sql.len(), |ix| start + 2 + ix + 2);
+                (end, SqlRegionKind::Other)
+            } else if let Some(tag) = dollar_tag(database_type, rest) {
+                let body = &rest[tag.len()..];
+                let end = body
+                    .find(tag.as_str())
+                    .map_or(sql.len(), |ix| start + tag.len() + ix + tag.len());
+                (end, SqlRegionKind::Other)
+            } else if let Some(close) = quote_close(database_type, c) {
+                let mut end = sql.len();
+                let mut chars = rest.char_indices().skip(1);
+                while let Some((ix, next)) = chars.next() {
+                    if next == '\\' && backslash_escapes(database_type) && close != ']' {
+                        chars.next();
+                    } else if next == close {
+                        end = start + ix + next.len_utf8();
+                        break;
+                    }
+                }
+                // MySQL reads a double-quoted text as a string unless ANSI_QUOTES
+                // is set.
+                let string = c == '\'' || (c == '"' && database_type == DatabaseType::MySQL);
+                let kind = if string {
+                    SqlRegionKind::String
+                } else {
+                    SqlRegionKind::Other
+                };
+                (end, kind)
+            } else {
+                (start + c.len_utf8(), SqlRegionKind::Code)
+            };
+        push(start..end, kind);
+        position = end;
+    }
+    regions
 }
 
 /// Split a whole script at once.
@@ -290,6 +380,48 @@ pub fn split_script(dialect: Dialect, script: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn regions(db_type: DatabaseType, sql: &str) -> Vec<(&str, SqlRegionKind)> {
+        sql_regions(db_type.dialect(), sql)
+            .into_iter()
+            .map(|region| (&sql[region.range], region.kind))
+            .collect()
+    }
+
+    #[test]
+    fn regions_tell_code_from_strings_and_the_rest() {
+        use SqlRegionKind::{Code, Other, String};
+        assert_eq!(
+            regions(
+                DatabaseType::PostgreSQL,
+                "SELECT 'a''b', \"id\" -- c\nFROM $x$ body $x$ /* d */ WHERE $1"
+            ),
+            vec![
+                ("SELECT ", Code),
+                ("'a'", String),
+                ("'b'", String),
+                (", ", Code),
+                ("\"id\"", Other),
+                (" ", Code),
+                ("-- c", Other),
+                ("\nFROM ", Code),
+                ("$x$ body $x$", Other),
+                (" ", Code),
+                ("/* d */", Other),
+                (" WHERE $1", Code),
+            ]
+        );
+        assert_eq!(
+            regions(DatabaseType::MySQL, r#"SELECT "a\"b", 'é # x"#),
+            vec![
+                ("SELECT ", Code),
+                (r#""a\"b""#, String),
+                (", ", Code),
+                ("'é # x", String),
+            ],
+            "backslash escapes, and an unterminated string runs to the end"
+        );
+    }
 
     fn split(db_type: DatabaseType, script: &str) -> Vec<String> {
         split_script(db_type.dialect(), script)

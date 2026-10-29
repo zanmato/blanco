@@ -64,6 +64,7 @@ impl TabType {
             TabType::ObjectDdl(tab) => tab.entity_id(),
             TabType::SchemaGraph(tab) => tab.entity_id(),
             TabType::ProcessList(tab) => tab.entity_id(),
+            TabType::Dashboard(tab) => tab.entity_id(),
         }
     }
 }

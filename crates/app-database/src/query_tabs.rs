@@ -67,7 +67,7 @@ impl AppDatabase {
         self.run(async move {
             let rows = sqlx::query(
                 r#"
-                SELECT qt.id, qt.title, qt.content, qt.position, qt.connection_id, c.db_type, c.name, qt.database_name, qt.schema_name, c.environment_type, qt.tab_kind, qt.last_run_at, qt.file_path, qt.window_id
+                SELECT qt.id, qt.title, qt.content, qt.position, qt.connection_id, c.db_type, c.name, qt.database_name, qt.schema_name, c.environment_type, qt.tab_kind, qt.last_run_at, qt.file_path, qt.window_id, qt.result_view
                 FROM query_tabs qt
                 INNER JOIN connections c ON c.id = qt.connection_id
                 WHERE qt.window_id = ?
@@ -107,11 +107,30 @@ impl AppDatabase {
                         last_run_at: row.get(11),
                         file_path: row.get(12),
                         window_id: row.get(13),
+                        result_view: row.get(14),
                     }
                 })
                 .collect();
 
             Ok(tabs)
+        })
+        .await
+    }
+
+    /// Remember how a tab's result is shown.
+    pub async fn set_query_tab_result_view(
+        &self,
+        id: i64,
+        result_view: Option<String>,
+    ) -> Result<(), sqlx::Error> {
+        let pool = self.pool();
+        self.run(async move {
+            sqlx::query("UPDATE query_tabs SET result_view = ? WHERE id = ?")
+                .bind(result_view)
+                .bind(id)
+                .execute(&pool)
+                .await?;
+            Ok(())
         })
         .await
     }
@@ -156,6 +175,7 @@ impl AppDatabase {
                     last_run_at: row.get(10),
                     file_path: row.get(11),
                     window_id: row.get(12),
+                    result_view: None,
                 }))
             } else {
                 Ok(None)

@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use crate::app_settings::AppSettings;
 use crate::result_ext::ResultExt;
-use crate::results_panel::ResultsPanel;
 use transformers::{CsvTransformer, DataTransformer, SelectedTableData, TransformerRegistry};
 
 /// Handles copying table data to the clipboard in various formats
@@ -21,12 +20,12 @@ impl CopyHandler {
 
     /// Copy selected data in the specified format asynchronously
     /// This spawns a background task to transform the data, keeping the UI responsive
-    pub fn copy_as_format(
+    pub fn copy_as_format<T: 'static>(
         &self,
         data: &SelectedTableData,
         format: &str,
         window: &mut Window,
-        cx: &mut Context<ResultsPanel>,
+        cx: &mut Context<T>,
     ) {
         if !data.has_selection() {
             tracing::error!("Failed to copy as {}: No data selected for copying", format);

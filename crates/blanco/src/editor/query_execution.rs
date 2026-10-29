@@ -167,11 +167,25 @@ impl EditorPanel {
         if query.is_empty() {
             return Err("No query to execute".to_string());
         }
+        // The dashboard a tab came from writes out its own `$` names, which
+        // are no bind parameters to ask for.
+        let dashboard = query_tab
+            .results_panel
+            .read(cx)
+            .dashboard_link()
+            .map(|link| link.parameters());
         Ok(Some(StatementToRun {
             query,
             parameters: statement_info
                 .map(|info| info.parameters)
-                .unwrap_or_default(),
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|parameter| {
+                    dashboard
+                        .as_ref()
+                        .is_none_or(|dashboard| !dashboard.covers(parameter))
+                })
+                .collect(),
         }))
     }
 
@@ -512,7 +526,12 @@ impl EditorPanel {
             });
 
             // Clone values for background task
-            let query_clone = query.clone();
+            // A tab from a dashboard runs the query with the dashboard's
+            // macros and variables written out, and keeps it as written.
+            let query_clone = match query_tab.results_panel.read(cx).dashboard_link() {
+                Some(link) => link.parameters().apply(&query, db_type.dialect()),
+                None => query.clone(),
+            };
             let db_service = DatabaseService::global(cx).clone();
             let database_name = database_name.to_string();
             let database_name_for_background = database_name.clone();

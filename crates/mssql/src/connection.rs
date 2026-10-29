@@ -530,6 +530,25 @@ impl Connection for MssqlConnection {
         Ok(())
     }
 
+    async fn close(&self) -> Result<()> {
+        let slots: Vec<_> = self
+            .clients
+            .lock()
+            .await
+            .drain()
+            .map(|(_, slot)| slot)
+            .collect();
+        for slot in slots {
+            if let Some(client) = slot.lock().await.take() {
+                client
+                    .close()
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Failed to close the SQL Server client: {e}"))?;
+            }
+        }
+        Ok(())
+    }
+
     async fn execute_query(
         &self,
         query: &str,

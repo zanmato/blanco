@@ -249,6 +249,11 @@ impl Connection for TokioConnection {
         self.run(async move { inner.ping().await }).await
     }
 
+    async fn close(&self) -> Result<()> {
+        let inner = Arc::clone(&self.inner);
+        self.run(async move { inner.close().await }).await
+    }
+
     async fn server_variant(&self) -> Result<blanco_core::ServerVariant> {
         let inner = Arc::clone(&self.inner);
         self.run(async move { inner.server_variant().await }).await

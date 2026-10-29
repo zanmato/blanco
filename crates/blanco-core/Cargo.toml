@@ -10,6 +10,7 @@ lsp-types = { workspace = true }
 
 # Common dependencies
 anyhow = { workspace = true }
+chrono = { workspace = true }
 async-trait = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

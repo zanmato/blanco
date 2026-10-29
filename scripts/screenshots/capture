@@ -6,6 +6,7 @@
 #
 # Scenes: editor inline-edit json-edit terminal script snippets structure
 # filter chart explain schema-graph history palette settings export import
+# dashboard
 # (default: all), and motion, which is not a screenshot: it bundles the
 # keyframes of the website's motion demo into
 # docs/images/screenshots/motion-mocha.json with scripts/motion/bundle.mjs,
@@ -33,7 +34,7 @@ out="$root/docs/images/screenshots"
 scenes=("$@")
 if [[ ${#scenes[@]} -eq 0 ]]; then
   scenes=(editor inline-edit json-edit terminal script snippets structure filter
-    chart explain schema-graph history palette settings export import)
+    chart explain schema-graph history palette settings export import dashboard)
 fi
 
 # The light and dark pair every scene gets, plus extra themes for the editor.
