@@ -222,6 +222,138 @@ ORDER BY fk.name, fkc.constraint_column_id
     )
 }
 
+/// Every foreign key column of the tables `get_tables(schema)` lists, one
+/// row per listed table and key column. The listed table's name and schema
+/// lead, followed by the columns `foreign_keys_for_table_sql` gives. Without
+/// a schema a table name matches its namesakes in every schema, as it does
+/// table by table.
+pub fn schema_foreign_keys_sql(schema: Option<&str>) -> String {
+    let (listing_filter, table_filter) = match schema {
+        Some(schema) => {
+            let schema = schema.replace('\'', "''");
+            (
+                format!("AND lt.TABLE_SCHEMA = N'{schema}'"),
+                format!("AND SCHEMA_NAME(t.schema_id) = N'{schema}'"),
+            )
+        }
+        None => (String::new(), String::new()),
+    };
+    format!(
+        r#"
+SELECT
+    lt.TABLE_NAME,
+    lt.TABLE_SCHEMA,
+    fk.name,
+    SCHEMA_NAME(rt.schema_id),
+    rt.name,
+    pc.name,
+    rc.name,
+    REPLACE(fk.update_referential_action_desc, '_', ' '),
+    REPLACE(fk.delete_referential_action_desc, '_', ' ')
+FROM INFORMATION_SCHEMA.TABLES lt
+JOIN sys.tables t ON t.name = lt.TABLE_NAME {table_filter}
+JOIN sys.foreign_keys fk ON fk.parent_object_id = t.object_id
+JOIN sys.foreign_key_columns fkc ON fkc.constraint_object_id = fk.object_id
+JOIN sys.tables rt ON rt.object_id = fk.referenced_object_id
+JOIN sys.columns pc ON pc.object_id = fkc.parent_object_id AND pc.column_id = fkc.parent_column_id
+JOIN sys.columns rc ON rc.object_id = fkc.referenced_object_id AND rc.column_id = fkc.referenced_column_id
+WHERE lt.TABLE_TYPE = 'BASE TABLE'
+{listing_filter}
+ORDER BY lt.TABLE_NAME, lt.TABLE_SCHEMA, fk.name, fkc.constraint_column_id
+"#
+    )
+}
+
+/// The columns of the tables `get_tables(schema)` lists (part 0, numbered
+/// in name order) and of the `referenced` `(schema, table)` pairs (part 1,
+/// numbered in the order given): `(part, position, table, column, data
+/// type, primary key flag, table comment, column comment)`. A listed table
+/// always gives a row, with NULL columns when none are visible, so it is
+/// kept as the per table read keeps it. Types, primary keys and comments are
+/// read as `columns_for_table_sql` and `object_comments_sql` read them.
+pub fn schema_columns_sql(schema: Option<&str>, referenced: &[(String, String)]) -> String {
+    let (own_schema, listing_filter) = match schema {
+        Some(schema) => (
+            "TABLE_SCHEMA".to_string(),
+            format!("AND TABLE_SCHEMA = N'{}'", schema.replace('\'', "''")),
+        ),
+        None => ("CAST(NULL AS nvarchar(128))".to_string(), String::new()),
+    };
+    let referenced_rows = if referenced.is_empty() {
+        String::new()
+    } else {
+        let values: Vec<String> = referenced
+            .iter()
+            .enumerate()
+            .map(|(index, (table_schema, table))| {
+                format!(
+                    "({}, N'{}', N'{}')",
+                    index + 1,
+                    table_schema.replace('\'', "''"),
+                    table.replace('\'', "''"),
+                )
+            })
+            .collect();
+        format!(
+            r#"
+    UNION ALL
+    SELECT 1, position, table_name, table_schema,
+        OBJECT_ID(QUOTENAME(table_schema) + '.' + QUOTENAME(table_name))
+    FROM (VALUES {}) AS referenced(position, table_schema, table_name)"#,
+            values.join(", ")
+        )
+    };
+    format!(
+        r#"
+WITH wanted AS (
+    SELECT
+        0 AS part,
+        ROW_NUMBER() OVER (ORDER BY TABLE_NAME) AS position,
+        TABLE_NAME AS table_name,
+        {own_schema} AS table_schema,
+        OBJECT_ID(QUOTENAME(TABLE_SCHEMA) + '.' + QUOTENAME(TABLE_NAME)) AS object_id
+    FROM INFORMATION_SCHEMA.TABLES
+    WHERE TABLE_TYPE = 'BASE TABLE'
+    {listing_filter}{referenced_rows}
+)
+SELECT
+    w.part,
+    w.position,
+    w.table_name,
+    c.COLUMN_NAME,
+    c.DATA_TYPE,
+    CASE WHEN pk.column_name IS NOT NULL THEN '1' ELSE '0' END,
+    CAST(tep.value AS NVARCHAR(4000)),
+    CAST(cep.value AS NVARCHAR(4000))
+FROM wanted w
+LEFT JOIN sys.extended_properties tep
+    ON tep.class = 1
+    AND tep.name = 'MS_Description'
+    AND tep.major_id = w.object_id
+    AND tep.minor_id = 0
+LEFT JOIN INFORMATION_SCHEMA.COLUMNS c
+    ON c.TABLE_NAME = w.table_name
+    AND (w.table_schema IS NULL OR c.TABLE_SCHEMA = w.table_schema)
+LEFT JOIN sys.extended_properties cep
+    ON cep.class = 1
+    AND cep.name = 'MS_Description'
+    AND cep.major_id = OBJECT_ID(QUOTENAME(c.TABLE_SCHEMA) + '.' + QUOTENAME(c.TABLE_NAME))
+    AND cep.minor_id = COLUMNPROPERTY(cep.major_id, c.COLUMN_NAME, 'ColumnId')
+LEFT JOIN (
+    SELECT kc.table_schema, kc.table_name, kc.column_name
+    FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE kc
+    JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
+        ON tc.constraint_name = kc.constraint_name
+        AND tc.constraint_schema = kc.constraint_schema
+    WHERE tc.constraint_type = 'PRIMARY KEY'
+) pk ON pk.table_schema = c.TABLE_SCHEMA
+    AND pk.table_name = c.TABLE_NAME
+    AND pk.column_name = c.COLUMN_NAME
+ORDER BY w.part, w.position, c.ORDINAL_POSITION, c.TABLE_SCHEMA
+"#
+    )
+}
+
 pub fn database_schema_paginated_sql(table_names: Option<&str>, limit: i64, offset: i64) -> String {
     let name_filter = match table_names {
         Some(names) => {

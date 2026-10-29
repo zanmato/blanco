@@ -441,4 +441,82 @@ mod tests {
         );
         Ok(())
     }
+
+    #[tokio::test]
+    async fn schema_wide_reads_match_the_per_table_reads() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let temp_file = NamedTempFile::new()?;
+        let path = temp_file.path().to_string_lossy().to_string();
+        let connection_string = format!("sqlite:{}", path);
+        let mut connection = crate::SqliteConnection::new(connection_string.clone())?;
+        connection.connect(&connection_string).await?;
+        connection
+            .execute_script(
+                "CREATE TABLE parent (a INTEGER, b TEXT, label VARCHAR(20), PRIMARY KEY (a, b));
+                 CREATE TABLE tag (id INTEGER PRIMARY KEY, name TEXT);
+                 CREATE TABLE \"child's\" (
+                     id INTEGER PRIMARY KEY,
+                     parent_a INTEGER,
+                     parent_b TEXT,
+                     tag_id INTEGER REFERENCES tag ON DELETE SET NULL,
+                     FOREIGN KEY (parent_a, parent_b) REFERENCES parent (a, b) ON UPDATE CASCADE
+                 );
+                 CREATE VIEW tag_names AS SELECT name FROM tag;",
+                None,
+            )
+            .await?;
+
+        let tables = connection.get_tables(None).await?;
+        let mut expected_keys = Vec::new();
+        let mut expected_columns = Vec::new();
+        for table in &tables {
+            for key in connection.get_foreign_keys_for_table(table, None).await? {
+                expected_keys.push(blanco_core::SchemaForeignKey {
+                    table: table.clone(),
+                    key,
+                });
+            }
+            expected_columns.push(blanco_core::SchemaTableColumns {
+                schema: None,
+                table: table.clone(),
+                comment: None,
+                columns: connection
+                    .get_columns_for_table(table, None)
+                    .await?
+                    .into_iter()
+                    .map(blanco_core::SchemaColumn::from)
+                    .collect(),
+            });
+        }
+        expected_columns.push(blanco_core::SchemaTableColumns {
+            schema: Some("main".to_string()),
+            table: "tag".to_string(),
+            comment: None,
+            columns: connection
+                .get_columns_for_table("tag", None)
+                .await?
+                .into_iter()
+                .map(blanco_core::SchemaColumn::from)
+                .collect(),
+        });
+
+        let keys = connection.schema_foreign_keys(None).await?;
+        assert_eq!(keys, expected_keys);
+        assert_eq!(keys.len(), 2);
+        assert_eq!(
+            keys.iter()
+                .map(|key| key.key.columns.len())
+                .collect::<Vec<_>>(),
+            vec![2, 1]
+        );
+
+        let referenced = [
+            ("main".to_string(), "tag".to_string()),
+            ("unattached".to_string(), "tag".to_string()),
+            ("main".to_string(), "missing".to_string()),
+        ];
+        let columns = connection.schema_columns(None, &referenced).await?;
+        assert_eq!(columns, expected_columns);
+        Ok(())
+    }
 }

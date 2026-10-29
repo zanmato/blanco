@@ -471,4 +471,232 @@ mod tests {
 
         Ok(())
     }
+    #[tokio::test]
+    async fn test_mssql_schema_graph_bulk_reads_match_per_table()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use blanco_core::connection_trait::{SchemaColumn, SchemaForeignKey, SchemaTableColumns};
+
+        let conn = match connect_or_skip("test_mssql_schema_graph_bulk_reads_match_per_table").await
+        {
+            ConnectOutcome::Connected(c) => c,
+            ConnectOutcome::Skip(r) => return r,
+        };
+
+        let main_schema = "bulk_graph_ms_main";
+        let other_schema = "bulk_graph_ms_other";
+        // Referencing tables go first, since SQL Server drops no table a key
+        // still references and has no DROP SCHEMA CASCADE.
+        let cleanup = [
+            "DROP TABLE IF EXISTS bulk_graph_ms_main.line_items",
+            "DROP TABLE IF EXISTS bulk_graph_ms_main.orders",
+            "DROP TABLE IF EXISTS bulk_graph_ms_main.[it's quoted]",
+            "DROP TABLE IF EXISTS bulk_graph_ms_other.products",
+            "DROP TABLE IF EXISTS bulk_graph_ms_other.customers",
+            "DROP SCHEMA IF EXISTS bulk_graph_ms_main",
+            "DROP SCHEMA IF EXISTS bulk_graph_ms_other",
+        ];
+        for statement in cleanup {
+            if let Err(error) = conn.execute_query(statement, None, None).await {
+                eprintln!("cleanup before test: {statement}: {error}");
+            }
+        }
+
+        let setup = [
+            "EXEC('CREATE SCHEMA bulk_graph_ms_main')",
+            "EXEC('CREATE SCHEMA bulk_graph_ms_other')",
+            "CREATE TABLE bulk_graph_ms_other.customers (
+                region INT NOT NULL,
+                code NVARCHAR(20) NOT NULL,
+                name NVARCHAR(100),
+                PRIMARY KEY (region, code)
+            )",
+            "CREATE TABLE bulk_graph_ms_other.products (id INT PRIMARY KEY, label VARCHAR(50))",
+            "CREATE TABLE bulk_graph_ms_main.orders (
+                id INT PRIMARY KEY,
+                customer_code NVARCHAR(20) NOT NULL,
+                customer_region INT NOT NULL,
+                placed DATETIME2,
+                CONSTRAINT orders_customer FOREIGN KEY (customer_region, customer_code)
+                    REFERENCES bulk_graph_ms_other.customers (region, code)
+                    ON DELETE CASCADE ON UPDATE NO ACTION
+            )",
+            "CREATE TABLE bulk_graph_ms_main.line_items (
+                order_id INT NOT NULL REFERENCES bulk_graph_ms_main.orders (id) ON DELETE CASCADE,
+                line INT NOT NULL,
+                product_id INT CONSTRAINT line_product REFERENCES bulk_graph_ms_other.products (id)
+                    ON DELETE SET NULL,
+                amount DECIMAL(10, 2),
+                PRIMARY KEY (order_id, line)
+            )",
+            "CREATE TABLE bulk_graph_ms_main.[it's quoted] (id INT PRIMARY KEY)",
+            "EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'Placed orders',
+                @level0type = N'SCHEMA', @level0name = N'bulk_graph_ms_main',
+                @level1type = N'TABLE', @level1name = N'orders'",
+            "EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'When it was placed',
+                @level0type = N'SCHEMA', @level0name = N'bulk_graph_ms_main',
+                @level1type = N'TABLE', @level1name = N'orders',
+                @level2type = N'COLUMN', @level2name = N'placed'",
+            "EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'Who buys',
+                @level0type = N'SCHEMA', @level0name = N'bulk_graph_ms_other',
+                @level1type = N'TABLE', @level1name = N'customers'",
+            "EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'Full name',
+                @level0type = N'SCHEMA', @level0name = N'bulk_graph_ms_other',
+                @level1type = N'TABLE', @level1name = N'customers',
+                @level2type = N'COLUMN', @level2name = N'name'",
+        ];
+        let mut outcome: Result<(), Box<dyn std::error::Error>> = Ok(());
+        for statement in setup {
+            if let Err(error) = conn.execute_query(statement, None, None).await {
+                outcome = Err(format!("{statement}: {error}").into());
+                break;
+            }
+        }
+
+        if outcome.is_ok() {
+            outcome = async {
+                let schema = Some(main_schema);
+                let tables = conn.get_tables(schema).await?;
+                assert_eq!(tables, ["it's quoted", "line_items", "orders"]);
+
+                let mut expected_keys = Vec::new();
+                for table in &tables {
+                    for key in conn.get_foreign_keys_for_table(table, schema).await? {
+                        expected_keys.push(SchemaForeignKey {
+                            table: table.clone(),
+                            key,
+                        });
+                    }
+                }
+                let keys = conn.schema_foreign_keys(schema).await?;
+                assert_eq!(keys, expected_keys);
+                assert_eq!(keys.len(), 3, "keys: {keys:?}");
+                let composite = keys
+                    .iter()
+                    .find(|key| key.key.name == "orders_customer")
+                    .ok_or("composite key missing")?;
+                assert_eq!(composite.key.columns, ["customer_region", "customer_code"]);
+                assert_eq!(composite.key.referenced_columns, ["region", "code"]);
+                assert_eq!(
+                    composite.key.referenced_schema.as_deref(),
+                    Some(other_schema)
+                );
+
+                let referenced = vec![
+                    (other_schema.to_string(), "products".to_string()),
+                    (other_schema.to_string(), "missing_table".to_string()),
+                    (other_schema.to_string(), "customers".to_string()),
+                ];
+                let mut expected_columns = Vec::new();
+                let wanted = tables.iter().map(|table| (None, table.clone())).chain(
+                    referenced
+                        .iter()
+                        .map(|(schema, table)| (Some(schema.clone()), table.clone())),
+                );
+                for (table_schema, table) in wanted {
+                    let columns = conn
+                        .get_columns_for_table(&table, table_schema.as_deref().or(schema))
+                        .await?;
+                    if table_schema.is_some() && columns.is_empty() {
+                        continue;
+                    }
+                    let comments = conn
+                        .get_object_comments(table_schema.as_deref().or(schema))
+                        .await?
+                        .relations;
+                    expected_columns.push(SchemaTableColumns {
+                        schema: table_schema,
+                        comment: comments.get(&table).cloned(),
+                        table,
+                        columns: columns.into_iter().map(SchemaColumn::from).collect(),
+                    });
+                }
+                let columns = conn.schema_columns(schema, &referenced).await?;
+                assert_eq!(columns, expected_columns);
+                assert_eq!(columns.len(), 5, "columns: {columns:?}");
+                let comments: Vec<_> = columns
+                    .iter()
+                    .map(|table| {
+                        let column_comments: Vec<_> = table
+                            .columns
+                            .iter()
+                            .filter_map(|column| {
+                                Some((column.name.as_str(), column.comment.as_deref()?))
+                            })
+                            .collect();
+                        (
+                            table.table.as_str(),
+                            table.comment.as_deref(),
+                            column_comments,
+                        )
+                    })
+                    .collect();
+                assert_eq!(
+                    comments,
+                    [
+                        ("it's quoted", None, vec![]),
+                        ("line_items", None, vec![]),
+                        (
+                            "orders",
+                            Some("Placed orders"),
+                            vec![("placed", "When it was placed")]
+                        ),
+                        ("products", None, vec![]),
+                        ("customers", Some("Who buys"), vec![("name", "Full name")]),
+                    ]
+                );
+
+                let without_referenced = conn.schema_columns(schema, &[]).await?;
+                assert_eq!(without_referenced.as_slice(), &expected_columns[..3]);
+
+                // Without a schema every schema's tables are listed. Only this
+                // test's tables are compared, since tests running alongside
+                // create and drop their own.
+                let own_tables = [
+                    "it's quoted",
+                    "line_items",
+                    "orders",
+                    "products",
+                    "customers",
+                ];
+                let mut expected_keys = Vec::new();
+                let mut expected_columns = Vec::new();
+                let comments = conn.get_object_comments(None).await?.relations;
+                for table in conn.get_tables(None).await? {
+                    if !own_tables.contains(&table.as_str()) {
+                        continue;
+                    }
+                    for key in conn.get_foreign_keys_for_table(&table, None).await? {
+                        expected_keys.push(SchemaForeignKey {
+                            table: table.clone(),
+                            key,
+                        });
+                    }
+                    let columns = conn.get_columns_for_table(&table, None).await?;
+                    expected_columns.push(SchemaTableColumns {
+                        schema: None,
+                        comment: comments.get(&table).cloned(),
+                        table,
+                        columns: columns.into_iter().map(SchemaColumn::from).collect(),
+                    });
+                }
+                let mut keys = conn.schema_foreign_keys(None).await?;
+                keys.retain(|key| own_tables.contains(&key.table.as_str()));
+                assert_eq!(keys, expected_keys);
+                assert_eq!(keys.len(), 3, "keys: {keys:?}");
+                let mut columns = conn.schema_columns(None, &[]).await?;
+                columns.retain(|table| own_tables.contains(&table.table.as_str()));
+                assert_eq!(columns, expected_columns);
+                assert_eq!(columns.len(), 5, "columns: {columns:?}");
+                Ok::<(), Box<dyn std::error::Error>>(())
+            }
+            .await;
+        }
+
+        for statement in cleanup {
+            if let Err(error) = conn.execute_query(statement, None, None).await {
+                eprintln!("cleanup after test: {statement}: {error}");
+            }
+        }
+        outcome
+    }
 }

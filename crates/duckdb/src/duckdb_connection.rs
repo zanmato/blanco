@@ -273,11 +273,12 @@ impl DuckdbConnection {
     /// The rows of a catalog query, with text parameters.
     async fn catalog_rows(
         &self,
-        sql: &'static str,
+        sql: impl Into<String>,
         parameters: Vec<String>,
     ) -> Result<Vec<Vec<Option<String>>>> {
+        let sql = sql.into();
         self.with_fresh_connection(move |connection| {
-            Ok(run_statement(connection, sql, &text_parameters(&parameters))?.rows)
+            Ok(run_statement(connection, &sql, &text_parameters(&parameters))?.rows)
         })
         .await
     }

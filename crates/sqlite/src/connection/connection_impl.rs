@@ -303,13 +303,21 @@ impl Connection for SqliteConnection {
     ) -> Result<Vec<ColumnInfo>> {
         tracing::debug!("Getting columns for SQLite table '{}'", table_name);
 
-        // Fetch column info with PK data
-        let query = format!("PRAGMA table_info({})", table_name);
-        let result = self.execute_query(&query, None, None).await?;
-
-        // Fetch foreign key info in parallel
-        let fk_query = format!("PRAGMA foreign_key_list({})", table_name);
-        let fk_result = self.execute_query(&fk_query, None, None).await?;
+        let parameters = [table_name.to_string()];
+        let result = self
+            .execute_query(
+                "SELECT cid, name, type, \"notnull\", dflt_value, pk FROM pragma_table_info(?1)",
+                None,
+                Some(&parameters),
+            )
+            .await?;
+        let fk_result = self
+            .execute_query(
+                "SELECT id, seq, \"table\", \"from\", \"to\" FROM pragma_foreign_key_list(?1)",
+                None,
+                Some(&parameters),
+            )
+            .await?;
 
         // Build FK lookup map
         let mut foreign_keys: HashMap<String, ForeignKeyInfo> = HashMap::new();
@@ -534,42 +542,98 @@ impl Connection for SqliteConnection {
         table_name: &str,
         _schema: Option<&str>,
     ) -> Result<Vec<blanco_core::ForeignKeyConstraint>, anyhow::Error> {
-        // SQLite keeps no constraint names in the catalog, so the pragma's id
-        // stands in as the grouping key and the name is left empty.
+        let query = "SELECT ?1, id, \"table\", \"from\", \"to\", on_update, on_delete \
+             FROM pragma_foreign_key_list(?1) ORDER BY id, seq";
+        let result = self
+            .execute_query(query, None, Some(&[table_name.to_string()]))
+            .await?;
+        Ok(fold_foreign_keys(&result.rows)
+            .into_iter()
+            .map(|(_, key)| key)
+            .collect())
+    }
+
+    async fn schema_foreign_keys(
+        &self,
+        schema: Option<&str>,
+    ) -> Result<Vec<blanco_core::SchemaForeignKey>, anyhow::Error> {
+        let schema = schema.unwrap_or("main");
         let query = format!(
-            "SELECT id, \"table\", \"from\", \"to\", on_update, on_delete FROM pragma_foreign_key_list('{}') ORDER BY id, seq",
-            table_name.replace('\'', "''")
+            "SELECT m.name, f.id, f.\"table\", f.\"from\", f.\"to\", f.on_update, f.on_delete \
+             FROM {}.sqlite_master m JOIN pragma_foreign_key_list(m.name, ?1) f \
+             WHERE m.type = 'table' AND m.name NOT LIKE 'sqlite_%' \
+             ORDER BY m.name, f.id, f.seq",
+            quote_identifier(schema)
         );
-        let result = self.execute_query(&query, None, None).await?;
-        let mut constraints: Vec<(String, blanco_core::ForeignKeyConstraint)> = Vec::new();
+        let result = self
+            .execute_query(&query, None, Some(&[schema.to_string()]))
+            .await?;
+        Ok(fold_foreign_keys(&result.rows)
+            .into_iter()
+            .map(|(table, key)| blanco_core::SchemaForeignKey { table, key })
+            .collect())
+    }
+
+    async fn schema_columns(
+        &self,
+        schema: Option<&str>,
+        referenced: &[(String, String)],
+    ) -> Result<Vec<blanco_core::SchemaTableColumns>, anyhow::Error> {
+        let schema = schema.unwrap_or("main");
+        // Each referenced table is numbered so the result keeps the order
+        // asked for. The join with the database list drops tables of
+        // databases that are not attached, which the pragma would refuse.
+        let referenced_rows: String = (1..=referenced.len())
+            .map(|position| format!(" UNION ALL SELECT {position}, ?, ?"))
+            .collect();
+        let query = format!(
+            "WITH wanted(position, schema_name, table_name) AS (\
+             SELECT 0, NULL, name FROM {schema_table}.sqlite_master \
+             WHERE type = 'table' AND name NOT LIKE 'sqlite_%'{referenced_rows}) \
+             SELECT w.position, w.schema_name, w.table_name, c.name, c.type, c.pk \
+             FROM wanted w \
+             JOIN pragma_database_list d ON d.name = coalesce(w.schema_name, ?) \
+             JOIN pragma_table_info(w.table_name, d.name) c \
+             ORDER BY w.position, w.table_name, c.cid",
+            schema_table = quote_identifier(schema)
+        );
+        let mut parameters: Vec<String> = referenced
+            .iter()
+            .flat_map(|(schema, table)| [schema.clone(), table.clone()])
+            .collect();
+        parameters.push(schema.to_string());
+        let result = self.execute_query(&query, None, Some(&parameters)).await?;
+
+        let mut tables: Vec<(String, blanco_core::SchemaTableColumns)> = Vec::new();
         for row in result.rows {
             let get = |i: usize| row.get(i).cloned().flatten();
-            let (Some(id), Some(table), Some(column)) = (get(0), get(1), get(2)) else {
+            let (Some(position), Some(table), Some(name)) = (get(0), get(2), get(3)) else {
                 continue;
             };
-            // `to` is NULL when the reference names only the table, meaning
-            // its primary key.
-            let referenced_column = get(3).unwrap_or_default();
-            match constraints.last_mut() {
-                Some((last_id, last)) if *last_id == id => {
+            let column = blanco_core::SchemaColumn {
+                name,
+                data_type: get(4).unwrap_or_default(),
+                is_primary_key: !matches!(get(5).as_deref(), None | Some("" | "0")),
+                comment: None,
+            };
+            match tables.last_mut() {
+                Some((last_position, last))
+                    if *last_position == position && last.table == table =>
+                {
                     last.columns.push(column);
-                    last.referenced_columns.push(referenced_column);
                 }
-                _ => constraints.push((
-                    id,
-                    blanco_core::ForeignKeyConstraint {
-                        name: String::new(),
+                _ => tables.push((
+                    position,
+                    blanco_core::SchemaTableColumns {
+                        schema: get(1),
+                        table,
+                        comment: None,
                         columns: vec![column],
-                        referenced_schema: None,
-                        referenced_table: table,
-                        referenced_columns: vec![referenced_column],
-                        on_update: get(4).unwrap_or_else(|| "NO ACTION".to_string()),
-                        on_delete: get(5).unwrap_or_else(|| "NO ACTION".to_string()),
                     },
                 )),
             }
         }
-        Ok(constraints.into_iter().map(|(_, fk)| fk).collect())
+        Ok(tables.into_iter().map(|(_, table)| table).collect())
     }
 
     async fn get_indexes_for_table(
@@ -618,4 +682,53 @@ impl Connection for SqliteConnection {
         tracing::debug!("Found {} indexes for table '{}'", indexes.len(), table_name);
         Ok(indexes)
     }
+}
+
+fn quote_identifier(identifier: &str) -> String {
+    format!("\"{}\"", identifier.replace('"', "\"\""))
+}
+
+/// Fold `pragma_foreign_key_list` rows, each led by the table the key is
+/// declared on: `(table, id, referenced_table, from, to, on_update,
+/// on_delete)`, ordered by table, id and position. SQLite keeps no
+/// constraint names in the catalog, so the pragma's id stands in as the
+/// grouping key and the name is left empty.
+fn fold_foreign_keys(
+    rows: &[Vec<Option<String>>],
+) -> Vec<(String, blanco_core::ForeignKeyConstraint)> {
+    let mut constraints: Vec<(String, String, blanco_core::ForeignKeyConstraint)> = Vec::new();
+    for row in rows {
+        let get = |i: usize| row.get(i).cloned().flatten();
+        let (Some(table), Some(id), Some(referenced_table), Some(column)) =
+            (get(0), get(1), get(2), get(3))
+        else {
+            continue;
+        };
+        // `to` is NULL when the reference names only the table, meaning
+        // its primary key.
+        let referenced_column = get(4).unwrap_or_default();
+        match constraints.last_mut() {
+            Some((last_table, last_id, last)) if *last_table == table && *last_id == id => {
+                last.columns.push(column);
+                last.referenced_columns.push(referenced_column);
+            }
+            _ => constraints.push((
+                table,
+                id,
+                blanco_core::ForeignKeyConstraint {
+                    name: String::new(),
+                    columns: vec![column],
+                    referenced_schema: None,
+                    referenced_table,
+                    referenced_columns: vec![referenced_column],
+                    on_update: get(5).unwrap_or_else(|| "NO ACTION".to_string()),
+                    on_delete: get(6).unwrap_or_else(|| "NO ACTION".to_string()),
+                },
+            )),
+        }
+    }
+    constraints
+        .into_iter()
+        .map(|(table, _, key)| (table, key))
+        .collect()
 }

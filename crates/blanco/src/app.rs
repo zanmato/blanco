@@ -2508,7 +2508,7 @@ impl BlancoApp {
     ) {
         use crate::editor::schema_graph::SchemaGraphParams;
 
-        let weak_tab = self.editor_panel.update(cx, |panel, cx| {
+        self.editor_panel.update(cx, |panel, cx| {
             panel.create_schema_graph_tab(
                 SchemaGraphParams {
                     context: action.context.clone(),
@@ -2517,80 +2517,6 @@ impl BlancoApp {
                 cx,
             )
         });
-
-        let db_service = database::DatabaseService::global(cx).clone();
-        let app_database = AppDatabase::global(cx).clone();
-        let connection_id = action.context.connection_id;
-        let database_name = action.context.database_name.clone();
-        let schema_name = action.context.schema_name.clone();
-
-        cx.spawn_in(window, async move |_, window| {
-            use database::DatabaseServiceTrait;
-            let connection_result = db_service
-                .get_or_create_connection_by_id(connection_id, Some(&database_name))
-                .await;
-            let virtual_keys = crate::virtual_keys::load(
-                &app_database,
-                connection_id,
-                &database_name,
-                schema_name.as_deref(),
-            )
-            .await;
-
-            match connection_result {
-                Ok(connection) => {
-                    let tables_result = connection
-                        .get_tables(schema_name.as_deref())
-                        .await
-                        .unwrap_or_default();
-
-                    let mut all_table_info = Vec::new();
-                    for table_name in &tables_result {
-                        let columns = connection
-                            .get_columns_for_table(table_name, schema_name.as_deref())
-                            .await
-                            .unwrap_or_default();
-
-                        all_table_info.push(blanco_core::connection_trait::TableSchemaInfo {
-                            name: table_name.clone(),
-                            schema: schema_name.clone().unwrap_or_default(),
-                            object_type: "table".to_string(),
-                            columns,
-                            column_count: 0,
-                            referenced_by: Vec::new(),
-                        });
-                    }
-
-                    window
-                        .update(|window, cx| {
-                            if let Some(tab) = weak_tab.upgrade() {
-                                tab.update(cx, |tab, cx| {
-                                    tab.update_with_schema(
-                                        all_table_info,
-                                        &virtual_keys,
-                                        window,
-                                        cx,
-                                    );
-                                });
-                            }
-                        })
-                        .log_err();
-                }
-                Err(e) => {
-                    window
-                        .update(|window, cx| {
-                            if let Some(tab) = weak_tab.upgrade() {
-                                tab.update(cx, |tab, cx| {
-                                    tab.set_error(format!("Failed to connect: {e}"), window, cx);
-                                });
-                            }
-                        })
-                        .log_err();
-                }
-            }
-        })
-        .detach();
-
         cx.notify();
     }
 

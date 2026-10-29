@@ -397,4 +397,168 @@ mod tests {
 
         Ok(())
     }
+
+    #[tokio::test]
+    async fn test_schema_wide_reads_match_per_table_reads() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let test_name = "test_schema_wide_reads_match_per_table_reads";
+        let connection =
+            crate::MysqlConnection::from_connection_string(&default_connection_string())?;
+        if let Err(e) = connection.ping().await {
+            return handle_unreachable(test_name, &e);
+        }
+
+        let drop_tables = "DROP TABLE IF EXISTS bulk_graph_my_line, bulk_graph_my_order, \
+                           bulk_graph_my_customer; \
+                           DROP DATABASE IF EXISTS bulk_graph_my_other";
+        connection.execute_script(drop_tables, None).await?;
+        let result = async {
+            connection
+                .execute_script(
+                    "CREATE TABLE bulk_graph_my_customer (
+                        id INT,
+                        region VARCHAR(10),
+                        name TEXT COMMENT 'Full name',
+                        PRIMARY KEY (id, region)
+                    ) COMMENT = 'People who order';
+                    CREATE DATABASE bulk_graph_my_other;
+                    CREATE TABLE bulk_graph_my_other.bulk_graph_my_remote (
+                        id INT PRIMARY KEY COMMENT 'Remote key',
+                        label TEXT
+                    ) COMMENT = 'Lives elsewhere';
+                    CREATE TABLE bulk_graph_my_order (
+                        id INT PRIMARY KEY,
+                        customer_id INT,
+                        customer_region VARCHAR(10),
+                        CONSTRAINT bulk_graph_my_order_customer
+                            FOREIGN KEY (customer_id, customer_region)
+                            REFERENCES bulk_graph_my_customer (id, region)
+                            ON DELETE CASCADE
+                    );
+                    CREATE TABLE bulk_graph_my_line (
+                        id INT PRIMARY KEY,
+                        order_id INT,
+                        note VARCHAR(20),
+                        CONSTRAINT bulk_graph_my_line_order
+                            FOREIGN KEY (order_id) REFERENCES bulk_graph_my_order (id)
+                            ON UPDATE SET NULL
+                    );",
+                    None,
+                )
+                .await?;
+
+            let mut tables = connection.get_tables(None).await?;
+            tables.sort();
+
+            let mut expected_keys = Vec::new();
+            let mut expected_columns = Vec::new();
+            let own_comments = connection.get_object_comments(None).await?.relations;
+            for table in &tables {
+                for key in connection.get_foreign_keys_for_table(table, None).await? {
+                    expected_keys.push(blanco_core::SchemaForeignKey {
+                        table: table.clone(),
+                        key,
+                    });
+                }
+                expected_columns.push(blanco_core::SchemaTableColumns {
+                    schema: None,
+                    table: table.clone(),
+                    comment: own_comments.get(table).cloned(),
+                    columns: connection
+                        .get_columns_for_table(table, None)
+                        .await?
+                        .into_iter()
+                        .map(blanco_core::SchemaColumn::from)
+                        .collect(),
+                });
+            }
+            let referenced = vec![
+                ("blanco".to_string(), "bulk_graph_my_order".to_string()),
+                ("blanco".to_string(), "bulk_graph_my_missing".to_string()),
+                ("blanco".to_string(), "bulk_graph_my_customer".to_string()),
+                (
+                    "bulk_graph_my_other".to_string(),
+                    "bulk_graph_my_remote".to_string(),
+                ),
+            ];
+            for (schema, table) in &referenced {
+                let columns = connection
+                    .get_columns_for_table(table, Some(schema))
+                    .await?;
+                if columns.is_empty() {
+                    continue;
+                }
+                let comments = connection
+                    .get_object_comments(Some(schema))
+                    .await?
+                    .relations;
+                expected_columns.push(blanco_core::SchemaTableColumns {
+                    schema: Some(schema.clone()),
+                    table: table.clone(),
+                    comment: comments.get(table).cloned(),
+                    columns: columns
+                        .into_iter()
+                        .map(blanco_core::SchemaColumn::from)
+                        .collect(),
+                });
+            }
+
+            let keys = connection.schema_foreign_keys(None).await?;
+            assert_eq!(keys, expected_keys);
+            let ours: Vec<_> = keys
+                .iter()
+                .filter(|key| key.table.starts_with("bulk_graph_my_"))
+                .collect();
+            assert_eq!(ours.len(), 2);
+            assert_eq!(ours[0].table, "bulk_graph_my_line");
+            assert_eq!(ours[1].key.columns, vec!["customer_id", "customer_region"]);
+            assert_eq!(ours[1].key.referenced_columns, vec!["id", "region"]);
+            assert_eq!(ours[1].key.on_delete, "CASCADE");
+
+            let columns = connection.schema_columns(None, &referenced).await?;
+            assert_eq!(columns, expected_columns);
+            let customer = columns
+                .iter()
+                .find(|table| table.schema.is_none() && table.table == "bulk_graph_my_customer")
+                .ok_or("customer table missing")?;
+            let primary_keys: Vec<_> = customer
+                .columns
+                .iter()
+                .filter(|column| column.is_primary_key)
+                .map(|column| column.name.as_str())
+                .collect();
+            assert_eq!(primary_keys, vec!["id", "region"]);
+            assert_eq!(customer.comment.as_deref(), Some("People who order"));
+            let customer_comments: Vec<_> = customer
+                .columns
+                .iter()
+                .map(|column| column.comment.as_deref())
+                .collect();
+            assert_eq!(customer_comments, vec![None, None, Some("Full name")]);
+            assert_eq!(
+                columns
+                    .iter()
+                    .filter(|table| table.schema.is_some())
+                    .count(),
+                3
+            );
+            let remote = columns
+                .iter()
+                .find(|table| table.table == "bulk_graph_my_remote")
+                .ok_or("remote table missing")?;
+            assert_eq!(remote.schema.as_deref(), Some("bulk_graph_my_other"));
+            assert_eq!(remote.comment.as_deref(), Some("Lives elsewhere"));
+            assert_eq!(
+                remote
+                    .columns
+                    .first()
+                    .and_then(|column| column.comment.as_deref()),
+                Some("Remote key")
+            );
+            Ok::<(), Box<dyn std::error::Error>>(())
+        }
+        .await;
+        connection.execute_script(drop_tables, None).await?;
+        result
+    }
 }

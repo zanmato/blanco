@@ -329,6 +329,89 @@ impl Connection for ClickhouseConnection {
             .collect())
     }
 
+    async fn schema_foreign_keys(
+        &self,
+        _schema: Option<&str>,
+    ) -> Result<Vec<blanco_core::SchemaForeignKey>> {
+        // ClickHouse has no foreign keys.
+        Ok(Vec::new())
+    }
+
+    async fn schema_columns(
+        &self,
+        schema: Option<&str>,
+        referenced: &[(String, String)],
+    ) -> Result<Vec<blanco_core::SchemaTableColumns>> {
+        let database = schema.unwrap_or(&self.database);
+        let mut parameters = vec![("database".to_string(), database.to_string())];
+        let mut referenced_rows = String::new();
+        let mut databases = String::from("{database:String}");
+        // Each referenced table is numbered so the result keeps the order
+        // asked for, after the database's own tables at 0.
+        for (index, (referenced_schema, table)) in referenced.iter().enumerate() {
+            let position = index + 1;
+            referenced_rows.push_str(&format!(
+                " UNION ALL SELECT {position}, {{schema_{position}:String}}, \
+                 {{schema_{position}:String}}, {{table_{position}:String}}"
+            ));
+            databases.push_str(&format!(", {{schema_{position}:String}}"));
+            parameters.push((format!("schema_{position}"), referenced_schema.clone()));
+            parameters.push((format!("table_{position}"), table.clone()));
+        }
+        let sql = format!(
+            "SELECT w.table_position, w.schema_name, c.table, c.name, c.type, c.is_in_primary_key, \
+                    t.comment, c.comment \
+             FROM system.columns AS c \
+             INNER JOIN ( \
+                 SELECT 0 AS table_position, CAST(NULL, 'Nullable(String)') AS schema_name, \
+                        {{database:String}} AS database_name, name AS table_name \
+                 FROM system.tables \
+                 WHERE database = {{database:String}} AND engine NOT IN ('View', 'MaterializedView')\
+                 {referenced_rows} \
+             ) AS w ON c.database = w.database_name AND c.table = w.table_name \
+             LEFT JOIN ( \
+                 SELECT database, name, comment FROM system.tables \
+                 WHERE database IN ({databases}) \
+             ) AS t ON t.database = c.database AND t.name = c.table \
+             WHERE c.database IN ({databases}) \
+             ORDER BY w.table_position, c.table, c.position"
+        );
+        let tsv = self
+            .raw_query_tsv_with_parameters(&sql, &parameters)
+            .await?;
+
+        let mut tables: Vec<(String, blanco_core::SchemaTableColumns)> = Vec::new();
+        for row in tsv.rows {
+            let get = |index: usize| row.get(index).cloned().flatten();
+            let (Some(position), Some(table), Some(name)) = (get(0), get(2), get(3)) else {
+                continue;
+            };
+            let column = blanco_core::SchemaColumn {
+                name,
+                data_type: get(4).unwrap_or_default(),
+                is_primary_key: get(5).as_deref() == Some("1"),
+                comment: get(7).filter(|comment| !comment.is_empty()),
+            };
+            match tables.last_mut() {
+                Some((last_position, last))
+                    if *last_position == position && last.table == table =>
+                {
+                    last.columns.push(column);
+                }
+                _ => tables.push((
+                    position,
+                    blanco_core::SchemaTableColumns {
+                        schema: get(1),
+                        table,
+                        comment: get(6).filter(|comment| !comment.is_empty()),
+                        columns: vec![column],
+                    },
+                )),
+            }
+        }
+        Ok(tables.into_iter().map(|(_, table)| table).collect())
+    }
+
     async fn get_indexes_for_table(
         &self,
         table_name: &str,

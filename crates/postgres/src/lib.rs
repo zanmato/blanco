@@ -1069,4 +1069,205 @@ mod tests {
         recreated?;
         Ok(())
     }
+
+    /// The schema graph's bulk reads must list what the per-table reads do,
+    /// on PostgreSQL and on CockroachDB, which this driver also serves.
+    #[tokio::test]
+    async fn test_schema_graph_bulk_reads_match_per_table_reads()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let servers = [
+            (
+                blanco_core::DatabaseType::PostgreSQL,
+                default_connection_string(),
+            ),
+            (
+                blanco_core::DatabaseType::CockroachDb,
+                env::var("COCKROACH_CONNECTION_STRING").unwrap_or_else(|_| {
+                    "postgres://blanco:blanco@localhost:26258/blanco?sslmode=require".to_string()
+                }),
+            ),
+        ];
+        for (database_type, connection_string) in servers {
+            let mut conn = crate::PostgresConnection::from_connection_string(&connection_string)?
+                .with_database_type(database_type);
+            conn.connect(&connection_string).await?;
+            if let Err(e) = conn.ping().await {
+                handle_unreachable(
+                    &format!(
+                        "test_schema_graph_bulk_reads_match_per_table_reads ({database_type:?})"
+                    ),
+                    &e,
+                )?;
+                continue;
+            }
+            let suffix = format!(
+                "{}_{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)?
+                    .as_millis()
+            );
+            let own_schema = format!("bulk_graph_pg_{suffix}_own");
+            let other_schema = format!("bulk_graph_pg_{suffix}_other");
+            let result = compare_schema_graph_reads(&conn, &own_schema, &other_schema).await;
+            for schema in [&own_schema, &other_schema] {
+                conn.execute_query(
+                    &format!("DROP SCHEMA IF EXISTS \"{schema}\" CASCADE"),
+                    Some("blanco"),
+                    None,
+                )
+                .await?;
+            }
+            result.map_err(|e| format!("{database_type:?}: {e:#}"))?;
+        }
+        Ok(())
+    }
+
+    async fn compare_schema_graph_reads(
+        conn: &crate::PostgresConnection,
+        own_schema: &str,
+        other_schema: &str,
+    ) -> anyhow::Result<()> {
+        let statements = [
+            format!("CREATE SCHEMA \"{own_schema}\""),
+            format!("CREATE SCHEMA \"{other_schema}\""),
+            format!(
+                "CREATE TABLE \"{other_schema}\".regions (
+                    country TEXT, code TEXT, name TEXT, PRIMARY KEY (country, code))"
+            ),
+            format!(
+                "CREATE TABLE \"{other_schema}\".products (id INTEGER PRIMARY KEY, label TEXT)"
+            ),
+            format!("CREATE TABLE \"{own_schema}\".customers (id INTEGER PRIMARY KEY, name TEXT)"),
+            format!(
+                "CREATE TABLE \"{own_schema}\".orders (
+                    id BIGINT PRIMARY KEY,
+                    customer_id INTEGER,
+                    region_code TEXT,
+                    region_country TEXT,
+                    placed_at TIMESTAMPTZ,
+                    CONSTRAINT same_name FOREIGN KEY (customer_id)
+                        REFERENCES \"{own_schema}\".customers (id) ON DELETE CASCADE,
+                    CONSTRAINT orders_region FOREIGN KEY (region_country, region_code)
+                        REFERENCES \"{other_schema}\".regions (country, code)
+                        ON UPDATE SET NULL)"
+            ),
+            format!(
+                "CREATE TABLE \"{own_schema}\".\"Order Lines\" (
+                    order_id BIGINT,
+                    line_no INTEGER,
+                    product_id INTEGER,
+                    quantity NUMERIC(10, 2),
+                    PRIMARY KEY (order_id, line_no),
+                    CONSTRAINT same_name FOREIGN KEY (order_id)
+                        REFERENCES \"{own_schema}\".orders (id),
+                    CONSTRAINT lines_product FOREIGN KEY (product_id)
+                        REFERENCES \"{other_schema}\".products (id) ON DELETE RESTRICT)"
+            ),
+            format!("CREATE TABLE \"{own_schema}\".notes (body TEXT)"),
+            format!(
+                "CREATE VIEW \"{own_schema}\".order_view AS SELECT id FROM \"{own_schema}\".orders"
+            ),
+            format!("COMMENT ON TABLE \"{own_schema}\".orders IS 'One per checkout'"),
+            format!("COMMENT ON COLUMN \"{own_schema}\".orders.placed_at IS 'When it was paid'"),
+            format!("COMMENT ON TABLE \"{other_schema}\".regions IS 'Sales regions'"),
+            format!("COMMENT ON COLUMN \"{other_schema}\".regions.code IS 'ISO code'"),
+        ];
+        for statement in &statements {
+            conn.execute_query(statement, Some("blanco"), None).await?;
+        }
+
+        let schema = Some(own_schema);
+        let tables = conn.get_tables(schema).await?;
+        assert_eq!(tables, ["Order Lines", "customers", "notes", "orders"]);
+
+        let mut expected_keys = Vec::new();
+        for table in &tables {
+            for key in conn.get_foreign_keys_for_table(table, schema).await? {
+                expected_keys.push(blanco_core::SchemaForeignKey {
+                    table: table.clone(),
+                    key,
+                });
+            }
+        }
+        let keys = conn.schema_foreign_keys(schema).await?;
+        assert_eq!(keys, expected_keys);
+        assert_eq!(keys.len(), 4);
+        let composite = keys
+            .iter()
+            .find(|key| key.key.name == "orders_region")
+            .ok_or_else(|| anyhow::anyhow!("orders_region missing from {keys:?}"))?;
+        assert_eq!(composite.key.columns, ["region_country", "region_code"]);
+        assert_eq!(composite.key.referenced_columns, ["country", "code"]);
+        assert_eq!(
+            composite.key.referenced_schema.as_deref(),
+            Some(other_schema)
+        );
+
+        let referenced = [
+            (other_schema.to_string(), "regions".to_string()),
+            (other_schema.to_string(), "missing".to_string()),
+            (other_schema.to_string(), "products".to_string()),
+        ];
+        let own_comments = conn.get_object_comments(schema).await?.relations;
+        let other_comments = conn
+            .get_object_comments(Some(other_schema))
+            .await?
+            .relations;
+        let mut expected_columns = Vec::new();
+        for table in &tables {
+            expected_columns.push(blanco_core::SchemaTableColumns {
+                schema: None,
+                table: table.clone(),
+                comment: own_comments.get(table).cloned(),
+                columns: conn
+                    .get_columns_for_table(table, schema)
+                    .await?
+                    .into_iter()
+                    .map(blanco_core::SchemaColumn::from)
+                    .collect(),
+            });
+        }
+        let other_tables = conn.get_tables(Some(other_schema)).await?;
+        for (table_schema, table) in &referenced {
+            if !other_tables.contains(table) {
+                continue;
+            }
+            expected_columns.push(blanco_core::SchemaTableColumns {
+                schema: Some(table_schema.clone()),
+                table: table.clone(),
+                comment: other_comments.get(table).cloned(),
+                columns: conn
+                    .get_columns_for_table(table, Some(table_schema))
+                    .await?
+                    .into_iter()
+                    .map(blanco_core::SchemaColumn::from)
+                    .collect(),
+            });
+        }
+        let columns = conn.schema_columns(schema, &referenced).await?;
+        assert_eq!(columns, expected_columns);
+        assert_eq!(columns.len(), 6);
+        let comment_of = |table: &str, column: &str| {
+            columns
+                .iter()
+                .find(|entry| entry.table == table)
+                .and_then(|entry| entry.columns.iter().find(|entry| entry.name == column))
+                .and_then(|entry| entry.comment.clone())
+        };
+        assert_eq!(
+            comment_of("orders", "placed_at").as_deref(),
+            Some("When it was paid")
+        );
+        assert_eq!(comment_of("regions", "code").as_deref(), Some("ISO code"));
+        let table_comment = |table: &str| {
+            columns
+                .iter()
+                .find(|entry| entry.table == table)
+                .and_then(|entry| entry.comment.clone())
+        };
+        assert_eq!(table_comment("orders").as_deref(), Some("One per checkout"));
+        assert_eq!(table_comment("regions").as_deref(), Some("Sales regions"));
+        Ok(())
+    }
 }

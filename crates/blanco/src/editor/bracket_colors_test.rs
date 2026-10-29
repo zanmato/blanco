@@ -73,12 +73,14 @@ async fn only_the_statement_under_the_cursor_is_colored(cx: &mut TestAppContext)
     assert_eq!(colored(&harness, &cx), first_pair);
 
     // Moving the cursor alone moves the colors to the other statement.
-    harness.editor_panel.update_in(&mut cx, |panel, window, cx| {
-        let tab = panel.active_query_tab().expect("query tab");
-        tab.editor.update(cx, |state, cx| {
-            state.set_selected_range(script.len()..script.len(), window, cx)
+    harness
+        .editor_panel
+        .update_in(&mut cx, |panel, window, cx| {
+            let tab = panel.active_query_tab().expect("query tab");
+            tab.editor.update(cx, |state, cx| {
+                state.set_selected_range(script.len()..script.len(), window, cx)
+            });
         });
-    });
     settle(&mut cx);
     let second_pair: Vec<_> = [54, 55].map(|offset| offset..offset + 1).into();
     assert_eq!(colored(&harness, &cx), second_pair);

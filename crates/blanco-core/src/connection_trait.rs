@@ -385,6 +385,45 @@ impl ForeignKeyInfo {
     }
 }
 
+/// A foreign key with the table it is declared on.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct SchemaForeignKey {
+    pub table: String,
+    pub key: ForeignKeyConstraint,
+}
+
+/// A table's columns as the schema graph draws them.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct SchemaTableColumns {
+    /// `None` for a table of the schema asked for, else the schema of a
+    /// referenced table.
+    pub schema: Option<String>,
+    pub table: String,
+    /// The comment stored on the table, if any.
+    pub comment: Option<String>,
+    pub columns: Vec<SchemaColumn>,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct SchemaColumn {
+    pub name: String,
+    pub data_type: String,
+    pub is_primary_key: bool,
+    /// The comment stored on the column, if any.
+    pub comment: Option<String>,
+}
+
+impl From<ColumnInfo> for SchemaColumn {
+    fn from(column: ColumnInfo) -> Self {
+        Self {
+            name: column.name,
+            data_type: column.data_type,
+            is_primary_key: column.is_primary_key,
+            comment: column.comment.filter(|comment| !comment.is_empty()),
+        }
+    }
+}
+
 /// Information about an inbound foreign key (a row in another table that references this one)
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct InboundForeignKey {
@@ -1004,6 +1043,76 @@ pub trait Connection: Send + Sync {
         _schema: Option<&str>,
     ) -> Result<Vec<ForeignKeyConstraint>, anyhow::Error> {
         Ok(Vec::new())
+    }
+
+    /// The foreign keys declared on every table of `schema`, with the table
+    /// each is declared on, for the schema graph. Drivers read them in one
+    /// query: the default asks table by table.
+    async fn schema_foreign_keys(
+        &self,
+        schema: Option<&str>,
+    ) -> Result<Vec<SchemaForeignKey>, anyhow::Error> {
+        let mut keys = Vec::new();
+        for table in self.get_tables(schema).await? {
+            for key in self.get_foreign_keys_for_table(&table, schema).await? {
+                keys.push(SchemaForeignKey {
+                    table: table.clone(),
+                    key,
+                });
+            }
+        }
+        Ok(keys)
+    }
+
+    /// The columns of every table of `schema`, and of the `referenced`
+    /// tables, `(schema, table)` pairs of other schemas, for the schema
+    /// graph, with the comments stored on the tables and columns. Tables
+    /// come in order of their names, the schema's own first, and columns in
+    /// their table's order. A referenced table that does not
+    /// exist is left out. Drivers read them in one query: the default asks
+    /// table by table.
+    async fn schema_columns(
+        &self,
+        schema: Option<&str>,
+        referenced: &[(String, String)],
+    ) -> Result<Vec<SchemaTableColumns>, anyhow::Error> {
+        let mut tables = Vec::new();
+        let own = self.get_tables(schema).await?;
+        let mut comments = std::collections::HashMap::new();
+        comments.insert(None, self.get_object_comments(schema).await?.relations);
+        let wanted = own.into_iter().map(|table| (None, table)).chain(
+            referenced
+                .iter()
+                .map(|(schema, table)| (Some(schema.clone()), table.clone())),
+        );
+        for (table_schema, table) in wanted {
+            let columns = self
+                .get_columns_for_table(&table, table_schema.as_deref().or(schema))
+                .await?;
+            // A referenced table without columns does not exist, as the
+            // drivers' single query leaves it out too.
+            if table_schema.is_some() && columns.is_empty() {
+                continue;
+            }
+            if !comments.contains_key(&table_schema) {
+                let schema_comments = self
+                    .get_object_comments(table_schema.as_deref())
+                    .await?
+                    .relations;
+                comments.insert(table_schema.clone(), schema_comments);
+            }
+            let comment = comments
+                .get(&table_schema)
+                .and_then(|schema_comments| schema_comments.get(&table))
+                .cloned();
+            tables.push(SchemaTableColumns {
+                schema: table_schema,
+                table,
+                comment,
+                columns: columns.into_iter().map(SchemaColumn::from).collect(),
+            });
+        }
+        Ok(tables)
     }
 
     /// Extract the primary table name from a SQL query

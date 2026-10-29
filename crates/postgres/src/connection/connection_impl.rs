@@ -2,7 +2,8 @@ use anyhow::{Context as _, Result};
 use async_trait::async_trait;
 use blanco_core::{
     ColumnInfo, ColumnType, Connection, ForeignKeyConstraint, ForeignKeyInfo,
-    FunctionSignatureInfo, IndexInfo, ObjectKind, QueryResult, TableParent,
+    FunctionSignatureInfo, IndexInfo, ObjectKind, QueryResult, SchemaColumn, SchemaForeignKey,
+    SchemaTableColumns, TableParent,
 };
 use futures::{Stream, StreamExt};
 use sqlx::{Column, Executor, Row, TypeInfo};
@@ -1358,6 +1359,185 @@ impl Connection for PostgresConnection {
         Ok(ForeignKeyConstraint::from_column_rows(&result.rows))
     }
 
+    async fn schema_foreign_keys(
+        &self,
+        schema: Option<&str>,
+    ) -> Result<Vec<SchemaForeignKey>, anyhow::Error> {
+        let schema_name = schema.unwrap_or("public");
+        // The tables come from information_schema.tables, as in `get_tables`,
+        // which leaves out tables the user holds no privilege on.
+        let query = "
+            SELECT
+                it.table_name,
+                c.conname,
+                rn.nspname,
+                rt.relname,
+                a.attname,
+                ra.attname,
+                CASE c.confupdtype WHEN 'r' THEN 'RESTRICT' WHEN 'c' THEN 'CASCADE'
+                    WHEN 'n' THEN 'SET NULL' WHEN 'd' THEN 'SET DEFAULT' ELSE 'NO ACTION' END,
+                CASE c.confdeltype WHEN 'r' THEN 'RESTRICT' WHEN 'c' THEN 'CASCADE'
+                    WHEN 'n' THEN 'SET NULL' WHEN 'd' THEN 'SET DEFAULT' ELSE 'NO ACTION' END
+            FROM information_schema.tables it
+            JOIN pg_namespace n ON n.nspname = it.table_schema
+            JOIN pg_class t ON t.relnamespace = n.oid AND t.relname = it.table_name
+            JOIN pg_constraint c ON c.conrelid = t.oid AND c.contype = 'f'
+            JOIN pg_class rt ON rt.oid = c.confrelid
+            JOIN pg_namespace rn ON rn.oid = rt.relnamespace
+            CROSS JOIN LATERAL unnest(c.conkey, c.confkey) WITH ORDINALITY AS k(attnum, refnum, ord)
+            JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum
+            JOIN pg_attribute ra ON ra.attrelid = c.confrelid AND ra.attnum = k.refnum
+            WHERE it.table_schema = $1 AND it.table_type = 'BASE TABLE'
+            ORDER BY it.table_name, c.conname, k.ord
+        ";
+        let result = self
+            .execute_query(
+                query,
+                self.initial_database.as_deref(),
+                Some(&[schema_name.to_string()]),
+            )
+            .await?;
+
+        // Constraint names are unique per table only, so the rows are folded
+        // table by table: two tables' keys of one name may be adjacent.
+        let mut keys = Vec::new();
+        let mut rows = result.rows.into_iter().peekable();
+        while let Some(first) = rows.next() {
+            let mut first = first.into_iter();
+            let Some(table) = first.next().flatten() else {
+                continue;
+            };
+            let mut key_rows = vec![first.collect::<Vec<_>>()];
+            while let Some(next) =
+                rows.next_if(|row| row.first().and_then(Option::as_deref) == Some(table.as_str()))
+            {
+                key_rows.push(next.into_iter().skip(1).collect());
+            }
+            keys.extend(
+                ForeignKeyConstraint::from_column_rows(&key_rows)
+                    .into_iter()
+                    .map(|key| SchemaForeignKey {
+                        table: table.clone(),
+                        key,
+                    }),
+            );
+        }
+        Ok(keys)
+    }
+
+    async fn schema_columns(
+        &self,
+        schema: Option<&str>,
+        referenced: &[(String, String)],
+    ) -> Result<Vec<SchemaTableColumns>, anyhow::Error> {
+        let schema_name = schema.unwrap_or("public");
+        let (referenced_schemas, referenced_tables): (Vec<String>, Vec<String>) =
+            referenced.iter().cloned().unzip();
+        // The schema's own tables come first in order of name, then the
+        // referenced ones in the order given. A table without columns still
+        // gets a row from the left join, so it is listed like the per-table
+        // reads list it.
+        let query = "
+            WITH wanted AS (
+                SELECT
+                    0 AS part,
+                    row_number() OVER (ORDER BY t.table_name) AS position,
+                    NULL::text AS referenced_schema,
+                    t.table_schema::text AS table_schema,
+                    t.table_name::text AS table_name
+                FROM information_schema.tables t
+                WHERE t.table_schema = $1 AND t.table_type = 'BASE TABLE'
+                UNION ALL
+                SELECT 1, r.ord, r.schema_name, r.schema_name, r.table_name
+                FROM unnest($2::text[], $3::text[]) WITH ORDINALITY AS r(schema_name, table_name, ord)
+                WHERE EXISTS (
+                    SELECT 1
+                    FROM information_schema.tables t
+                    WHERE t.table_schema = r.schema_name AND t.table_name = r.table_name
+                )
+            )
+            SELECT
+                w.part,
+                w.position,
+                w.referenced_schema,
+                w.table_name,
+                c.column_name,
+                c.data_type,
+                CASE WHEN EXISTS (
+                    SELECT 1
+                    FROM pg_index i
+                    JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+                    WHERE i.indrelid = r.relation
+                    AND i.indisprimary
+                    AND a.attname = c.column_name
+                ) THEN 'YES' END AS is_primary_key,
+                (
+                    SELECT d.description
+                    FROM pg_description d
+                    WHERE d.classoid = 'pg_class'::regclass
+                    AND d.objoid = r.relation
+                    AND d.objsubid = 0
+                ) AS table_comment,
+                (
+                    SELECT d.description
+                    FROM pg_description d
+                    JOIN pg_attribute a
+                        ON a.attrelid = d.objoid AND a.attnum = d.objsubid
+                    WHERE d.classoid = 'pg_class'::regclass
+                    AND d.objoid = r.relation
+                    AND a.attname = c.column_name
+                ) AS column_comment
+            FROM wanted w
+            CROSS JOIN LATERAL (
+                SELECT to_regclass(
+                    quote_ident(w.table_schema) || '.' || quote_ident(w.table_name)
+                ) AS relation
+            ) r
+            LEFT JOIN information_schema.columns c
+                ON c.table_schema = w.table_schema AND c.table_name = w.table_name
+            ORDER BY w.part, w.position, c.ordinal_position
+        ";
+        let result = self
+            .execute_query_with_typed_params(
+                query,
+                &[
+                    QueryParam::String(schema_name.to_string()),
+                    QueryParam::StringArray(referenced_schemas),
+                    QueryParam::StringArray(referenced_tables),
+                ],
+            )
+            .await?;
+
+        let mut tables: Vec<SchemaTableColumns> = Vec::new();
+        let mut current_table: Option<(String, String)> = None;
+        for row in result.rows {
+            let get = |index: usize| row.get(index).cloned().flatten();
+            let (Some(part), Some(position), Some(table)) = (get(0), get(1), get(3)) else {
+                continue;
+            };
+            let table_key = (part, position);
+            if current_table.as_ref() != Some(&table_key) {
+                tables.push(SchemaTableColumns {
+                    schema: get(2),
+                    table,
+                    comment: get(7).filter(|comment| !comment.is_empty()),
+                    columns: Vec::new(),
+                });
+                current_table = Some(table_key);
+            }
+            let (Some(name), Some(table_entry)) = (get(4), tables.last_mut()) else {
+                continue;
+            };
+            table_entry.columns.push(SchemaColumn {
+                name,
+                data_type: get(5).unwrap_or_default(),
+                is_primary_key: get(6).is_some(),
+                comment: get(8).filter(|comment| !comment.is_empty()),
+            });
+        }
+        Ok(tables)
+    }
+
     async fn get_indexes_for_table(
         &self,
         table_name: &str,
@@ -1532,6 +1712,30 @@ fn privilege_statements_from_rows(rows: Vec<Vec<Option<String>>>, object: &str) 
 }
 
 impl PostgresConnection {
+    /// `execute_query` for parameters other than text, such as arrays.
+    async fn execute_query_with_typed_params(
+        &self,
+        query: &str,
+        parameters: &[QueryParam],
+    ) -> Result<QueryResult> {
+        let database_name = self
+            .initial_database
+            .as_deref()
+            .ok_or(anyhow::anyhow!("missing database"))?;
+        let pool = self
+            .get_or_create_pool(database_name)
+            .await
+            .with_context(|| {
+                format!("Failed to get connection pool for database '{database_name}'")
+            })?;
+        self.execute_query_with_params(&pool, query, parameters)
+            .await
+            .map_err(|e| {
+                blanco_core::tag_sqlx_error(e)
+                    .context(format!("{} query execution failed", self.backend_name()))
+            })
+    }
+
     /// CockroachDB lists the admin and root roles in every ACL, as they
     /// always hold every privilege.
     fn implicit_grantees_filter(&self) -> &'static str {

@@ -604,6 +604,13 @@ impl Dialect {
         }
     }
 
+    /// Whether a database plays the part of a schema, so its tables are
+    /// told apart from another database's by the database name and foreign
+    /// keys may reach into other databases (MySQL's `shop.orders`).
+    pub fn databases_are_schemas(&self) -> bool {
+        matches!(self.0, DatabaseType::MySQL)
+    }
+
     /// Whether `schema` holds the server's own catalog rather than user
     /// objects, such as PostgreSQL's `pg_catalog`.
     pub fn is_system_schema(&self, schema: &str) -> bool {

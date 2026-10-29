@@ -577,13 +577,17 @@ impl Connection for MysqlConnection {
 
     async fn get_object_comments(
         &self,
-        _schema: Option<&str>,
+        schema: Option<&str>,
     ) -> Result<blanco_core::ObjectComments, anyhow::Error> {
-        let database = self
+        let initial_database = self
             .initial_database
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("No database specified"))?;
-        let pool = self.get_or_create_pool(database).await?;
+        let pool = self.get_or_create_pool(initial_database).await?;
+        // A MySQL schema is a database, as in `get_columns_for_table`.
+        let database = schema
+            .filter(|schema| !schema.is_empty())
+            .unwrap_or(initial_database);
         // A view's TABLE_COMMENT is the word VIEW, not a comment.
         let rows = sqlx::query(
             "SELECT 'r', TABLE_NAME, TABLE_COMMENT
@@ -1155,24 +1159,187 @@ impl Connection for MysqlConnection {
             .bind(table_name)
             .fetch_all(&pool)
             .await?;
-        // information_schema columns come back as VARCHAR or VARBINARY
-        // depending on the server version, so read both.
-        let text = |row: &sqlx::mysql::MySqlRow, i: usize| -> Option<String> {
-            row.try_get::<Option<String>, _>(i)
-                .ok()
-                .flatten()
-                .or_else(|| {
-                    row.try_get::<Option<Vec<u8>>, _>(i)
-                        .ok()
-                        .flatten()
-                        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
-                })
-        };
         let rows: Vec<Vec<Option<String>>> = rows
             .iter()
-            .map(|row| (0..7).map(|i| text(row, i)).collect())
+            .map(|row| (0..7).map(|i| catalog_text(row, i)).collect())
             .collect();
         Ok(blanco_core::ForeignKeyConstraint::from_column_rows(&rows))
+    }
+
+    async fn schema_foreign_keys(
+        &self,
+        _schema: Option<&str>,
+    ) -> Result<Vec<blanco_core::SchemaForeignKey>, anyhow::Error> {
+        let database = self
+            .initial_database
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No database specified"))?;
+        let pool = self.get_or_create_pool(database).await?;
+        let query = "
+            SELECT
+                k.TABLE_NAME,
+                k.CONSTRAINT_NAME,
+                k.REFERENCED_TABLE_SCHEMA,
+                k.REFERENCED_TABLE_NAME,
+                k.COLUMN_NAME,
+                k.REFERENCED_COLUMN_NAME,
+                r.UPDATE_RULE,
+                r.DELETE_RULE
+            FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE k
+            JOIN INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS r
+                ON r.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA
+                AND r.CONSTRAINT_NAME = k.CONSTRAINT_NAME
+                AND r.TABLE_NAME = k.TABLE_NAME
+            WHERE k.TABLE_SCHEMA = ?
+                AND k.REFERENCED_TABLE_NAME IS NOT NULL
+            ORDER BY k.TABLE_NAME, k.CONSTRAINT_NAME, k.ORDINAL_POSITION
+        ";
+        let rows = sqlx::query(query).bind(database).fetch_all(&pool).await?;
+
+        let mut keys = Vec::new();
+        let mut table_rows: Vec<Vec<Option<String>>> = Vec::new();
+        let mut current_table: Option<String> = None;
+        let mut flush = |table: Option<String>, table_rows: &mut Vec<Vec<Option<String>>>| {
+            if let Some(table) = table {
+                for key in blanco_core::ForeignKeyConstraint::from_column_rows(table_rows) {
+                    keys.push(blanco_core::SchemaForeignKey {
+                        table: table.clone(),
+                        key,
+                    });
+                }
+            }
+            table_rows.clear();
+        };
+        for row in &rows {
+            let Some(table) = catalog_text(row, 0) else {
+                continue;
+            };
+            if current_table.as_ref() != Some(&table) {
+                flush(current_table.replace(table), &mut table_rows);
+            }
+            table_rows.push((1..8).map(|i| catalog_text(row, i)).collect());
+        }
+        flush(current_table, &mut table_rows);
+        Ok(keys)
+    }
+
+    async fn schema_columns(
+        &self,
+        schema: Option<&str>,
+        referenced: &[(String, String)],
+    ) -> Result<Vec<blanco_core::SchemaTableColumns>, anyhow::Error> {
+        let database = self
+            .initial_database
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No database specified"))?;
+        let pool = self.get_or_create_pool(database).await?;
+        // The tables are the initial database's, as `get_tables` lists them,
+        // and their columns are read where `get_columns_for_table` reads them.
+        let column_schema = schema.unwrap_or(database);
+
+        // Position 0 is the database's own tables, kept even without columns
+        // as the per table read would keep them. A referenced table keeps its
+        // place in `referenced` and is left out when it does not exist.
+        let mut wanted = String::from(
+            "SELECT 0 AS position, NULL AS referenced_schema, t.TABLE_NAME AS table_name,
+                    ? AS column_schema
+             FROM INFORMATION_SCHEMA.TABLES t
+             WHERE t.TABLE_SCHEMA = ?",
+        );
+        for _ in referenced {
+            wanted.push_str("\n             UNION ALL SELECT ?, ?, ?, ?");
+        }
+        let mut column_filter = String::from("TABLE_SCHEMA = ?");
+        for _ in referenced {
+            column_filter.push_str(" OR (TABLE_SCHEMA = ? AND TABLE_NAME = ?)");
+        }
+        let query = format!(
+            "SELECT
+                wanted.position,
+                wanted.referenced_schema,
+                wanted.table_name,
+                c.COLUMN_NAME,
+                c.DATA_TYPE,
+                c.COLUMN_KEY = 'PRI' AS is_primary_key,
+                t.comment AS table_comment,
+                NULLIF(c.COLUMN_COMMENT, '') AS column_comment
+            FROM ({wanted}) wanted
+            LEFT JOIN (
+                SELECT TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, DATA_TYPE, COLUMN_KEY,
+                    COLUMN_COMMENT, ORDINAL_POSITION
+                FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE {column_filter}
+            ) c
+                ON c.TABLE_SCHEMA = wanted.column_schema
+                AND c.TABLE_NAME = wanted.table_name
+            -- A view's TABLE_COMMENT is the word VIEW, not a comment.
+            LEFT JOIN (
+                SELECT TABLE_SCHEMA, TABLE_NAME,
+                    CASE WHEN TABLE_TYPE = 'VIEW' THEN NULL
+                        ELSE NULLIF(TABLE_COMMENT, '') END AS comment
+                FROM INFORMATION_SCHEMA.TABLES
+                WHERE {column_filter}
+            ) t
+                ON t.TABLE_SCHEMA = wanted.column_schema
+                AND t.TABLE_NAME = wanted.table_name
+            WHERE wanted.position = 0 OR c.COLUMN_NAME IS NOT NULL
+            ORDER BY wanted.position, wanted.table_name, c.ORDINAL_POSITION"
+        );
+
+        let mut statement = sqlx::query(&query).bind(column_schema).bind(database);
+        for (position, (referenced_schema, table)) in (1i64..).zip(referenced) {
+            statement = statement
+                .bind(position)
+                .bind(referenced_schema)
+                .bind(table)
+                .bind(referenced_schema);
+        }
+        // The column and table comment filters take the same values.
+        for _ in 0..2 {
+            statement = statement.bind(column_schema);
+            for (referenced_schema, table) in referenced {
+                statement = statement.bind(referenced_schema).bind(table);
+            }
+        }
+        let rows = statement.fetch_all(&pool).await?;
+
+        let mut tables: Vec<blanco_core::SchemaTableColumns> = Vec::new();
+        let mut current: Option<(i64, String)> = None;
+        for row in &rows {
+            let position: i64 = row.try_get(0)?;
+            let Some(table) = catalog_text(row, 2) else {
+                continue;
+            };
+            let identity = (position, table.clone());
+            if current.as_ref() != Some(&identity) {
+                tables.push(blanco_core::SchemaTableColumns {
+                    schema: catalog_text(row, 1).filter(|_| position > 0),
+                    table,
+                    comment: catalog_text(row, 6),
+                    columns: Vec::new(),
+                });
+                current = Some(identity);
+            }
+            let (Some(name), Some(data_type), Some(table_columns)) = (
+                catalog_text(row, 3),
+                catalog_text(row, 4),
+                tables.last_mut(),
+            ) else {
+                continue;
+            };
+            let is_primary_key = row
+                .try_get::<Option<bool>, _>(5)
+                .ok()
+                .flatten()
+                .unwrap_or(false);
+            table_columns.columns.push(blanco_core::SchemaColumn {
+                name,
+                data_type,
+                is_primary_key,
+                comment: catalog_text(row, 7),
+            });
+        }
+        Ok(tables)
     }
 
     async fn get_indexes_for_table(
@@ -1235,6 +1402,20 @@ impl Connection for MysqlConnection {
         tracing::debug!("Found {} indexes for table: {}", indexes.len(), table_name);
         Ok(indexes)
     }
+}
+
+/// information_schema columns come back as VARCHAR or VARBINARY depending on
+/// the server version, so read both.
+fn catalog_text(row: &sqlx::mysql::MySqlRow, index: usize) -> Option<String> {
+    row.try_get::<Option<String>, _>(index)
+        .ok()
+        .flatten()
+        .or_else(|| {
+            row.try_get::<Option<Vec<u8>>, _>(index)
+                .ok()
+                .flatten()
+                .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+        })
 }
 
 /// (grantee, grantable, privileges) for each grantee of a table, with the

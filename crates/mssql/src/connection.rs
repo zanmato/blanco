@@ -1087,6 +1087,107 @@ impl Connection for MssqlConnection {
         ))
     }
 
+    async fn schema_foreign_keys(
+        &self,
+        schema: Option<&str>,
+    ) -> Result<Vec<blanco_core::connection_trait::SchemaForeignKey>> {
+        let sql = schema::schema_foreign_keys_sql(schema);
+        let result = self
+            .execute_query(&sql, self.initial_database.as_deref(), None)
+            .await?;
+        let mut keys = Vec::new();
+        // Rows of one listed table are folded on their own, so namesakes
+        // listed from several schemas each get their keys, as table by table.
+        let mut group: Option<(Option<String>, Option<String>)> = None;
+        let mut group_rows: Vec<Vec<Option<String>>> = Vec::new();
+        let mut flush = |table: Option<String>, rows: &mut Vec<Vec<Option<String>>>| {
+            if let Some(table) = table {
+                for key in blanco_core::ForeignKeyConstraint::from_column_rows(rows) {
+                    keys.push(blanco_core::connection_trait::SchemaForeignKey {
+                        table: table.clone(),
+                        key,
+                    });
+                }
+            }
+            rows.clear();
+        };
+        for row in result.rows {
+            let listed = (
+                row.first().cloned().flatten(),
+                row.get(1).cloned().flatten(),
+            );
+            if group.as_ref() != Some(&listed) {
+                if let Some((table, _)) = group.take() {
+                    flush(table, &mut group_rows);
+                }
+                group = Some(listed);
+            }
+            group_rows.push(row.into_iter().skip(2).collect());
+        }
+        if let Some((table, _)) = group {
+            flush(table, &mut group_rows);
+        }
+        Ok(keys)
+    }
+
+    async fn schema_columns(
+        &self,
+        schema: Option<&str>,
+        referenced: &[(String, String)],
+    ) -> Result<Vec<blanco_core::connection_trait::SchemaTableColumns>> {
+        use blanco_core::connection_trait::{SchemaColumn, SchemaTableColumns};
+
+        let sql = schema::schema_columns_sql(schema, referenced);
+        let result = self
+            .execute_query(&sql, self.initial_database.as_deref(), None)
+            .await?;
+        let mut tables: Vec<SchemaTableColumns> = Vec::new();
+        let mut current: Option<(String, String)> = None;
+        for row in result.rows {
+            let get = |index: usize| row.get(index).cloned().flatten();
+            let (Some(part), Some(position), Some(table)) = (get(0), get(1), get(2)) else {
+                continue;
+            };
+            let referenced_schema = if part == "1" {
+                let Some((table_schema, _)) = position
+                    .parse::<usize>()
+                    .ok()
+                    .and_then(|position| referenced.get(position.checked_sub(1)?))
+                else {
+                    anyhow::bail!("SQL Server returned an unknown referenced table {table}");
+                };
+                Some(table_schema.clone())
+            } else {
+                None
+            };
+            let column = get(3).map(|name| SchemaColumn {
+                name,
+                data_type: get(4).unwrap_or_default(),
+                is_primary_key: get(5).is_some_and(|flag| flag == "1"),
+                comment: get(7).filter(|comment| !comment.is_empty()),
+            });
+            let entry = (part, position);
+            if current.as_ref() != Some(&entry) {
+                current = Some(entry);
+                // A referenced table without columns does not exist, while
+                // a listed one is kept as the per table read keeps it.
+                if referenced_schema.is_some() && column.is_none() {
+                    continue;
+                }
+                tables.push(SchemaTableColumns {
+                    schema: referenced_schema,
+                    table,
+                    comment: get(6).filter(|comment| !comment.is_empty()),
+                    columns: Vec::new(),
+                });
+            }
+            if let (Some(column), Some(last)) = (column, tables.last_mut()) {
+                last.columns.push(column);
+            }
+        }
+        Ok(tables)
+    }
+
     async fn get_indexes_for_table(
         &self,
         table_name: &str,

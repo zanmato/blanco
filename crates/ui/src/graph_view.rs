@@ -2,18 +2,29 @@ use std::cmp::Reverse;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
+use std::time::Duration;
 
 use gpui::{
-    App, Bounds, Context, FocusHandle, Focusable, Hsla, InteractiveElement, IntoElement,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, PathBuilder, Pixels,
-    Point, Render, ScrollDelta, ScrollWheelEvent, SharedString, Size, Styled, Window, canvas, div,
-    point, prelude::FluentBuilder, px,
+    App, AppContext as _, Bounds, Context, Entity, FocusHandle, Focusable, Hsla,
+    InteractiveElement, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    ParentElement, PathBuilder, Pixels, Point, Render, ScrollDelta, ScrollWheelEvent, SharedString,
+    Size, StatefulInteractiveElement, Styled, Subscription, Task, Window, canvas, div, point,
+    prelude::FluentBuilder, px,
 };
-use gpui_component::{ActiveTheme, v_flex};
+use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_component::{
+    ActiveTheme, Sizable as _, h_flex, progress::Progress, tooltip::Tooltip, v_flex,
+};
+
+mod svg;
 
 const NODE_HEADER_HEIGHT: f32 = 32.0;
+/// What a table comment under the title adds to the header.
+const NODE_SUBTITLE_HEIGHT: f32 = 14.0;
 const NODE_FIELD_ROW_HEIGHT: f32 = 22.0;
 const NODE_PADDING: f32 = 8.0;
+/// Room for the dot that marks a commented column.
+const COMMENT_MARKER_WIDTH: f32 = 10.0;
 const NODE_MIN_WIDTH: f32 = 180.0;
 const NODE_BORDER_RADIUS: f32 = 6.0;
 const PAN_THRESHOLD: f32 = 3.0;
@@ -52,6 +63,8 @@ pub struct GraphNodeField {
     pub label: SharedString,
     pub type_label: SharedString,
     pub badges: Vec<FieldBadge>,
+    /// The comment stored on the column, shown when its row is hovered.
+    pub comment: Option<SharedString>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -78,8 +91,16 @@ impl FieldBadge {
 
 #[derive(Clone, Debug)]
 pub struct GraphNode {
+    /// Unique in the graph: the table qualified by its schema where it has one.
     pub id: String,
     pub title: SharedString,
+    /// The comment stored on the table, shown under its title.
+    pub comment: Option<SharedString>,
+    /// The table's schema, or its database where databases are schemas,
+    /// which colors its header.
+    pub schema: Option<SharedString>,
+    /// A table of another schema, drawn because a foreign key references it.
+    pub referenced_only: bool,
     pub fields: Vec<GraphNodeField>,
     pub position: Point<f32>,
     pub size: Size<f32>,
@@ -107,8 +128,15 @@ pub struct GraphViewport {
     pub zoom_level: f32,
 }
 
+struct FieldRenderData {
+    label: SharedString,
+    type_label: SharedString,
+    badges: Vec<(SharedString, Hsla)>,
+    comment: Option<SharedString>,
+}
+
 struct NodeRenderData {
-    #[allow(dead_code)]
+    /// The node's element id, under which its tooltips' ids are scoped.
     ix: usize,
     screen_x: f32,
     screen_y: f32,
@@ -118,7 +146,12 @@ struct NodeRenderData {
     is_selected: bool,
     is_connected: bool,
     title: SharedString,
-    fields: Vec<(SharedString, SharedString, Vec<(SharedString, Hsla)>)>,
+    comment: Option<SharedString>,
+    schema_color: Option<Hsla>,
+    referenced_only: bool,
+    /// The field the current search match is on.
+    found_field: Option<usize>,
+    fields: Vec<FieldRenderData>,
 }
 
 /// Per-frame layout values shared by every node, captured once in `render` so
@@ -127,6 +160,7 @@ struct NodeRenderParams {
     theme: gpui_component::Theme,
     border_radius: Pixels,
     header_height: f32,
+    subtitle_height: f32,
     field_row_height: f32,
     font_size: f32,
     badge_font_size: f32,
@@ -147,6 +181,7 @@ fn render_graph_node(node_data: NodeRenderData, params: &NodeRenderParams) -> gp
         theme.border
     };
     div()
+        .id(("graph-node", node_data.ix))
         .absolute()
         .left(px(node_data.screen_x))
         .top(px(node_data.screen_y))
@@ -158,18 +193,28 @@ fn render_graph_node(node_data: NodeRenderData, params: &NodeRenderParams) -> gp
             el.border_2()
         })
         .border_color(border_color)
+        .when(node_data.referenced_only, |el| el.border_dashed())
         .bg(theme.background)
         .when(node_data.is_dragging, |el| el.shadow_lg())
         .overflow_hidden()
         .cursor_grab()
         .child(
             div()
+                .id("header")
                 .w_full()
-                .h(px(params.header_height))
+                .h(px(params.header_height
+                    + node_data
+                        .comment
+                        .as_ref()
+                        .map_or(0.0, |_| params.subtitle_height)))
                 .flex()
-                .items_center()
+                .flex_col()
+                .justify_center()
                 .px(px(NODE_PADDING * zoom))
-                .bg(theme.title_bar)
+                .bg(match node_data.schema_color {
+                    Some(color) => theme.title_bar.blend(color.opacity(0.3)),
+                    None => theme.title_bar,
+                })
                 .rounded_t(params.border_radius)
                 .child(
                     div()
@@ -178,53 +223,84 @@ fn render_graph_node(node_data: NodeRenderData, params: &NodeRenderParams) -> gp
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .truncate()
                         .child(node_data.title),
-                ),
+                )
+                .when_some(node_data.comment, |header, comment| {
+                    header
+                        .child(
+                            div()
+                                .text_size(px(font_size * 0.85))
+                                .text_color(theme.muted_foreground)
+                                .truncate()
+                                .child(comment.clone()),
+                        )
+                        .tooltip(move |window, cx| Tooltip::new(comment.clone()).build(window, cx))
+                }),
         )
         .child(
-            div()
-                .w_full()
-                .flex()
-                .flex_col()
-                .children(
-                    node_data
-                        .fields
-                        .into_iter()
-                        .map(|(label, type_label, badges)| {
-                            div()
-                                .w_full()
-                                .h(px(params.field_row_height))
-                                .flex()
-                                .items_center()
-                                .px(px(NODE_PADDING * zoom))
-                                .gap(px(4.0 * zoom))
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .truncate()
-                                        .text_size(px(font_size))
-                                        .text_color(theme.foreground)
-                                        .child(label),
-                                )
-                                .child(
-                                    div()
-                                        .flex_shrink_0()
-                                        .text_size(px(font_size * 0.85))
-                                        .text_color(theme.muted_foreground)
-                                        .truncate()
-                                        .child(type_label),
-                                )
-                                .children(badges.into_iter().map(|(badge_label, badge_color)| {
-                                    div()
-                                        .px(px(3.0 * zoom))
-                                        .rounded(px(3.0 * zoom))
-                                        .bg(badge_color.opacity(0.2))
-                                        .text_size(px(params.badge_font_size))
-                                        .text_color(badge_color)
-                                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                                        .child(badge_label)
-                                }))
-                        }),
-                ),
+            div().w_full().flex().flex_col().children(
+                node_data
+                    .fields
+                    .into_iter()
+                    .enumerate()
+                    .map(|(field_ix, field)| {
+                        div()
+                            .id(("field", field_ix))
+                            .w_full()
+                            .h(px(params.field_row_height))
+                            .when(node_data.found_field == Some(field_ix), |row| {
+                                row.bg(theme.cyan.opacity(0.2))
+                            })
+                            .flex()
+                            .items_center()
+                            .px(px(NODE_PADDING * zoom))
+                            .gap(px(4.0 * zoom))
+                            .child(
+                                h_flex()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .gap(px(4.0 * zoom))
+                                    .child(
+                                        div()
+                                            .truncate()
+                                            .text_size(px(font_size))
+                                            .text_color(theme.foreground)
+                                            .child(field.label),
+                                    )
+                                    .when(field.comment.is_some(), |label| {
+                                        label.child(
+                                            div()
+                                                .flex_shrink_0()
+                                                .size(px(4.0 * zoom))
+                                                .rounded_full()
+                                                .bg(theme.muted_foreground),
+                                        )
+                                    }),
+                            )
+                            .child(
+                                div()
+                                    .flex_shrink_0()
+                                    .text_size(px(font_size * 0.85))
+                                    .text_color(theme.muted_foreground)
+                                    .truncate()
+                                    .child(field.type_label),
+                            )
+                            .when_some(field.comment, |row, comment| {
+                                row.tooltip(move |window, cx| {
+                                    Tooltip::new(comment.clone()).build(window, cx)
+                                })
+                            })
+                            .children(field.badges.into_iter().map(|(badge_label, badge_color)| {
+                                div()
+                                    .px(px(3.0 * zoom))
+                                    .rounded(px(3.0 * zoom))
+                                    .bg(badge_color.opacity(0.2))
+                                    .text_size(px(params.badge_font_size))
+                                    .text_color(badge_color)
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .child(badge_label)
+                            }))
+                    }),
+            ),
         )
         .into_any_element()
 }
@@ -268,8 +344,34 @@ impl AnchorSide {
     }
 }
 
+/// Where a search found its text: a table, or one of its columns.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SearchMatch {
+    pub node: usize,
+    pub field: Option<usize>,
+}
+
+/// Typing pauses this long before the view moves to the first match.
+const SEARCH_DEBOUNCE: Duration = Duration::from_millis(300);
+
+struct GraphSearch {
+    input: Entity<InputState>,
+    /// The text `matches` were found for.
+    query: String,
+    matches: Vec<SearchMatch>,
+    current: Option<usize>,
+    pending: Option<Task<()>>,
+    _subscription: Subscription,
+}
+
 pub struct GraphView {
+    /// The part of `full_model` that is shown.
     pub model: GraphModel,
+    full_model: GraphModel,
+    /// Whether tables of other schemas, drawn for the keys that reach them,
+    /// are shown.
+    show_referenced: bool,
+    search: GraphSearch,
     pub viewport: GraphViewport,
     focus_handle: FocusHandle,
     dragging_node: Option<(usize, Point<f32>)>,
@@ -291,14 +393,32 @@ pub struct GraphView {
     /// they were computed from. Recomputed lazily when the hash changes.
     routed_edges: Vec<RoutedEdge>,
     route_cache_key: Option<u64>,
-    pub loading: bool,
+    /// What is being loaded and how far along, in percent, while the graph
+    /// is loading.
+    loading: Option<(SharedString, f32)>,
     pub error: Option<String>,
 }
 
 impl GraphView {
-    pub fn new(cx: &mut Context<Self>) -> Self {
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder("Find table or column"));
+        let subscription = cx.subscribe(&input, |this, _, event: &InputEvent, cx| match event {
+            InputEvent::Change => this.search_after_pause(cx),
+            InputEvent::PressEnter { shift, .. } => this.step_search(!shift, cx),
+            InputEvent::Focus | InputEvent::Blur => {}
+        });
         Self {
             model: GraphModel::default(),
+            full_model: GraphModel::default(),
+            show_referenced: true,
+            search: GraphSearch {
+                input,
+                query: String::new(),
+                matches: Vec::new(),
+                current: None,
+                pending: None,
+                _subscription: subscription,
+            },
             viewport: GraphViewport {
                 pan_offset: Point::default(),
                 zoom_level: 1.0,
@@ -315,7 +435,7 @@ impl GraphView {
             show_all_edges: false,
             routed_edges: Vec::new(),
             route_cache_key: None,
-            loading: false,
+            loading: None,
             error: None,
         }
     }
@@ -326,13 +446,172 @@ impl GraphView {
         cx.notify();
     }
 
-    pub fn set_model(&mut self, model: GraphModel, cx: &mut Context<Self>) {
-        self.model = model;
+    /// Show a loading step with how far along it is (0 to 100), or `None`
+    /// once loading is over.
+    pub fn set_loading(&mut self, loading: Option<(SharedString, f32)>, cx: &mut Context<Self>) {
+        self.loading = loading;
         cx.notify();
+    }
+
+    pub fn set_model(&mut self, model: GraphModel, cx: &mut Context<Self>) {
+        self.full_model = model;
+        self.show_model();
+        cx.notify();
+    }
+
+    /// Show or hide the tables of other schemas.
+    pub fn set_show_referenced(&mut self, show: bool, cx: &mut Context<Self>) {
+        if show == self.show_referenced {
+            return;
+        }
+        // Tables moved while every table showed keep their place for the
+        // next time they all show.
+        if self.show_referenced {
+            self.full_model = self.model.clone();
+        }
+        self.show_referenced = show;
+        self.show_model();
+        cx.notify();
+    }
+
+    /// Show `full_model`, or the part of it without the tables of other
+    /// schemas laid out again, keeping the selection and the search.
+    fn show_model(&mut self) {
+        let selected: HashSet<String> = self
+            .selected_nodes
+            .iter()
+            .filter_map(|&ix| self.model.nodes.get(ix).map(|node| node.id.clone()))
+            .collect();
+
+        self.model = if self.show_referenced {
+            self.full_model.clone()
+        } else {
+            let mut nodes: Vec<GraphNode> = self
+                .full_model
+                .nodes
+                .iter()
+                .filter(|node| !node.referenced_only)
+                .cloned()
+                .collect();
+            let shown: HashSet<&str> = nodes.iter().map(|node| node.id.as_str()).collect();
+            let edges: Vec<GraphEdge> = self
+                .full_model
+                .edges
+                .iter()
+                .filter(|edge| {
+                    shown.contains(edge.from_node.as_str()) && shown.contains(edge.to_node.as_str())
+                })
+                .cloned()
+                .collect();
+            layout_dag(&mut nodes, &edges);
+            GraphModel { nodes, edges }
+        };
+
+        self.selected_nodes = self
+            .model
+            .nodes
+            .iter()
+            .enumerate()
+            .filter(|(_, node)| selected.contains(&node.id))
+            .map(|(ix, _)| ix)
+            .collect();
+        self.route_cache_key = None;
+        self.search.matches = search_matches(&self.model.nodes, &self.search.query);
+        self.search.current = None;
+    }
+
+    fn has_referenced_tables(&self) -> bool {
+        self.full_model
+            .nodes
+            .iter()
+            .any(|node| node.referenced_only)
+    }
+
+    /// Find the typed text once typing pauses, and move to the first match.
+    fn search_after_pause(&mut self, cx: &mut Context<Self>) {
+        self.search.pending = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(SEARCH_DEBOUNCE).await;
+            this.update(cx, |this, cx| {
+                this.search.pending = None;
+                this.find(cx);
+            })
+            .ok();
+        }));
+    }
+
+    /// Find the input's text again and move to the first match.
+    fn find(&mut self, cx: &mut Context<Self>) {
+        let query = self.search.input.read(cx).value().to_string();
+        self.search.matches = search_matches(&self.model.nodes, &query);
+        self.search.query = query;
+        self.search.current = None;
+        self.step_search(true, cx);
+    }
+
+    /// Move to the next match, or the previous one, wrapping around. Text
+    /// typed since the last search is searched first.
+    fn step_search(&mut self, forward: bool, cx: &mut Context<Self>) {
+        let query = self.search.input.read(cx).value().to_string();
+        if query != self.search.query {
+            self.search.pending = None;
+            self.search.matches = search_matches(&self.model.nodes, &query);
+            self.search.query = query;
+            self.search.current = None;
+        }
+        let count = self.search.matches.len();
+        if count == 0 {
+            self.search.current = None;
+            cx.notify();
+            return;
+        }
+        let next = match (self.search.current, forward) {
+            (None, true) => 0,
+            (None, false) => count - 1,
+            (Some(current), true) => (current + 1) % count,
+            (Some(current), false) => (current + count - 1) % count,
+        };
+        self.search.current = Some(next);
+        if let Some(found) = self.search.matches.get(next).copied() {
+            self.selected_nodes = HashSet::from([found.node]);
+            self.center_on(found);
+        }
+        cx.notify();
+    }
+
+    /// Pan so the match sits in the middle of the view.
+    fn center_on(&mut self, found: SearchMatch) {
+        let (Some(bounds), Some(node)) = (self.element_bounds, self.model.nodes.get(found.node))
+        else {
+            return;
+        };
+        let target_y = match found.field {
+            Some(field) => node.position.y + field_y_offset(node, field),
+            None => node.position.y + node.size.height / 2.0,
+        };
+        let target = Point::new(node.position.x + node.size.width / 2.0, target_y);
+        let zoom = self.viewport.zoom_level;
+        self.viewport.pan_offset = Point::new(
+            bounds.size.width.as_f32() / 2.0 / zoom - target.x,
+            bounds.size.height.as_f32() / 2.0 / zoom - target.y,
+        );
+    }
+
+    /// The current match, as `2 of 5`.
+    fn search_status(&self) -> Option<SharedString> {
+        if self.search.query.trim().is_empty() {
+            return None;
+        }
+        let count = self.search.matches.len();
+        Some(match self.search.current {
+            _ if count == 0 => "No matches".into(),
+            Some(current) => format!("{} of {count}", current + 1).into(),
+            None => format!("{count} found").into(),
+        })
     }
 
     pub fn clear(&mut self, cx: &mut Context<Self>) {
         self.model = GraphModel::default();
+        self.full_model = GraphModel::default();
         self.viewport = GraphViewport {
             pan_offset: Point::default(),
             zoom_level: 1.0,
@@ -413,12 +692,6 @@ impl GraphView {
             && node.position.y <= bottom_right.y
     }
 
-    fn field_y_offset(field_index: usize) -> f32 {
-        NODE_HEADER_HEIGHT
-            + field_index as f32 * NODE_FIELD_ROW_HEIGHT
-            + NODE_FIELD_ROW_HEIGHT / 2.0
-    }
-
     /// Hash of everything the routed paths depend on. Node positions/sizes, the
     /// selection, and the show-all toggle all change routing; pan and zoom do
     /// not (they are applied as a transform afterwards).
@@ -461,13 +734,6 @@ impl GraphView {
 
     /// Route every currently-active edge around the tables using grid A*.
     fn compute_routes(&self) -> Vec<RoutedEdge> {
-        let node_map: HashMap<&str, &GraphNode> = self
-            .model
-            .nodes
-            .iter()
-            .map(|n| (n.id.as_str(), n))
-            .collect();
-
         let selected_ids = self.selected_node_ids();
 
         // On-demand mode with no selection draws nothing.
@@ -478,36 +744,11 @@ impl GraphView {
         let touches_selection = |e: &GraphEdge| {
             selected_ids.contains(e.from_node.as_str()) || selected_ids.contains(e.to_node.as_str())
         };
-
-        let Some(grid) = RouteGrid::build(&self.model.nodes) else {
-            return Vec::new();
-        };
-        let mut search = AStarSearch::new(grid.cell_count());
-
-        self.model
-            .edges
-            .iter()
-            .enumerate()
-            .filter(|(_, e)| self.show_all_edges || touches_selection(e))
-            .filter_map(|(edge_ix, e)| {
-                let from_node = *node_map.get(e.from_node.as_str())?;
-                let to_node = *node_map.get(e.to_node.as_str())?;
-                let is_highlighted = touches_selection(e);
-
-                let (from_anchor, from_side, to_anchor, to_side) =
-                    Self::edge_anchors(e, from_node, to_node);
-
-                let points = grid
-                    .route(from_anchor, from_side, to_anchor, to_side, &mut search)
-                    .unwrap_or_else(|| vec![from_anchor, to_anchor]);
-
-                Some(RoutedEdge {
-                    edge_ix,
-                    points,
-                    is_highlighted,
-                })
-            })
-            .collect()
+        route_edges(
+            &self.model,
+            |edge| self.show_all_edges || touches_selection(edge),
+            touches_selection,
+        )
     }
 
     /// Re-route only the edges touching `node_ix`, leaving every other cached
@@ -587,13 +828,13 @@ impl GraphView {
         let (from_anchor, from_side) = if dx > from_node.size.width * 0.3 {
             let p = Point::new(
                 from_right,
-                from_node.position.y + Self::field_y_offset(e.from_field_index),
+                from_node.position.y + field_y_offset(from_node, e.from_field_index),
             );
             (p, AnchorSide::Right)
         } else if dx < -(to_node.size.width * 0.3) {
             let p = Point::new(
                 from_node.position.x,
-                from_node.position.y + Self::field_y_offset(e.from_field_index),
+                from_node.position.y + field_y_offset(from_node, e.from_field_index),
             );
             (p, AnchorSide::Left)
         } else {
@@ -607,13 +848,13 @@ impl GraphView {
         let (to_anchor, to_side) = if dx > from_node.size.width * 0.3 {
             let p = Point::new(
                 to_node.position.x,
-                to_node.position.y + Self::field_y_offset(e.to_field_index),
+                to_node.position.y + field_y_offset(to_node, e.to_field_index),
             );
             (p, AnchorSide::Left)
         } else if dx < -(to_node.size.width * 0.3) {
             let p = Point::new(
                 to_right,
-                to_node.position.y + Self::field_y_offset(e.to_field_index),
+                to_node.position.y + field_y_offset(to_node, e.to_field_index),
             );
             (p, AnchorSide::Right)
         } else if dy > 0.0 {
@@ -683,6 +924,11 @@ impl GraphView {
     fn collect_node_data(&self, cx: &App) -> Vec<NodeRenderData> {
         let zoom = self.viewport.zoom_level;
         let connected = self.connected_to_selection();
+        let colors_schemas = self.colors_schemas();
+        let found = self
+            .search
+            .current
+            .and_then(|current| self.search.matches.get(current));
 
         self.model
             .nodes
@@ -701,21 +947,59 @@ impl GraphView {
                     is_selected: self.selected_nodes.contains(&ix),
                     is_connected: connected.contains(&ix),
                     title: node.title.clone(),
+                    comment: node.comment.clone(),
+                    schema_color: node
+                        .schema
+                        .as_ref()
+                        .filter(|_| colors_schemas)
+                        .map(|schema| schema_color(schema, cx)),
+                    referenced_only: node.referenced_only,
+                    found_field: found
+                        .filter(|found| found.node == ix)
+                        .and_then(|found| found.field),
                     fields: node
                         .fields
                         .iter()
-                        .map(|f| {
-                            let badges: Vec<(SharedString, Hsla)> = f
+                        .map(|field| FieldRenderData {
+                            label: field.label.clone(),
+                            type_label: field.type_label.clone(),
+                            badges: field
                                 .badges
                                 .iter()
-                                .map(|b| (SharedString::from(b.label()), b.color(cx)))
-                                .collect();
-                            (f.label.clone(), f.type_label.clone(), badges)
+                                .map(|badge| (SharedString::from(badge.label()), badge.color(cx)))
+                                .collect(),
+                            comment: field.comment.clone(),
                         })
                         .collect(),
                 }
             })
             .collect()
+    }
+
+    /// The schemas of the shown tables, in order of their names.
+    fn schemas(&self) -> Vec<SharedString> {
+        let mut schemas: Vec<SharedString> = self
+            .model
+            .nodes
+            .iter()
+            .filter_map(|node| node.schema.clone())
+            .collect();
+        schemas.sort();
+        schemas.dedup();
+        schemas
+    }
+
+    /// Headers are colored by schema once tables of several schemas show,
+    /// as one color would only say what the tab's title says.
+    fn colors_schemas(&self) -> bool {
+        let mut schemas = self
+            .model
+            .nodes
+            .iter()
+            .filter_map(|node| node.schema.as_ref());
+        schemas
+            .next()
+            .is_some_and(|first| schemas.any(|schema| schema != first))
     }
 
     fn hit_test_node(&self, graph_pos: Point<f32>) -> Option<usize> {
@@ -878,6 +1162,14 @@ impl GraphView {
     }
 }
 
+pub enum GraphViewEvent {
+    /// The export button was pressed. Saving is left to the owner, which
+    /// knows what to name the file.
+    ExportSvg,
+}
+
+impl gpui::EventEmitter<GraphViewEvent> for GraphView {}
+
 impl Focusable for GraphView {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
@@ -891,10 +1183,24 @@ impl Render for GraphView {
         let nodes_data = self.collect_node_data(cx);
 
         let has_content = !self.model.nodes.is_empty();
-        let loading = self.loading;
+        let loading = self.loading.clone();
         let error = self.error.clone();
         let show_all_edges = self.show_all_edges;
         let selected_count = self.selected_nodes.len();
+        let has_referenced = self.has_referenced_tables();
+        let show_referenced = self.show_referenced;
+        let search_status = self.search_status();
+        let legend: Vec<(SharedString, Hsla)> = if self.colors_schemas() {
+            self.schemas()
+                .into_iter()
+                .map(|schema| {
+                    let color = schema_color(&schema, cx);
+                    (schema, color)
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
 
         // Not the border colour: themes may give the border and the secondary
         // surface the canvas is tinted with the same colour, hiding the lines.
@@ -913,6 +1219,7 @@ impl Render for GraphView {
             theme: cx.theme().clone(),
             border_radius: px(NODE_BORDER_RADIUS * zoom),
             header_height: NODE_HEADER_HEIGHT * zoom,
+            subtitle_height: NODE_SUBTITLE_HEIGHT * zoom,
             field_row_height: NODE_FIELD_ROW_HEIGHT * zoom,
             font_size: (13.0 * zoom).max(6.0),
             badge_font_size: (10.0 * zoom).max(5.0),
@@ -1002,8 +1309,67 @@ impl Render for GraphView {
                     Some(format!("{selected_count} selected · cmd/ctrl-click to add more").into())
                 };
 
+                // A press here is not one on the canvas, which would start a
+                // pan, and its release would clear the selection.
+                let keep_press = |el: gpui::Div| {
+                    el.on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                };
                 el.child(
-                    div()
+                    keep_press(div())
+                        .absolute()
+                        .top(px(8.0))
+                        .left(px(8.0))
+                        .w(px(260.0))
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(
+                            div()
+                                .bg(bg)
+                                .rounded(px(4.0))
+                                .child(Input::new(&self.search.input).small().cleanable(true)),
+                        )
+                        .when_some(search_status, |el, status| {
+                            el.child(
+                                div()
+                                    .px_2()
+                                    .py_0p5()
+                                    .rounded(px(4.0))
+                                    .bg(bg)
+                                    .text_size(px(11.0))
+                                    .text_color(muted)
+                                    .child(status),
+                            )
+                        }),
+                )
+                .when(!legend.is_empty(), |el| {
+                    el.child(
+                        keep_press(div())
+                            .absolute()
+                            .bottom(px(8.0))
+                            .left(px(8.0))
+                            .px_2()
+                            .py_1()
+                            .rounded(px(4.0))
+                            .border_1()
+                            .border_color(edge_color)
+                            .bg(bg)
+                            .flex()
+                            .flex_col()
+                            .gap_0p5()
+                            .text_size(px(11.0))
+                            .text_color(foreground)
+                            .children(legend.into_iter().map(|(schema, color)| {
+                                h_flex()
+                                    .gap_1p5()
+                                    .child(div().size(px(10.0)).rounded(px(2.0)).bg(color))
+                                    .child(schema)
+                            })),
+                    )
+                })
+                .child(
+                    keep_press(div())
                         .absolute()
                         .top(px(8.0))
                         .right(px(8.0))
@@ -1011,6 +1377,50 @@ impl Render for GraphView {
                         .flex_col()
                         .items_end()
                         .gap_1()
+                        .when(has_referenced, |el| {
+                            el.child(
+                                div()
+                                    .id("toggle-referenced-tables")
+                                    .px_2()
+                                    .py_1()
+                                    .rounded(px(4.0))
+                                    .border_1()
+                                    .border_color(edge_color)
+                                    .bg(bg)
+                                    .text_size(px(12.0))
+                                    .text_color(foreground)
+                                    .cursor_pointer()
+                                    .child(if show_referenced {
+                                        "Other schemas: shown"
+                                    } else {
+                                        "Other schemas: hidden"
+                                    })
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |this, _, _, cx| {
+                                            this.set_show_referenced(!show_referenced, cx);
+                                        }),
+                                    ),
+                            )
+                        })
+                        .child(
+                            div()
+                                .id("export-svg")
+                                .px_2()
+                                .py_1()
+                                .rounded(px(4.0))
+                                .border_1()
+                                .border_color(edge_color)
+                                .bg(bg)
+                                .text_size(px(12.0))
+                                .text_color(foreground)
+                                .cursor_pointer()
+                                .child("Export SVG…")
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|_, _, _, cx| cx.emit(GraphViewEvent::ExportSvg)),
+                                ),
+                        )
                         .child(
                             div()
                                 .id("toggle-all-edges")
@@ -1051,7 +1461,7 @@ impl Render for GraphView {
                         }),
                 )
             })
-            .when(!has_content && !loading && error.is_none(), |el| {
+            .when(!has_content && loading.is_none() && error.is_none(), |el| {
                 el.child(
                     div()
                         .absolute()
@@ -1063,7 +1473,7 @@ impl Render for GraphView {
                         .child("No tables found"),
                 )
             })
-            .when(loading, |el| {
+            .when_some(loading, |el, (step, percent)| {
                 el.child(
                     div()
                         .absolute()
@@ -1071,8 +1481,15 @@ impl Render for GraphView {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .text_color(muted)
-                        .child("Loading schema…"),
+                        .child(
+                            v_flex()
+                                .w(px(280.0))
+                                .gap_2()
+                                .text_size(px(12.0))
+                                .text_color(muted)
+                                .child(step)
+                                .child(Progress::new("graph-loading").value(percent)),
+                        ),
                 )
             })
             .when_some(error, |el, err| {
@@ -1088,6 +1505,90 @@ impl Render for GraphView {
                 )
             })
     }
+}
+
+/// The color of a schema's headers, from the theme's accents. The name picks
+/// it, so a schema keeps its color between sessions. Cyan is left out, as it
+/// marks the selection.
+fn schema_color(schema: &str, cx: &App) -> Hsla {
+    let theme = cx.theme();
+    let colors = [
+        theme.blue,
+        theme.green,
+        theme.yellow,
+        theme.magenta,
+        theme.red,
+    ];
+    // FNV-1a, which unlike the standard library's hasher is fixed across
+    // releases.
+    let hash = schema
+        .bytes()
+        .fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+        });
+    colors[(hash % colors.len() as u64) as usize]
+}
+
+/// The tables and columns `query` finds, case insensitively, in the order
+/// the layout shows them: column by column, top to bottom. A table is found
+/// by its name, a column by its own. With a `.` in it, the query is matched
+/// against `schema.table` for tables and `table.column` or
+/// `schema.table.column` for columns, and a column must hold what follows
+/// the last `.`, so `public.users` finds the table and not its columns.
+pub fn search_matches(nodes: &[GraphNode], query: &str) -> Vec<SearchMatch> {
+    let query = query.trim().to_lowercase();
+    if query.is_empty() {
+        return Vec::new();
+    }
+    let qualified = query.rsplit_once('.').map(|(_, last)| last);
+
+    let mut order: Vec<usize> = (0..nodes.len()).collect();
+    order.sort_by(|&a, &b| {
+        let (a, b) = (&nodes[a].position, &nodes[b].position);
+        a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y))
+    });
+
+    let mut matches = Vec::new();
+    for ix in order {
+        let node = &nodes[ix];
+        let id = node.id.to_lowercase();
+        let table = match &node.schema {
+            Some(schema) => id
+                .strip_prefix(&format!("{}.", schema.to_lowercase()))
+                .unwrap_or(&id)
+                .to_string(),
+            None => id.clone(),
+        };
+        let table_found = match qualified {
+            None => table.contains(&query),
+            Some(_) => id.contains(&query),
+        };
+        if table_found {
+            matches.push(SearchMatch {
+                node: ix,
+                field: None,
+            });
+        }
+        for (field_ix, field) in node.fields.iter().enumerate() {
+            let column = field.label.to_lowercase();
+            let column_found = match qualified {
+                None => column.contains(&query),
+                Some(last) => {
+                    !last.is_empty()
+                        && column.contains(last)
+                        && (format!("{table}.{column}").contains(&query)
+                            || format!("{id}.{column}").contains(&query))
+                }
+            };
+            if column_found {
+                matches.push(SearchMatch {
+                    node: ix,
+                    field: Some(field_ix),
+                });
+            }
+        }
+    }
+    matches
 }
 
 /// A rasterised occupancy grid over the graph's bounding box. Cells covered by
@@ -1409,6 +1910,44 @@ fn dedup_points(pts: &mut Vec<Point<f32>>) {
     pts.dedup_by(|a, b| (a.x - b.x).abs() < 0.5 && (a.y - b.y).abs() < 0.5);
 }
 
+/// Route the edges `include` picks around the tables using grid A*.
+fn route_edges(
+    model: &GraphModel,
+    include: impl Fn(&GraphEdge) -> bool,
+    highlighted: impl Fn(&GraphEdge) -> bool,
+) -> Vec<RoutedEdge> {
+    let node_map: HashMap<&str, &GraphNode> =
+        model.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+    let Some(grid) = RouteGrid::build(&model.nodes) else {
+        return Vec::new();
+    };
+    let mut search = AStarSearch::new(grid.cell_count());
+
+    model
+        .edges
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| include(e))
+        .filter_map(|(edge_ix, e)| {
+            let from_node = *node_map.get(e.from_node.as_str())?;
+            let to_node = *node_map.get(e.to_node.as_str())?;
+            let is_highlighted = highlighted(e);
+            let (from_anchor, from_side, to_anchor, to_side) =
+                GraphView::edge_anchors(e, from_node, to_node);
+
+            let points = grid
+                .route(from_anchor, from_side, to_anchor, to_side, &mut search)
+                .unwrap_or_else(|| vec![from_anchor, to_anchor]);
+
+            Some(RoutedEdge {
+                edge_ix,
+                points,
+                is_highlighted,
+            })
+        })
+        .collect()
+}
+
 /// Stroke a poly-line with rounded corners. Each interior vertex is replaced by
 /// a quadratic curve whose radius is clamped to half of the shorter adjoining
 /// segment so tight elbows stay sane.
@@ -1456,8 +1995,24 @@ fn build_rounded_path(
     builder.build().ok()
 }
 
-pub fn compute_node_height(fields: usize) -> f32 {
-    NODE_HEADER_HEIGHT + fields as f32 * NODE_FIELD_ROW_HEIGHT + NODE_PADDING
+/// The height of a node's header, which grows for a table comment.
+fn node_header_height(node: &GraphNode) -> f32 {
+    if node.comment.is_some() {
+        NODE_HEADER_HEIGHT + NODE_SUBTITLE_HEIGHT
+    } else {
+        NODE_HEADER_HEIGHT
+    }
+}
+
+fn compute_node_height(node: &GraphNode) -> f32 {
+    node_header_height(node) + node.fields.len() as f32 * NODE_FIELD_ROW_HEIGHT + NODE_PADDING
+}
+
+/// The vertical middle of a field's row, from the top of its node.
+fn field_y_offset(node: &GraphNode, field_index: usize) -> f32 {
+    node_header_height(node)
+        + field_index as f32 * NODE_FIELD_ROW_HEIGHT
+        + NODE_FIELD_ROW_HEIGHT / 2.0
 }
 
 pub fn compute_node_sizes(nodes: &mut Vec<GraphNode>) {
@@ -1470,11 +2025,16 @@ pub fn compute_node_sizes(nodes: &mut Vec<GraphNode>) {
             let field_width = field.label.len() as f32 * char_width
                 + field.type_label.len() as f32 * (char_width * 0.85)
                 + field.badges.len() as f32 * badge_width
+                + if field.comment.is_some() {
+                    COMMENT_MARKER_WIDTH
+                } else {
+                    0.0
+                }
                 + NODE_PADDING * 2.0;
             max_field_width = max_field_width.max(field_width);
         }
         node.size.width = title_width.max(max_field_width).max(NODE_MIN_WIDTH);
-        node.size.height = compute_node_height(node.fields.len());
+        node.size.height = compute_node_height(node);
     }
 }
 
@@ -1750,10 +2310,14 @@ mod tests {
         GraphNode {
             id: id.to_string(),
             title: id.to_string().into(),
+            comment: None,
+            schema: None,
+            referenced_only: false,
             fields: vec![GraphNodeField {
                 label: "id".into(),
                 type_label: "int".into(),
                 badges: Vec::new(),
+                comment: None,
             }],
             position: Point::default(),
             size: Size::default(),
@@ -1876,5 +2440,141 @@ mod tests {
             distinct_columns.len() > 1,
             "a layer taller than the cap should wrap into multiple columns"
         );
+    }
+
+    fn table(schema: &str, name: &str, columns: &[&str], x: f32) -> GraphNode {
+        GraphNode {
+            id: format!("{schema}.{name}"),
+            title: name.to_string().into(),
+            comment: None,
+            schema: Some(schema.to_string().into()),
+            referenced_only: false,
+            fields: columns
+                .iter()
+                .map(|column| GraphNodeField {
+                    label: column.to_string().into(),
+                    type_label: "int".into(),
+                    badges: Vec::new(),
+                    comment: None,
+                })
+                .collect(),
+            position: Point::new(x, 0.0),
+            size: Size::default(),
+        }
+    }
+
+    #[test]
+    fn search_finds_tables_and_columns() {
+        let nodes = vec![
+            table("public", "users", &["id", "email", "user_group"], 300.0),
+            table("public", "orders", &["id", "user_id"], 0.0),
+        ];
+        let found = |query: &str| -> Vec<(usize, Option<usize>)> {
+            search_matches(&nodes, query)
+                .into_iter()
+                .map(|found| (found.node, found.field))
+                .collect()
+        };
+        // Leftmost first, a table before its columns, any case.
+        assert_eq!(found("USER"), [(1, Some(1)), (0, None), (0, Some(2))]);
+        assert_eq!(found("public.users"), [(0, None)]);
+        assert_eq!(found("users.email"), [(0, Some(1))]);
+        assert_eq!(found("public.orders.user"), [(1, Some(1))]);
+        assert_eq!(found("  "), []);
+        assert_eq!(found("missing"), []);
+    }
+
+    fn open_view(cx: &mut gpui::TestAppContext) -> (Entity<GraphView>, gpui::VisualTestContext) {
+        struct Host(Entity<GraphView>);
+        impl Render for Host {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                div().size_full().child(self.0.clone())
+            }
+        }
+        let (view, window) = cx.update(|cx| {
+            gpui_component::init(cx);
+            let mut view = None;
+            let window = cx
+                .open_window(Default::default(), |window, cx| {
+                    let graph = cx.new(|cx| GraphView::new(window, cx));
+                    view = Some(graph.clone());
+                    let host = cx.new(|_| Host(graph));
+                    cx.new(|cx| gpui_component::Root::new(host, window, cx))
+                })
+                .expect("failed to open window");
+            (view.expect("view"), window)
+        });
+        let cx = gpui::VisualTestContext::from_window(window.into(), cx);
+        cx.run_until_parked();
+        (view, cx)
+    }
+
+    #[gpui::test]
+    fn hiding_other_schemas_keeps_the_selection(cx: &mut gpui::TestAppContext) {
+        let (view, mut cx) = open_view(cx);
+        let mut customers = table("crm", "customers", &["id"], 0.0);
+        customers.referenced_only = true;
+        let model = GraphModel {
+            nodes: vec![
+                customers,
+                table("sales", "orders", &["id", "customer_id"], 0.0),
+            ],
+            edges: vec![GraphEdge {
+                from_node: "sales.orders".to_string(),
+                from_field_index: 1,
+                to_node: "crm.customers".to_string(),
+                to_field_index: 0,
+                dashed: false,
+            }],
+        };
+        view.update(&mut cx, |view, cx| {
+            view.set_model(model, cx);
+            view.selected_nodes = HashSet::from([1]);
+            assert_eq!(view.schemas().len(), 2);
+
+            view.set_show_referenced(false, cx);
+            let ids: Vec<&str> = view.model.nodes.iter().map(|n| n.id.as_str()).collect();
+            assert_eq!(ids, ["sales.orders"]);
+            assert!(view.model.edges.is_empty());
+            assert_eq!(view.selected_nodes, HashSet::from([0]));
+
+            view.set_show_referenced(true, cx);
+            assert_eq!(view.model.nodes.len(), 2);
+            assert_eq!(view.selected_nodes, HashSet::from([1]));
+        });
+    }
+
+    #[gpui::test]
+    fn enter_steps_through_the_matches(cx: &mut gpui::TestAppContext) {
+        let (view, mut cx) = open_view(cx);
+        let model = GraphModel {
+            nodes: vec![
+                table("public", "users", &["id", "email"], 0.0),
+                table("public", "emails", &["id"], 400.0),
+            ],
+            edges: Vec::new(),
+        };
+        view.update(&mut cx, |view, cx| view.set_model(model, cx));
+        cx.run_until_parked();
+
+        let input = view.read_with(&cx, |view, _| view.search.input.clone());
+        input.update_in(&mut cx, |input, window, cx| {
+            input.set_value("email", window, cx)
+        });
+        // Enter finds what was typed without waiting for the pause.
+        view.update(&mut cx, |view, cx| {
+            view.step_search(true, cx);
+            assert_eq!(view.search.matches.len(), 2);
+            assert_eq!(view.search.current, Some(0));
+            assert_eq!(view.selected_nodes, HashSet::from([0]));
+            assert_eq!(view.search_status().as_deref(), Some("1 of 2"));
+
+            view.step_search(true, cx);
+            assert_eq!(view.selected_nodes, HashSet::from([1]));
+            view.step_search(true, cx);
+            assert_eq!(view.search.current, Some(0), "it wraps around");
+            view.step_search(false, cx);
+            assert_eq!(view.search.current, Some(1));
+        });
     }
 }

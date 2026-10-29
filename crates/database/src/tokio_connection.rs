@@ -16,7 +16,7 @@ use async_trait::async_trait;
 use blanco_core::{
     connection_trait::{
         ColumnType, DatabaseSchemaResult, ForeignKeyConstraint, IndexInfo, ObjectKind,
-        QueryableEntity,
+        QueryableEntity, SchemaForeignKey, SchemaTableColumns,
     },
     write_guard, BatchFailure, BatchOutcome, ColumnInfo, Connection, DatabaseType,
     FunctionSignatureInfo, KeyValueResult, QueryResult, StatementAccess, TableParent,
@@ -473,6 +473,25 @@ impl Connection for TokioConnection {
                 .await
         })
         .await
+    }
+
+    async fn schema_foreign_keys(&self, schema: Option<&str>) -> Result<Vec<SchemaForeignKey>> {
+        let inner = Arc::clone(&self.inner);
+        let schema = schema.map(str::to_string);
+        self.run(async move { inner.schema_foreign_keys(schema.as_deref()).await })
+            .await
+    }
+
+    async fn schema_columns(
+        &self,
+        schema: Option<&str>,
+        referenced: &[(String, String)],
+    ) -> Result<Vec<SchemaTableColumns>> {
+        let inner = Arc::clone(&self.inner);
+        let schema = schema.map(str::to_string);
+        let referenced = referenced.to_vec();
+        self.run(async move { inner.schema_columns(schema.as_deref(), &referenced).await })
+            .await
     }
 
     async fn get_foreign_keys_for_table(

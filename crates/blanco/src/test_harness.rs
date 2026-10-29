@@ -442,16 +442,20 @@ impl LiveServer {
                 gpui_tokio::Tokio::handle(cx),
             )
         });
+        let (user, password, database) = Self::login(db_type);
         let config = ConnectionConfig::new(
             config_id,
             "it-schemas".to_string(),
             db_type,
             "localhost".to_string(),
             port,
-            "blanco".to_string(),
-            "blanco".to_string(),
-            Some("blanco".to_string()),
-        );
+            database.to_string(),
+            user.to_string(),
+            Some(password.to_string()),
+        )
+        // The compose SQL Server presents a self-signed version 1
+        // certificate, which rustls refuses even when it is trusted.
+        .with_trust_server_certificate(db_type == DatabaseType::MsSql);
         let server = Self {
             service,
             handle,
@@ -473,6 +477,14 @@ impl LiveServer {
         }
     }
 
+    /// The user, password and database of the compose server for `db_type`.
+    pub fn login(db_type: DatabaseType) -> (&'static str, &'static str, &'static str) {
+        match db_type {
+            DatabaseType::MsSql => ("sa", "Blanco_Passw0rd!", "master"),
+            _ => ("blanco", "blanco", "blanco"),
+        }
+    }
+
     /// Run `sql`, again when CockroachDB asks for it: schema changes that
     /// other tests make at the same time make it refuse a transaction with
     /// "restart transaction", which its clients are meant to retry. It
@@ -484,7 +496,7 @@ impl LiveServer {
         loop {
             let result = self.handle.block_on(self.service.execute_script(
                 self.config_id,
-                Some("blanco"),
+                Some(Self::login(self.db_type).2),
                 sql,
             ));
             match result {

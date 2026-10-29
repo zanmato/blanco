@@ -179,11 +179,28 @@ impl ClickhouseConnection {
         sql: &str,
         database: Option<&str>,
     ) -> Result<(String, StatementTimer)> {
+        self.raw_query_timed_with_parameters(sql, database, &[])
+            .await
+    }
+
+    /// Like `raw_query_timed`, binding `{name:Type}` placeholders to
+    /// `parameters`, sent as `param_<name>` in the URL.
+    async fn raw_query_timed_with_parameters(
+        &self,
+        sql: &str,
+        database: Option<&str>,
+        parameters: &[(String, String)],
+    ) -> Result<(String, StatementTimer)> {
         let url = self.build_query_url(database, &[]);
+        let parameters: Vec<(String, String)> = parameters
+            .iter()
+            .map(|(name, value)| (format!("param_{name}"), escape_parameter(value)))
+            .collect();
         let mut timer = StatementTimer::start();
         let mut response = self
             .http
             .post(&url)
+            .query(&parameters)
             .body(sql.to_string())
             .send()
             .await
@@ -208,6 +225,18 @@ impl ClickhouseConnection {
     async fn raw_query_tsv(&self, sql: &str, database: Option<&str>) -> Result<TsvResult> {
         let (tsv, _) = self.raw_query_tsv_timed(sql, database).await?;
         Ok(tsv)
+    }
+
+    async fn raw_query_tsv_with_parameters(
+        &self,
+        sql: &str,
+        parameters: &[(String, String)],
+    ) -> Result<TsvResult> {
+        let sql_with_format = format!("{} FORMAT TSVWithNamesAndTypes", sql.trim_end_matches(';'));
+        let (body, _) = self
+            .raw_query_timed_with_parameters(&sql_with_format, None, parameters)
+            .await?;
+        parse_tsv(&body)
     }
 
     async fn raw_query_tsv_timed(
@@ -242,6 +271,15 @@ struct TsvResult {
     columns: Vec<String>,
     column_types: Vec<String>,
     rows: Vec<Vec<Option<String>>>,
+}
+
+/// ClickHouse reads a query parameter's value in its escaped text format,
+/// where a backslash starts an escape sequence.
+fn escape_parameter(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('\t', "\\t")
+        .replace('\n', "\\n")
 }
 
 fn parse_tsv(body: &str) -> Result<TsvResult> {
@@ -746,6 +784,122 @@ mod tests {
                 "ping should fail fast, took {elapsed:?}"
             );
 
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_clickhouse_schema_wide_reads_match_the_per_table_reads()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let rt = tokio::runtime::Runtime::new()?;
+        rt.block_on(async {
+            let test_name = "test_clickhouse_schema_wide_reads_match_the_per_table_reads";
+            let connection_string = env::var("CLICKHOUSE_CONNECTION_STRING").unwrap_or_else(|_| {
+                "http://blanco:blanco@localhost:8124/?database=blanco".to_string()
+            });
+            let mut conn = ClickhouseConnection::from_connection_string(&connection_string)?;
+            if let Err(e) = conn.connect(&connection_string).await {
+                return require_db_or_skip(test_name, &e);
+            }
+
+            // A database of its own, so tables other tests create meanwhile
+            // do not change the set compared.
+            let database = "blanco_schema_graph";
+            let other_database = "blanco_schema_graph_other";
+            conn.execute_script(
+                &format!(
+                    "DROP DATABASE IF EXISTS {database};
+                     DROP DATABASE IF EXISTS {other_database};
+                     CREATE DATABASE {database};
+                     CREATE DATABASE {other_database};
+                     CREATE TABLE {database}.orders (id UInt64, region String, total Decimal(10, 2), note Nullable(String) COMMENT 'Free text')
+                         ENGINE = MergeTree ORDER BY (region, id) COMMENT 'Placed orders';
+                     CREATE TABLE {other_database}.remote (id UInt64 COMMENT 'Remote key', label String)
+                         ENGINE = Memory COMMENT 'Lives elsewhere';
+                     CREATE TABLE {database}.`it's` (key String, value String) ENGINE = MergeTree ORDER BY key;
+                     CREATE TABLE {database}.events (at DateTime) ENGINE = Memory;
+                     CREATE VIEW {database}.big_orders AS SELECT * FROM {database}.orders WHERE total > 100;
+                     CREATE MATERIALIZED VIEW {database}.order_totals ENGINE = MergeTree ORDER BY region
+                         AS SELECT region, sum(total) AS total FROM {database}.orders GROUP BY region;"
+                ),
+                None,
+            )
+            .await?;
+
+            let mut expected = Vec::new();
+            let comments = conn.get_object_comments(Some(database)).await?.relations;
+            for table in conn.get_tables(Some(database)).await? {
+                let columns = conn.get_columns_for_table(&table, Some(database)).await?;
+                expected.push(blanco_core::SchemaTableColumns {
+                    schema: None,
+                    comment: comments.get(&table).cloned(),
+                    table,
+                    columns: columns.into_iter().map(blanco_core::SchemaColumn::from).collect(),
+                });
+            }
+            for (schema, table) in [("system", "one"), (other_database, "remote")] {
+                let columns = conn.get_columns_for_table(table, Some(schema)).await?;
+                let comments = conn.get_object_comments(Some(schema)).await?.relations;
+                expected.push(blanco_core::SchemaTableColumns {
+                    schema: Some(schema.to_string()),
+                    table: table.to_string(),
+                    comment: comments.get(table).cloned(),
+                    columns: columns.into_iter().map(blanco_core::SchemaColumn::from).collect(),
+                });
+            }
+
+            let referenced = [
+                ("system".to_string(), "one".to_string()),
+                ("system".to_string(), "missing\\table".to_string()),
+                (database.to_string(), "missing".to_string()),
+                (other_database.to_string(), "remote".to_string()),
+            ];
+            let result = conn.schema_columns(Some(database), &referenced).await;
+            let keys = conn.schema_foreign_keys(Some(database)).await;
+            conn.execute_script(
+                &format!("DROP DATABASE {database}; DROP DATABASE {other_database};"),
+                None,
+            )
+            .await?;
+
+            let tables = result?;
+            assert_eq!(tables, expected);
+            // The materialized view's storage table (`.inner_id.<uuid>`) is
+            // listed too, as `get_tables` lists it.
+            assert_eq!(
+                tables
+                    .iter()
+                    .map(|table| table.table.as_str())
+                    .filter(|table| !table.starts_with(".inner"))
+                    .collect::<Vec<_>>(),
+                ["events", "it's", "orders", "one", "remote"]
+            );
+            let comments: Vec<_> = tables
+                .iter()
+                .filter(|table| table.table == "orders" || table.table == "remote")
+                .map(|table| {
+                    let column_comments: Vec<_> = table
+                        .columns
+                        .iter()
+                        .map(|column| column.comment.as_deref())
+                        .collect();
+                    (table.comment.as_deref(), column_comments)
+                })
+                .collect();
+            assert_eq!(
+                comments,
+                [
+                    (Some("Placed orders"), vec![None, None, None, Some("Free text")]),
+                    (Some("Lives elsewhere"), vec![Some("Remote key"), None]),
+                ]
+            );
+            let orders_keys: Vec<bool> = tables
+                .iter()
+                .find(|table| table.table == "orders")
+                .map(|table| table.columns.iter().map(|column| column.is_primary_key).collect())
+                .unwrap_or_default();
+            assert_eq!(orders_keys, [true, true, false, false]);
+            assert!(keys?.is_empty());
             Ok(())
         })
     }

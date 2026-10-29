@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use blanco_core::{
     BatchFailure, BatchOutcome, ColumnInfo, Connection, DatabaseType, EntityType,
     ForeignKeyConstraint, ForeignKeyInfo, IndexInfo, ObjectComments, QueryResult, QueryableEntity,
-    WriteOperation,
+    SchemaColumn, SchemaForeignKey, SchemaTableColumns, WriteOperation,
 };
 
 use super::{
@@ -425,6 +425,137 @@ impl Connection for DuckdbConnection {
         Ok(ForeignKeyConstraint::from_column_rows(&rows))
     }
 
+    async fn schema_foreign_keys(&self, schema: Option<&str>) -> Result<Vec<SchemaForeignKey>> {
+        // The rows match `key_columns` for every table at once, so the keys
+        // fold as `get_foreign_keys_for_table` folds them.
+        let rows = self
+            .catalog_rows(
+                "SELECT k.table_name, k.constraint_name, k.referenced_table,
+                        k.constraint_column_names[position + 1],
+                        k.referenced_column_names[position + 1]
+                 FROM duckdb_constraints() k
+                 JOIN duckdb_tables() t
+                   ON t.database_name = k.database_name AND t.schema_name = k.schema_name
+                  AND t.table_name = k.table_name
+                 CROSS JOIN range(len(k.constraint_column_names)) positions(position)
+                 WHERE k.database_name = current_database() AND k.schema_name = ?
+                   AND k.constraint_type = 'FOREIGN KEY'
+                 ORDER BY k.table_name, k.constraint_index, position",
+                vec![schema_or_main(schema)],
+            )
+            .await?;
+        let mut keys: Vec<SchemaForeignKey> = Vec::new();
+        let mut start = 0;
+        while let Some(table) = rows
+            .get(start)
+            .and_then(|row| row.first().cloned().flatten())
+        {
+            let end = rows[start..]
+                .iter()
+                .position(|row| row.first().and_then(Option::as_deref) != Some(table.as_str()))
+                .map_or(rows.len(), |offset| start + offset);
+            let key_rows: Vec<Vec<Option<String>>> = rows[start..end]
+                .iter()
+                .map(|row| {
+                    let get = |index: usize| row.get(index).cloned().flatten();
+                    vec![
+                        Some(get(1).unwrap_or_default()),
+                        None,
+                        get(2),
+                        get(3),
+                        get(4),
+                    ]
+                })
+                .collect();
+            keys.extend(
+                ForeignKeyConstraint::from_column_rows(&key_rows)
+                    .into_iter()
+                    .map(|key| SchemaForeignKey {
+                        table: table.clone(),
+                        key,
+                    }),
+            );
+            start = end;
+        }
+        Ok(keys)
+    }
+
+    async fn schema_columns(
+        &self,
+        schema: Option<&str>,
+        referenced: &[(String, String)],
+    ) -> Result<Vec<SchemaTableColumns>> {
+        let schema = schema_or_main(schema);
+        // Each referenced table is numbered so the result keeps the order
+        // asked for, after the schema's own tables at 0.
+        let referenced_rows: String = (1..=referenced.len())
+            .map(|position| format!(" UNION ALL SELECT {position}, ?, ?"))
+            .collect();
+        let query = format!(
+            "WITH wanted(position, schema_name, table_name) AS (
+                 SELECT 0, NULL::VARCHAR, table_name FROM duckdb_tables()
+                 WHERE database_name = current_database() AND schema_name = ?{referenced_rows}
+             ),
+             primary_key AS (
+                 SELECT schema_name, table_name, unnest(constraint_column_names) AS column_name
+                 FROM duckdb_constraints()
+                 WHERE database_name = current_database() AND constraint_type = 'PRIMARY KEY'
+             )
+             SELECT w.position, w.schema_name, w.table_name, c.column_name, c.data_type,
+                    k.column_name IS NOT NULL, t.comment, c.comment
+             FROM wanted w
+             JOIN duckdb_columns() c
+               ON c.database_name = current_database()
+              AND c.schema_name = coalesce(w.schema_name, ?) AND c.table_name = w.table_name
+             LEFT JOIN duckdb_tables() t
+               ON t.database_name = current_database()
+              AND t.schema_name = c.schema_name AND t.table_name = c.table_name
+             LEFT JOIN (SELECT DISTINCT * FROM primary_key) k
+               ON k.schema_name = c.schema_name AND k.table_name = c.table_name
+              AND k.column_name = c.column_name
+             ORDER BY w.position, w.table_name, c.column_index"
+        );
+        let mut parameters = vec![schema.clone()];
+        parameters.extend(
+            referenced
+                .iter()
+                .flat_map(|(schema, table)| [schema.clone(), table.clone()]),
+        );
+        parameters.push(schema);
+        let rows = self.catalog_rows(query, parameters).await?;
+
+        let mut tables: Vec<(String, SchemaTableColumns)> = Vec::new();
+        for row in rows {
+            let get = |index: usize| row.get(index).cloned().flatten();
+            let (Some(position), Some(table), Some(name)) = (get(0), get(2), get(3)) else {
+                continue;
+            };
+            let column = SchemaColumn {
+                name,
+                data_type: get(4).unwrap_or_default(),
+                is_primary_key: get(5).as_deref() == Some("true"),
+                comment: get(7).filter(|comment| !comment.is_empty()),
+            };
+            match tables.last_mut() {
+                Some((last_position, last))
+                    if *last_position == position && last.table == table =>
+                {
+                    last.columns.push(column);
+                }
+                _ => tables.push((
+                    position,
+                    SchemaTableColumns {
+                        schema: get(1),
+                        table,
+                        comment: get(6).filter(|comment| !comment.is_empty()),
+                        columns: vec![column],
+                    },
+                )),
+            }
+        }
+        Ok(tables.into_iter().map(|(_, table)| table).collect())
+    }
+
     async fn foreign_key_lookup(
         &self,
         table_name: &str,
@@ -455,17 +586,19 @@ struct KeyColumn {
 
 impl DuckdbConnection {
     async fn key_columns(&self, schema: &str, table_name: &str) -> Result<Vec<KeyColumn>> {
-        // Unnesting both lists in one select pairs them by position, and a
-        // primary key's empty referenced list pads with NULL.
+        // Indexing both lists by one position pairs them and keeps key
+        // order through the sort, and a primary key's empty referenced list
+        // gives NULL.
         let rows = self
             .catalog_rows(
                 "SELECT constraint_type, constraint_name,
-                        unnest(constraint_column_names), referenced_table,
-                        unnest(referenced_column_names)
+                        constraint_column_names[position + 1], referenced_table,
+                        referenced_column_names[position + 1]
                  FROM duckdb_constraints()
+                 CROSS JOIN range(len(constraint_column_names)) positions(position)
                  WHERE database_name = current_database() AND schema_name = ? AND table_name = ?
                    AND constraint_type IN ('PRIMARY KEY', 'FOREIGN KEY')
-                 ORDER BY constraint_index",
+                 ORDER BY constraint_index, position",
                 vec![schema.to_string(), table_name.to_string()],
             )
             .await?;
@@ -823,6 +956,149 @@ mod tests {
             .expect("checkpoint");
         let sizes = connection.get_database_sizes().await.expect("sizes");
         assert!(sizes.get("shop").is_some_and(|size| *size > 0), "{sizes:?}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn schema_wide_reads_match_the_per_table_reads() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let connection = open(&dir.path().join("graph.duckdb"), None).await;
+        connection
+            .execute_script(
+                "CREATE SCHEMA sales;
+                 CREATE TABLE sales.regions (code VARCHAR PRIMARY KEY, name VARCHAR);
+                 CREATE TABLE parents (a INTEGER, b VARCHAR, label VARCHAR, PRIMARY KEY (a, b));
+                 CREATE TABLE tags (id INTEGER PRIMARY KEY, name VARCHAR);
+                 CREATE TABLE children (
+                     id INTEGER PRIMARY KEY,
+                     parent_a INTEGER,
+                     parent_b VARCHAR,
+                     tag_id INTEGER REFERENCES tags (id),
+                     FOREIGN KEY (parent_a, parent_b) REFERENCES parents (a, b)
+                 );
+                 CREATE VIEW tag_names AS SELECT name FROM tags;
+                 COMMENT ON TABLE parents IS 'Both halves';
+                 COMMENT ON COLUMN parents.label IS 'Shown name';
+                 COMMENT ON TABLE sales.regions IS 'Sales regions';
+                 COMMENT ON COLUMN sales.regions.name IS 'Region name';",
+                None,
+            )
+            .await
+            .expect("setup");
+        // DuckDB refuses foreign keys across schemas ("not supported"), so
+        // `referenced` is given a table of another schema directly.
+        let mut expected_keys = Vec::new();
+        let mut expected_columns = Vec::new();
+        let comments = connection
+            .get_object_comments(None)
+            .await
+            .expect("comments")
+            .relations;
+        for table in connection.get_tables(None).await.expect("tables") {
+            for key in connection
+                .get_foreign_keys_for_table(&table, None)
+                .await
+                .expect("foreign keys")
+            {
+                expected_keys.push(SchemaForeignKey {
+                    table: table.clone(),
+                    key,
+                });
+            }
+            let columns = connection
+                .get_columns_for_table(&table, None)
+                .await
+                .expect("columns");
+            expected_columns.push(SchemaTableColumns {
+                schema: None,
+                comment: comments.get(&table).cloned(),
+                table,
+                columns: columns.into_iter().map(SchemaColumn::from).collect(),
+            });
+        }
+        let columns = connection
+            .get_columns_for_table("regions", Some("sales"))
+            .await
+            .expect("columns");
+        let sales_comments = connection
+            .get_object_comments(Some("sales"))
+            .await
+            .expect("sales comments")
+            .relations;
+        expected_columns.push(SchemaTableColumns {
+            schema: Some("sales".to_string()),
+            table: "regions".to_string(),
+            comment: sales_comments.get("regions").cloned(),
+            columns: columns.into_iter().map(SchemaColumn::from).collect(),
+        });
+
+        let keys = connection.schema_foreign_keys(None).await.expect("keys");
+        assert_eq!(keys, expected_keys);
+        let children_keys: Vec<_> = keys
+            .iter()
+            .filter(|key| key.table == "children")
+            .map(|key| (key.key.columns.clone(), key.key.referenced_columns.clone()))
+            .collect();
+        assert!(
+            children_keys.contains(&(
+                vec!["parent_a".to_string(), "parent_b".to_string()],
+                vec!["a".to_string(), "b".to_string()]
+            )),
+            "{children_keys:?}"
+        );
+        assert!(
+            children_keys.contains(&(vec!["tag_id".to_string()], vec!["id".to_string()])),
+            "{children_keys:?}"
+        );
+
+        let referenced = [
+            ("sales".to_string(), "regions".to_string()),
+            ("sales".to_string(), "missing".to_string()),
+            ("nowhere".to_string(), "regions".to_string()),
+        ];
+        let columns = connection
+            .schema_columns(None, &referenced)
+            .await
+            .expect("schema columns");
+        assert_eq!(columns, expected_columns);
+        let comments: Vec<_> = columns
+            .iter()
+            .filter(|table| table.table == "parents" || table.table == "regions")
+            .map(|table| {
+                let column_comments: Vec<_> = table
+                    .columns
+                    .iter()
+                    .map(|column| column.comment.as_deref())
+                    .collect();
+                (table.comment.as_deref(), column_comments)
+            })
+            .collect();
+        assert_eq!(
+            comments,
+            [
+                (Some("Both halves"), vec![None, None, Some("Shown name")]),
+                (Some("Sales regions"), vec![None, Some("Region name")]),
+            ]
+        );
+        assert!(
+            columns
+                .iter()
+                .find(|table| table.table == "parents")
+                .is_some_and(
+                    |table| table.columns.iter().filter(|c| c.is_primary_key).count() == 2
+                )
+        );
+
+        let sales_columns = connection
+            .schema_columns(Some("sales"), &[])
+            .await
+            .expect("sales columns");
+        assert_eq!(
+            sales_columns
+                .iter()
+                .map(|table| table.table.as_str())
+                .collect::<Vec<_>>(),
+            ["regions"]
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]

@@ -28,8 +28,9 @@ pub use connection_trait::{
     ConnectionFactory, DatabaseSchemaResult, EntityType, ForeignKeyConstraint, ForeignKeyInfo,
     FunctionSignatureInfo, InboundForeignKey, IndexInfo, KeyListing, KeyValueResult, LastModified,
     ObjectComments, ObjectKind, PaginationInfo, QueryResult, QueryTiming, QueryableEntity,
-    RedisType, RedisValue, ResultPayload, StatementTimer, TableInfo, TableMetadata, TableParent,
-    TableSchemaInfo, WriteOperation, sizes_from_rows,
+    RedisType, RedisValue, ResultPayload, SchemaColumn, SchemaForeignKey, SchemaTableColumns,
+    StatementTimer, TableInfo, TableMetadata, TableParent, TableSchemaInfo, WriteOperation,
+    sizes_from_rows,
 };
 
 pub use connection_context::{
