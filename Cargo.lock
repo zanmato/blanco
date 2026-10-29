@@ -319,7 +319,7 @@ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
 name = "app-database"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "blanco-core",
@@ -1065,7 +1065,7 @@ dependencies = [
 
 [[package]]
 name = "blanco"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "ahash 0.8.11",
  "anyhow",
@@ -1133,7 +1133,7 @@ dependencies = [
 
 [[package]]
 name = "blanco-clipboard"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "objc2-app-kit 0.3.2",
@@ -1185,7 +1185,7 @@ dependencies = [
 
 [[package]]
 name = "blanco-terminal"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
@@ -8139,7 +8139,7 @@ dependencies = [
 
 [[package]]
 name = "scripting"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "blanco-core",
@@ -8671,7 +8671,7 @@ dependencies = [
 
 [[package]]
 name = "sql-parser"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "blanco-core",
  "ropey",
@@ -9929,7 +9929,7 @@ dependencies = [
 
 [[package]]
 name = "transformers"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "blanco-core",
  "serde",
@@ -10348,7 +10348,7 @@ dependencies = [
 
 [[package]]
 name = "vsx-themes"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "gpui-component",
