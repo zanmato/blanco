@@ -202,8 +202,9 @@ fn keystroke_hint(action: &str, cx: &App) -> KeybindingKeystroke {
         .split_whitespace()
         .next()
         .unwrap_or(crate::keybindings::default_keystroke(action));
-    let keystroke = Keystroke::parse(chord)
-        .or_else(|_| Keystroke::parse(crate::keybindings::default_keystroke(action)))
+    let os = cx.platform_info().os;
+    let keystroke = Keystroke::parse_with_os(chord, os)
+        .or_else(|_| Keystroke::parse_with_os(crate::keybindings::default_keystroke(action), os))
         .unwrap_or_default();
     KeybindingKeystroke::from_keystroke(keystroke)
 }
@@ -698,10 +699,7 @@ impl EditorPanel {
         // Settings are now stored in the global AppDatabase
         let settings_view = cx.new(SettingsView::new);
 
-        let settings_tab = SettingsTab {
-            title: "Settings".to_string(),
-            settings_view,
-        };
+        let settings_tab = SettingsTab { settings_view };
 
         self.tabs.push(TabType::Settings(settings_tab));
         self.active_tab_ix = self.tabs.len() - 1;
@@ -915,7 +913,8 @@ impl EditorPanel {
                     window.push_notification(
                         (
                             gpui_component::notification::NotificationType::Error,
-                            format!("Could not start a terminal: {error:#}"),
+                            t!("editor.terminal_start_failed", error = format!("{error:#}"))
+                                .into_owned(),
                         ),
                         cx,
                     );
@@ -1592,11 +1591,19 @@ impl EditorPanel {
             let connection_name = query_tab.context.connection_name.clone();
             self.confirm_prod_write(
                 ProdWritePrompt {
-                    title: format!("Commit edits to {environment}?"),
-                    message: format!(
-                        "\"{connection_name}\" is tagged {environment}. The pending grid edits will be written to it."
-                    ),
-                    confirm_label: format!("Commit to {environment}"),
+                    title: t!("editor.prod_write.commit_title", environment = environment)
+                        .into_owned(),
+                    message: t!(
+                        "editor.prod_write.commit_message",
+                        connection = connection_name,
+                        environment = environment
+                    )
+                    .into_owned(),
+                    confirm_label: t!(
+                        "editor.prod_write.commit_confirm",
+                        environment = environment
+                    )
+                    .into_owned(),
                     tab_index: self.active_tab_ix,
                 },
                 |panel, window, cx| panel.commit_current_changes_unchecked(window, cx),
@@ -1678,8 +1685,11 @@ impl EditorPanel {
                 .footer(
                     DialogFooter::new()
                         .child(
-                            DialogClose::new()
-                                .child(Button::new("prod-write-cancel").label("Cancel").outline()),
+                            DialogClose::new().child(
+                                Button::new("prod-write-cancel")
+                                    .label(t!("editor.cancel"))
+                                    .outline(),
+                            ),
                         )
                         // Two `DialogAction` siblings share one element id and
                         // therefore one click state, so only one of them would
@@ -1687,7 +1697,7 @@ impl EditorPanel {
                         .child(
                             Button::new("prod-write-confirm-remember")
                                 .outline()
-                                .label("Don't ask again for this tab")
+                                .label(t!("editor.prod_write.dont_ask_again"))
                                 .on_click(move |_, window, cx| run_and_remember(true, window, cx)),
                         )
                         .child(
@@ -1721,7 +1731,7 @@ impl EditorPanel {
             // any edited cell, so cell edits alone cannot decide emptiness.
             let has_pending = query_tab.results_panel.read(cx).has_pending_edits(cx);
             if changes.is_empty() && !has_pending {
-                window.push_notification("No changes to commit", cx);
+                window.push_notification(t!("editor.grid.no_changes_to_commit"), cx);
                 return;
             }
 
@@ -1730,7 +1740,15 @@ impl EditorPanel {
                 panel.commit_changes_with_sql_view(window, &query_tab.sql_view, cx);
             });
 
-            window.push_notification(format!("Committing {} changes", changes.len()), cx);
+            let message = if changes.len() == 1 {
+                t!("editor.grid.committing_changes_one")
+            } else {
+                t!(
+                    "editor.grid.committing_changes_other",
+                    count = changes.len()
+                )
+            };
+            window.push_notification(message, cx);
         }
     }
 
@@ -1741,7 +1759,7 @@ impl EditorPanel {
                 panel.cancel_all_edits(cx);
             });
 
-            window.push_notification("Changes rolled back", cx);
+            window.push_notification(t!("editor.grid.changes_rolled_back"), cx);
         }
     }
 

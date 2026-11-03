@@ -1,0 +1,19 @@
+_version: 2
+# Messages the Redis driver writes around the server's errors. See the
+# glossary at the top of crates/blanco/locales/app.yml.
+redis:
+  unbalanced_quotes:
+    en: "unbalanced quotes in command"
+    sv: "citattecknen i kommandot är inte balanserade"
+  invalid_url:
+    en: "invalid Redis connection URL: %{error}"
+    sv: "ogiltig anslutnings-URL för Redis: %{error}"
+  client_failed:
+    en: "failed to build Redis client: %{error}"
+    sv: "det gick inte att skapa Redis-klienten: %{error}"
+  empty_command:
+    en: "empty command"
+    sv: "tomt kommando"
+  no_command:
+    en: "no command to run"
+    sv: "inget kommando att köra"

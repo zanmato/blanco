@@ -47,16 +47,16 @@ impl TimeRange {
         TimeRange::AllTime,
     ];
 
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> std::borrow::Cow<'static, str> {
         match self {
-            TimeRange::LastHour => "Last hour",
-            TimeRange::Last6Hours => "Last 6 hours",
-            TimeRange::Last24Hours => "Last 24 hours",
-            TimeRange::Last7Days => "Last 7 days",
-            TimeRange::Last30Days => "Last 30 days",
-            TimeRange::Last90Days => "Last 90 days",
-            TimeRange::LastYear => "Last year",
-            TimeRange::AllTime => "All time",
+            TimeRange::LastHour => t!("dashboard.time_range.last_hour"),
+            TimeRange::Last6Hours => t!("dashboard.time_range.last_6_hours"),
+            TimeRange::Last24Hours => t!("dashboard.time_range.last_24_hours"),
+            TimeRange::Last7Days => t!("dashboard.time_range.last_7_days"),
+            TimeRange::Last30Days => t!("dashboard.time_range.last_30_days"),
+            TimeRange::Last90Days => t!("dashboard.time_range.last_90_days"),
+            TimeRange::LastYear => t!("dashboard.time_range.last_year"),
+            TimeRange::AllTime => t!("dashboard.time_range.all_time"),
         }
     }
 

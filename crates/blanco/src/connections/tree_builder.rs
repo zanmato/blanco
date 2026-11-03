@@ -50,7 +50,11 @@ impl ConnectionsPanel {
         };
 
         let label = if connection.is_temporary() {
-            format!("{} (unsaved)", connection.display_name())
+            t!(
+                "sidebar.tree.unsaved_connection",
+                name = connection.display_name()
+            )
+            .into_owned()
         } else {
             connection.display_name()
         };
@@ -258,7 +262,7 @@ impl ConnectionsPanel {
         CATEGORY_ORDER
             .iter()
             .copied()
-            .filter_map(|(item_type, label, slug)| {
+            .filter_map(|(item_type, slug)| {
                 let category_children: Vec<TreeItem<TreeItemMetadata>> = children
                     .iter()
                     .filter(|(kind, _)| *kind == item_type)
@@ -268,13 +272,7 @@ impl ConnectionsPanel {
                     return None;
                 }
 
-                // The "Tables" folder is relabeled per backend (e.g. "Keys" for
-                // Redis); other categories keep their static label.
-                let label = if item_type == DatabaseItemType::Table {
-                    db_type.primary_object_category_label()
-                } else {
-                    label
-                };
+                let label = category_label(item_type, db_type);
 
                 let category_key = format!("{category_key_prefix}:{slug}");
                 // Tables are expanded by default; everything else is collapsed.
@@ -339,31 +337,45 @@ impl ConnectionsPanel {
 pub(super) fn category_slug(item_type: DatabaseItemType) -> &'static str {
     CATEGORY_ORDER
         .iter()
-        .find(|(kind, _, _)| *kind == item_type)
-        .map(|(_, _, slug)| *slug)
+        .find(|(kind, _)| *kind == item_type)
+        .map(|(_, slug)| *slug)
         .unwrap_or("tables")
 }
 
-const CATEGORY_ORDER: &[(DatabaseItemType, &str, &str)] = &[
-    (DatabaseItemType::Table, "Tables", "tables"),
-    (DatabaseItemType::View, "Views", "views"),
-    (
-        DatabaseItemType::MaterializedView,
-        "Materialized Views",
-        "matviews",
-    ),
-    (DatabaseItemType::Function, "Functions", "functions"),
-    (DatabaseItemType::Procedure, "Procedures", "procedures"),
-    (DatabaseItemType::Trigger, "Triggers", "triggers"),
-    (DatabaseItemType::Enum, "Enums", "enums"),
-    (
-        DatabaseItemType::CompositeType,
-        "Composite Types",
-        "composite_types",
-    ),
-    (DatabaseItemType::Domain, "Domains", "domains"),
-    (DatabaseItemType::Sequence, "Sequences", "sequences"),
+const CATEGORY_ORDER: &[(DatabaseItemType, &str)] = &[
+    (DatabaseItemType::Table, "tables"),
+    (DatabaseItemType::View, "views"),
+    (DatabaseItemType::MaterializedView, "matviews"),
+    (DatabaseItemType::Function, "functions"),
+    (DatabaseItemType::Procedure, "procedures"),
+    (DatabaseItemType::Trigger, "triggers"),
+    (DatabaseItemType::Enum, "enums"),
+    (DatabaseItemType::CompositeType, "composite_types"),
+    (DatabaseItemType::Domain, "domains"),
+    (DatabaseItemType::Sequence, "sequences"),
 ];
+
+/// The name shown on the folder holding objects of `item_type`. The folder of
+/// tables lists keys on key/value backends.
+fn category_label(
+    item_type: DatabaseItemType,
+    db_type: database::DatabaseType,
+) -> gpui::SharedString {
+    match item_type {
+        DatabaseItemType::Table if !db_type.supports_sql() => t!("sidebar.category.keys"),
+        DatabaseItemType::Table => t!("sidebar.category.tables"),
+        DatabaseItemType::View => t!("sidebar.category.views"),
+        DatabaseItemType::MaterializedView => t!("sidebar.category.materialized_views"),
+        DatabaseItemType::Function => t!("sidebar.category.functions"),
+        DatabaseItemType::Procedure => t!("sidebar.category.procedures"),
+        DatabaseItemType::Trigger => t!("sidebar.category.triggers"),
+        DatabaseItemType::Enum => t!("sidebar.category.enums"),
+        DatabaseItemType::CompositeType => t!("sidebar.category.composite_types"),
+        DatabaseItemType::Domain => t!("sidebar.category.domains"),
+        DatabaseItemType::Sequence => t!("sidebar.category.sequences"),
+    }
+    .into()
+}
 
 /// Build a leaf tree item for a single database object, paired with its type so
 /// it can later be grouped into the matching category folder.

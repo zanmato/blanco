@@ -20,12 +20,12 @@ impl TextEncoding {
         TextEncoding::Utf16Be,
     ];
 
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> std::borrow::Cow<'static, str> {
         match self {
-            TextEncoding::Utf8 => "UTF-8",
-            TextEncoding::Utf8Bom => "UTF-8 with BOM",
-            TextEncoding::Utf16Le => "UTF-16 LE",
-            TextEncoding::Utf16Be => "UTF-16 BE",
+            TextEncoding::Utf8 => "UTF-8".into(),
+            TextEncoding::Utf8Bom => t!("transformers.utf8_with_bom"),
+            TextEncoding::Utf16Le => "UTF-16 LE".into(),
+            TextEncoding::Utf16Be => "UTF-16 BE".into(),
         }
     }
 

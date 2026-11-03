@@ -53,24 +53,24 @@ impl FilterOperator {
     ];
 
     /// The label shown in the operator menu.
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> std::borrow::Cow<'static, str> {
         match self {
-            Self::Equals => "=",
-            Self::NotEquals => "<>",
-            Self::Less => "<",
-            Self::LessOrEqual => "<=",
-            Self::Greater => ">",
-            Self::GreaterOrEqual => ">=",
-            Self::Contains => "contains",
-            Self::NotContains => "does not contain",
-            Self::StartsWith => "starts with",
-            Self::EndsWith => "ends with",
-            Self::Like => "LIKE",
-            Self::NotLike => "NOT LIKE",
-            Self::In => "IN",
-            Self::NotIn => "NOT IN",
-            Self::IsNull => "IS NULL",
-            Self::IsNotNull => "IS NOT NULL",
+            Self::Equals => "=".into(),
+            Self::NotEquals => "<>".into(),
+            Self::Less => "<".into(),
+            Self::LessOrEqual => "<=".into(),
+            Self::Greater => ">".into(),
+            Self::GreaterOrEqual => ">=".into(),
+            Self::Contains => t!("blanco_core.filter.contains"),
+            Self::NotContains => t!("blanco_core.filter.does_not_contain"),
+            Self::StartsWith => t!("blanco_core.filter.starts_with"),
+            Self::EndsWith => t!("blanco_core.filter.ends_with"),
+            Self::Like => "LIKE".into(),
+            Self::NotLike => "NOT LIKE".into(),
+            Self::In => "IN".into(),
+            Self::NotIn => "NOT IN".into(),
+            Self::IsNull => "IS NULL".into(),
+            Self::IsNotNull => "IS NOT NULL".into(),
         }
     }
 
@@ -385,30 +385,32 @@ impl Dialect {
     /// a second statement.
     pub fn with_filter(&self, query: &str, predicate: &str) -> Result<String, String> {
         let dialect = self.sqlparser_dialect();
-        let mut statements = Parser::parse_sql(&*dialect, query)
-            .map_err(|error| format!("The query cannot be filtered: {error}"))?;
+        let mut statements = Parser::parse_sql(&*dialect, query).map_err(|error| {
+            t!("blanco_core.filter.query_not_filterable", error = error).into_owned()
+        })?;
         let [statement] = statements.as_mut_slice() else {
-            return Err("Only a single SELECT can be filtered".to_string());
+            return Err(t!("blanco_core.filter.single_select_only").into_owned());
         };
         let Statement::Query(select_query) = statement else {
-            return Err("Only a SELECT can be filtered".to_string());
+            return Err(t!("blanco_core.filter.select_only").into_owned());
         };
         let SetExpr::Select(select) = select_query.body.as_mut() else {
-            return Err("Only a plain SELECT can be filtered".to_string());
+            return Err(t!("blanco_core.filter.plain_select_only").into_owned());
         };
 
         let mut parser = Parser::new(&*dialect)
             .try_with_sql(predicate)
-            .map_err(|error| format!("Invalid filter: {error}"))?;
+            .map_err(|error| t!("blanco_core.filter.invalid", error = error).into_owned())?;
         let filter = parser
             .parse_expr()
-            .map_err(|error| format!("Invalid filter: {error}"))?;
+            .map_err(|error| t!("blanco_core.filter.invalid", error = error).into_owned())?;
         let rest = parser.peek_token();
         if rest.token != Token::EOF {
-            return Err(format!(
-                "Invalid filter: unexpected {} after the condition",
-                rest.token
-            ));
+            return Err(t!(
+                "blanco_core.filter.unexpected_after_condition",
+                token = rest.token
+            )
+            .into_owned());
         }
 
         select.selection = Some(match select.selection.take() {

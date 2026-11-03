@@ -148,7 +148,7 @@ mod tests {
     use super::*;
 
     fn keystroke(text: &str) -> Keystroke {
-        Keystroke::parse(text).expect("keystroke parses")
+        Keystroke::parse_with_os(text, gpui::OperatingSystem::Linux).expect("keystroke parses")
     }
 
     fn encoded(text: &str, mode: TermMode) -> Vec<u8> {

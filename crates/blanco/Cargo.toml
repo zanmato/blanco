@@ -36,6 +36,10 @@ database = { path = "../database" }
 
 # Additional dependencies
 smol = { workspace = true }
+# The same version gpui-component uses, so `rust_i18n::extend!` can give it
+# Blanco's translations and one `set_locale` switches both.
+rust-i18n = "4.2"
+sys-locale = "0.3"
 url = { workspace = true }
 dirs = { workspace = true }
 rust-embed = { workspace = true }

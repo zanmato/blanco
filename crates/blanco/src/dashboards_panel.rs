@@ -25,9 +25,6 @@ use crate::result_ext::ResultExt as _;
 
 const ROW_HEIGHT: gpui::Pixels = px(28.);
 
-/// The name a dashboard made from the sidebar starts with, renamed at once.
-const NEW_DASHBOARD_NAME: &str = "New Dashboard";
-
 /// The name field shown in place of a dashboard's name while it is renamed.
 struct Renaming {
     id: i64,
@@ -49,7 +46,8 @@ impl DashboardsPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let filter_input = cx.new(|cx| InputState::new(window, cx).placeholder("Filter"));
+        let filter_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder(t!("sidebar.filter")));
         let subscriptions = vec![
             // The active tab decides which dashboard is marked.
             cx.observe(&editor_panel, |_, _, cx| cx.notify()),
@@ -59,6 +57,7 @@ impl DashboardsPanel {
                     cx.notify();
                 }
             }),
+            crate::i18n::placeholder_follows_locale(&filter_input, "sidebar.filter", window, cx),
         ];
         Self {
             editor_panel,
@@ -73,8 +72,10 @@ impl DashboardsPanel {
     fn create_dashboard(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let database = AppDatabase::global(cx).clone();
         let editor = self.editor_panel.downgrade();
+        // The name a dashboard made from the sidebar starts with, renamed at once.
+        let name = t!("sidebar.dashboards.new_dashboard_name").into_owned();
         cx.spawn_in(window, async move |this, cx| {
-            let created = database.create_dashboard(NEW_DASHBOARD_NAME, None).await;
+            let created = database.create_dashboard(&name, None).await;
             this.update_in(cx, |_, window, cx| match created {
                 Ok(dashboard_id) => {
                     DashboardDirectory::reload(cx);
@@ -85,13 +86,13 @@ impl DashboardsPanel {
                         .log_err();
                     // After the tab took focus, so the field keeps it.
                     cx.defer_in(window, move |this, window, cx| {
-                        this.start_rename(dashboard_id, NEW_DASHBOARD_NAME.to_string(), window, cx)
+                        this.start_rename(dashboard_id, name, window, cx)
                     });
                 }
                 Err(error) => window.push_notification(
                     (
                         NotificationType::Error,
-                        format!("The dashboard was not created: {error}"),
+                        t!("sidebar.dashboards.create_failed", error = error),
                     ),
                     cx,
                 ),
@@ -238,29 +239,37 @@ impl DashboardsPanel {
                 let rename_name = rename_name.clone();
                 let open = open_from_menu.clone();
                 let panel = panel.clone();
-                menu.item(PopupMenuItem::new("Open").on_click(move |_, window, cx| {
-                    open.update(cx, |editor, cx| {
-                        editor.open_dashboard_tab(id, window, cx);
-                    })
-                    .log_err();
-                }))
-                .item(PopupMenuItem::new("Rename").on_click(move |_, window, cx| {
-                    let name = rename_name.clone();
-                    // Once the menu has closed, since closing it gives focus
-                    // back to where it was.
-                    panel
-                        .update(cx, |_, cx| {
-                            cx.defer_in(window, move |panel, window, cx| {
-                                panel.start_rename(id, name, window, cx)
-                            });
+                menu.item(PopupMenuItem::new(t!("sidebar.dashboards.open")).on_click(
+                    move |_, window, cx| {
+                        open.update(cx, |editor, cx| {
+                            editor.open_dashboard_tab(id, window, cx);
                         })
                         .log_err();
-                }))
+                    },
+                ))
+                .item(
+                    PopupMenuItem::new(t!("sidebar.dashboards.rename")).on_click(
+                        move |_, window, cx| {
+                            let name = rename_name.clone();
+                            // Once the menu has closed, since closing it gives focus
+                            // back to where it was.
+                            panel
+                                .update(cx, |_, cx| {
+                                    cx.defer_in(window, move |panel, window, cx| {
+                                        panel.start_rename(id, name, window, cx)
+                                    });
+                                })
+                                .log_err();
+                        },
+                    ),
+                )
                 .separator()
                 .item(
-                    PopupMenuItem::new("Delete…").on_click(move |_, window, cx| {
-                        confirm_delete_dashboard(id, delete_name.clone(), window, cx);
-                    }),
+                    PopupMenuItem::new(t!("sidebar.dashboards.delete")).on_click(
+                        move |_, window, cx| {
+                            confirm_delete_dashboard(id, delete_name.clone(), window, cx);
+                        },
+                    ),
                 )
             })
     }
@@ -311,7 +320,7 @@ impl Render for DashboardsPanel {
                             .ghost()
                             .small()
                             .icon(IconName::Plus)
-                            .tooltip("New Dashboard")
+                            .tooltip(t!("sidebar.dashboards.new_dashboard"))
                             .on_click(
                                 cx.listener(|this, _, window, cx| {
                                     this.create_dashboard(window, cx)
@@ -332,11 +341,8 @@ impl Render for DashboardsPanel {
                                 .gap_2()
                                 .text_sm()
                                 .text_color(muted)
-                                .child("No dashboards yet.")
-                                .child(
-                                    "Create one here, or run a query and pick New Dashboard \
-                                     under the dashboard button in its results.",
-                                ),
+                                .child(t!("sidebar.dashboards.empty"))
+                                .child(t!("sidebar.dashboards.empty_hint")),
                         )
                     })
                     .child(

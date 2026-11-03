@@ -45,7 +45,7 @@ impl MysqlConnection {
         let query_result = self
             .execute_query(&query, None, Some(&params))
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to get MySQL schema: {}", e))?;
+            .map_err(|e| anyhow::anyhow!(t!("mysql.schema_failed", error = e)))?;
 
         let mut tables = Vec::new();
         for row in &query_result.rows {

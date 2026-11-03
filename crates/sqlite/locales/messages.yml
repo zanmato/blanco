@@ -1,0 +1,16 @@
+_version: 2
+# Messages the SQLite driver writes around the engine's errors. See the
+# glossary at the top of crates/blanco/locales/app.yml.
+sqlite:
+  not_connected:
+    en: "Not connected to database"
+    sv: "Inte ansluten till databasen"
+  not_established:
+    en: "SQLite connection not established"
+    sv: "Anslutningen till SQLite har inte upprättats"
+  table_not_found:
+    en: "Table '%{table}' not found"
+    sv: "Tabellen '%{table}' hittades inte"
+  fetch_row_failed:
+    en: "Failed to fetch row: %{error}"
+    sv: "Det gick inte att hämta raden: %{error}"

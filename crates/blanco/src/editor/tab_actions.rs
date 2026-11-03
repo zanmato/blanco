@@ -137,7 +137,7 @@ impl EditorPanel {
             return;
         };
         let params = TabCreationParams {
-            title: format!("{} copy", base.title),
+            title: t!("editor.tab_copy_title", title = base.title).into_owned(),
             content: Some(base.editor.read(cx).text().to_string()),
             db_id: None,
             last_run_at: None,
@@ -316,17 +316,17 @@ impl EditorPanel {
         cx: &mut Context<Self>,
     ) {
         let title = match unsaved.as_slice() {
-            [(_, name)] => format!("Save changes to {name}?"),
-            _ => format!("Save changes to {} tabs?", unsaved.len()),
+            [(_, name)] => t!("editor.unsaved.save_changes_to", name = name),
+            _ => t!("editor.unsaved.save_changes_to_tabs", count = unsaved.len()),
         };
         let names: Vec<String> = match unsaved.as_slice() {
             [_] => Vec::new(),
             _ => unsaved.iter().map(|(_, name)| name.clone()).collect(),
         };
-        let save_label = if unsaved.len() > 1 {
-            "Save All"
+        let save_label: gpui::SharedString = if unsaved.len() > 1 {
+            t!("editor.unsaved.save_all").into()
         } else {
-            "Save"
+            t!("editor.unsaved.save").into()
         };
         let has_structure = unsaved.iter().any(|(id, _)| {
             self.tabs
@@ -360,31 +360,32 @@ impl EditorPanel {
                                     .child(name.clone())
                             })))
                         })
-                        .child("Your changes are lost if you close without saving.")
+                        .child(t!("editor.unsaved.tabs_message"))
                         .when(has_structure, |this| {
-                            this.child(
-                                "Tables with structure changes not yet applied stay open when you save.",
-                            )
+                            this.child(t!("editor.unsaved.structure_stays_open"))
                         }),
                 )
                 .footer(
                     DialogFooter::new()
                         .child(
-                            DialogClose::new()
-                                .child(Button::new("close-tabs-cancel").label("Cancel").outline()),
+                            DialogClose::new().child(
+                                Button::new("close-tabs-cancel")
+                                    .label(t!("editor.cancel"))
+                                    .outline(),
+                            ),
                         )
                         // Sibling `DialogAction`s share a click state, so the
                         // buttons close the dialog themselves.
                         .child(
                             Button::new("close-tabs-discard")
                                 .outline()
-                                .label("Don't Save")
+                                .label(t!("editor.unsaved.dont_save"))
                                 .on_click(move |_, window, cx| discard(false, window, cx)),
                         )
                         .child(
                             Button::new("close-tabs-save")
                                 .primary()
-                                .label(save_label)
+                                .label(save_label.clone())
                                 .on_click(move |_, window, cx| save(true, window, cx)),
                         ),
                 )

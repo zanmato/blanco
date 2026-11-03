@@ -5,6 +5,8 @@ edition = "2024"
 description = "PostgreSQL database implementation for Blanco SQL editor"
 
 [dependencies]
+# The interface language, a process global the app sets at startup.
+rust-i18n = "4.2"
 # Core dependencies
 blanco-core = { path = "../blanco-core", features = ["sqlx"] }
 anyhow = { workspace = true }

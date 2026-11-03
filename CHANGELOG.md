@@ -2,6 +2,34 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Features
+
+- Blanco speaks Swedish. The Language setting in General picks English or
+  Swedish, or follows the system, and a change applies at once, without a
+  restart. Dialogs open at the time switch when they are next opened
+
+### Changes
+
+- Rows in a result grid are picked as in Finder: Shift selects the rows from
+  the last clicked one, ⌘ on macOS and Ctrl elsewhere adds or removes a row,
+  and both together add a range. Ctrl click on macOS no longer picks rows
+- A right click on a cell outside the selection selects that cell, so Copy
+  As and the other actions in its menu act on it. Inside a selection the
+  selection stays
+- The arrow keys move one row from the last clicked row, and Left and Right
+  step from a selected row into its cells
+- With a cell selected, Duplicate Row and Delete Row act on the cell's row
+- The process list keeps every selected session selected when it refreshes
+
+### Fixes
+
+- Shift clicking rows after Select All and a click on a cell selected every
+  row again
+- Copy As and Export As used rows selected earlier instead of the selected
+  cell's row
+
 ## [0.1.6] - 2026-10-29
 
 ### Features

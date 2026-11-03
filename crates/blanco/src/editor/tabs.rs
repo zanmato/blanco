@@ -188,11 +188,12 @@ impl TabType {
         match self {
             TabType::Query(tab) => tab.title.clone(),
             TabType::Script(tab) => tab.title.clone(),
-            TabType::Settings(tab) => tab.title.clone(),
+            // Named in the current language, which can change while it is open.
+            TabType::Settings(_) => t!("editor.settings_tab_title").into_owned(),
             TabType::Snippet(editor) => editor.read(cx).get_title(),
             TabType::TableStructure(tab) => tab.read(cx).title.clone(),
-            TabType::ObjectDdl(tab) => tab.read(cx).title.clone(),
-            TabType::SchemaGraph(tab) => tab.read(cx).title.clone(),
+            TabType::ObjectDdl(tab) => tab.read(cx).title(),
+            TabType::SchemaGraph(tab) => tab.read(cx).title(),
             TabType::ProcessList(tab) => tab.read(cx).title.clone(),
             TabType::Dashboard(tab) => tab.read(cx).title.clone(),
         }
@@ -297,7 +298,6 @@ impl TabType {
 }
 
 pub struct SettingsTab {
-    pub title: String,
     pub settings_view: Entity<SettingsView>,
 }
 

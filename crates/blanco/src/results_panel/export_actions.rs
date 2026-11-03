@@ -79,7 +79,8 @@ impl ResultsPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let selected_rows = self.table_state.read(cx).selected_rows().clone();
+        // Selected rows, or the row of a selected cell.
+        let selected_rows = self.table_state.read(cx).selection().rows();
 
         if selected_rows.is_empty() {
             tracing::error!(
@@ -186,10 +187,15 @@ impl ResultsPanel {
                                 window.push_notification(
                                     (
                                         NotificationType::Success,
-                                        SharedString::from(format!(
-                                            "Exported {} rows to {}",
-                                            rows_exported, file_path
-                                        )),
+                                        SharedString::from(if rows_exported == 1 {
+                                            t!("results.export.exported_one", path = file_path)
+                                        } else {
+                                            t!(
+                                                "results.export.exported_other",
+                                                rows = rows_exported,
+                                                path = file_path
+                                            )
+                                        }),
                                     ),
                                     cx,
                                 );
@@ -207,7 +213,7 @@ impl ResultsPanel {
                             window.push_notification(
                                 (
                                     NotificationType::Error,
-                                    SharedString::from(format!("Export failed: {}", e)),
+                                    SharedString::from(t!("results.export.failed", error = e)),
                                 ),
                                 cx,
                             );

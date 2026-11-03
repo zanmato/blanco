@@ -1,0 +1,495 @@
+_version: 2
+# Dashboards and the chart view of results. Terms follow the glossary in
+# app.yml: dashboard instrumentpanel, panel panel, chart diagram,
+# stat nyckeltal, time range tidsintervall, variable variabel,
+# refresh uppdatera. $__timeFilter and the $name syntax stay as written.
+dashboard:
+  default_title:
+    en: "Dashboard"
+    sv: "Instrumentpanel"
+  cancel:
+    en: "Cancel"
+    sv: "Avbryt"
+  save:
+    en: "Save"
+    sv: "Spara"
+  create:
+    en: "Create"
+    sv: "Skapa"
+  rename:
+    en: "Rename"
+    sv: "Byt namn"
+  delete:
+    en: "Delete"
+    sv: "Ta bort"
+  refresh:
+    en: "Refresh"
+    sv: "Uppdatera"
+  refreshing:
+    en: "Refreshing…"
+    sv: "Uppdaterar…"
+  refreshed_at:
+    en: "Refreshed %{time}"
+    sv: "Uppdaterad %{time}"
+  add_panel:
+    en: "Add Panel"
+    sv: "Lägg till panel"
+  add_panel_title:
+    en: "Add Panel"
+    sv: "Lägg till panel"
+  write_query:
+    en: "Write Query"
+    sv: "Skriv fråga"
+  add_variable:
+    en: "Add Variable…"
+    sv: "Lägg till variabel…"
+  delete_dashboard:
+    en: "Delete Dashboard…"
+    sv: "Ta bort instrumentpanel…"
+  delete_title:
+    en: "Delete Dashboard"
+    sv: "Ta bort instrumentpanel"
+  delete_confirm:
+    en: "Delete \"%{name}\" and its panels? The queries they ran are not kept anywhere else."
+    sv: "Ta bort ”%{name}” och dess paneler? Frågorna de körde sparas inte någon annanstans."
+  new_dashboard_title:
+    en: "New Dashboard"
+    sv: "Ny instrumentpanel"
+  rename_panel_title:
+    en: "Rename Panel"
+    sv: "Byt namn på panel"
+  create_failed:
+    en: "The dashboard was not created: %{error}"
+    sv: "Instrumentpanelen skapades inte: %{error}"
+  deleted:
+    en: "This dashboard was deleted."
+    sv: "Den här instrumentpanelen har tagits bort."
+  load_failed:
+    en: "The dashboard did not load: %{error}"
+    sv: "Instrumentpanelen kunde inte läsas in: %{error}"
+  closed:
+    en: "The dashboard was closed"
+    sv: "Instrumentpanelen stängdes"
+  query_timed_out:
+    en: "The query exceeded the configured %{seconds}s timeout"
+    sv: "Frågan överskred den inställda tidsgränsen på %{seconds} s"
+  could_not_connect:
+    en: "Could not connect: %{error}"
+    sv: "Kunde inte ansluta: %{error}"
+  no_result_to_show:
+    en: "The query returned no result to show."
+    sv: "Frågan gav inget resultat att visa."
+  connections_load_failed:
+    en: "The connections did not load: %{error}"
+    sv: "Anslutningarna kunde inte läsas in: %{error}"
+  add_connection_first:
+    en: "Add a connection first: a panel runs its query on one."
+    sv: "Lägg till en anslutning först. En panel kör sin fråga på en anslutning."
+  pick_connection:
+    en: "Pick the connection to run on."
+    sv: "Välj anslutningen att köra på."
+  panel_connection_deleted_edit:
+    en: "The panel's connection was deleted, so its query has nowhere to run."
+    sv: "Panelens anslutning har tagits bort, så dess fråga har ingenstans att köras."
+  run_query_first:
+    en: "Run a query first: a panel shows the result of the query it ran."
+    sv: "Kör en fråga först. En panel visar resultatet av frågan den körde."
+  run_cancelled:
+    en: "the query was cancelled"
+    sv: "frågan avbröts"
+  write_not_confirmed:
+    en: "the write on PROD was not confirmed"
+    sv: "skrivningen i PROD bekräftades inte"
+  nothing_saved:
+    en: "Nothing was saved to the dashboard: %{error}"
+    sv: "Inget sparades i instrumentpanelen: %{error}"
+  panel_added:
+    en: "Added \"%{panel}\" to %{dashboard}"
+    sv: "Lade till ”%{panel}” i %{dashboard}"
+  panel_add_failed:
+    en: "The panel was not added: %{error}"
+    sv: "Panelen lades inte till: %{error}"
+  panel_saved:
+    en: "Saved \"%{panel}\" on %{dashboard}"
+    sv: "Sparade ”%{panel}” i %{dashboard}"
+  panel_save_failed:
+    en: "The panel was not saved: %{error}"
+    sv: "Panelen sparades inte: %{error}"
+  panel_tab_title:
+    en: "Panel"
+    sv: "Panel"
+  new_panel_tab_title:
+    en: "New panel: %{dashboard}"
+    sv: "Ny panel: %{dashboard}"
+  runs_on:
+    en: "Runs on %{connection}"
+    sv: "Körs på %{connection}"
+  rows_one:
+    en: "1 row"
+    sv: "1 rad"
+  rows_other:
+    en: "%{count} rows"
+    sv: "%{count} rader"
+  empty_title:
+    en: "This dashboard has no panels yet"
+    sv: "Den här instrumentpanelen har inga paneler än"
+  empty_hint:
+    en: "Run a query and pick this dashboard under Add to Dashboard in its results, or add a panel here."
+    sv: "Kör en fråga och välj den här instrumentpanelen under Lägg till i instrumentpanel i resultatet, eller lägg till en panel här."
+  time_range_tooltip:
+    en: "Panels filter on it with $__timeFilter(column), in UTC"
+    sv: "Paneler filtrerar på det med $__timeFilter(column), i UTC"
+  status:
+    refreshing_one:
+      en: "%{dashboard}: refreshing 1 panel"
+      sv: "%{dashboard}: uppdaterar 1 panel"
+    refreshing_other:
+      en: "%{dashboard}: refreshing %{count} panels"
+      sv: "%{dashboard}: uppdaterar %{count} paneler"
+    refreshed_one:
+      en: "%{dashboard}: refreshed 1 panel"
+      sv: "%{dashboard}: uppdaterade 1 panel"
+    refreshed_other:
+      en: "%{dashboard}: refreshed %{count} panels"
+      sv: "%{dashboard}: uppdaterade %{count} paneler"
+    failed_of_one:
+      en: "%{dashboard}: %{failed} of 1 panel failed"
+      sv: "%{dashboard}: %{failed} av 1 panel misslyckades"
+    failed_of_other:
+      en: "%{dashboard}: %{failed} of %{count} panels failed"
+      sv: "%{dashboard}: %{failed} av %{count} paneler misslyckades"
+    connecting:
+      en: "%{dashboard}: connecting to %{connection}"
+      sv: "%{dashboard}: ansluter till %{connection}"
+    running_one:
+      en: "%{dashboard}: running 1 panel on %{connection}"
+      sv: "%{dashboard}: kör 1 panel på %{connection}"
+    running_other:
+      en: "%{dashboard}: running %{count} panels on %{connection}"
+      sv: "%{dashboard}: kör %{count} paneler på %{connection}"
+  refresh_interval:
+    manual:
+      en: "Manual refresh"
+      sv: "Manuell uppdatering"
+    every_30_seconds:
+      en: "Every 30 s"
+      sv: "Var 30:e s"
+    every_minute:
+      en: "Every minute"
+      sv: "Varje minut"
+    every_5_minutes:
+      en: "Every 5 min"
+      sv: "Var 5:e min"
+    every_15_minutes:
+      en: "Every 15 min"
+      sv: "Var 15:e min"
+  time_range:
+    last_hour:
+      en: "Last hour"
+      sv: "Senaste timmen"
+    last_6_hours:
+      en: "Last 6 hours"
+      sv: "Senaste 6 timmarna"
+    last_24_hours:
+      en: "Last 24 hours"
+      sv: "Senaste 24 timmarna"
+    last_7_days:
+      en: "Last 7 days"
+      sv: "Senaste 7 dagarna"
+    last_30_days:
+      en: "Last 30 days"
+      sv: "Senaste 30 dagarna"
+    last_90_days:
+      en: "Last 90 days"
+      sv: "Senaste 90 dagarna"
+    last_year:
+      en: "Last year"
+      sv: "Senaste året"
+    all_time:
+      en: "All time"
+      sv: "All tid"
+  panel_width:
+    quarter:
+      en: "Quarter"
+      sv: "En fjärdedel"
+    third:
+      en: "Third"
+      sv: "En tredjedel"
+    half:
+      en: "Half"
+      sv: "Halv"
+    two_thirds:
+      en: "Two Thirds"
+      sv: "Två tredjedelar"
+    full:
+      en: "Full Width"
+      sv: "Full bredd"
+  panel_height:
+    small:
+      en: "Small"
+      sv: "Liten"
+    medium:
+      en: "Medium"
+      sv: "Mellan"
+    large:
+      en: "Large"
+      sv: "Stor"
+    extra_large:
+      en: "Extra Large"
+      sv: "Extra stor"
+  panel_kind:
+    table:
+      en: "Table"
+      sv: "Tabell"
+    stat:
+      en: "Stat"
+      sv: "Nyckeltal"
+  panel_menu:
+    edit_query:
+      en: "Edit Query…"
+      sv: "Redigera fråga…"
+    rename:
+      en: "Rename…"
+      sv: "Byt namn…"
+    show_as:
+      en: "Show as"
+      sv: "Visa som"
+    thresholds:
+      en: "Thresholds…"
+      sv: "Tröskelvärden…"
+    width:
+      en: "Width"
+      sv: "Bredd"
+    height:
+      en: "Height"
+      sv: "Höjd"
+    move_earlier:
+      en: "Move Earlier"
+      sv: "Flytta tidigare"
+    move_later:
+      en: "Move Later"
+      sv: "Flytta senare"
+    remove:
+      en: "Remove Panel"
+      sv: "Ta bort panel"
+  panel:
+    running:
+      en: "Running…"
+      sv: "Kör…"
+    connection_deleted:
+      en: "The panel's connection was deleted."
+      sv: "Panelens anslutning har tagits bort."
+    not_run_yet:
+      en: "Not run yet."
+      sv: "Inte körd än."
+    no_numeric_column:
+      en: "No numeric column to show."
+      sv: "Ingen numerisk kolumn att visa."
+    no_rows:
+      en: "No rows."
+      sv: "Inga rader."
+  link:
+    editing:
+      en: "Editing \"%{panel}\" on %{dashboard}"
+      sv: "Redigerar ”%{panel}” i %{dashboard}"
+    new_panel_for:
+      en: "New panel for %{dashboard}"
+      sv: "Ny panel för %{dashboard}"
+    save_to_panel:
+      en: "Save to Panel"
+      sv: "Spara i panel"
+    save_to_panel_tooltip:
+      en: "Save this query and how its result is shown into the panel"
+      sv: "Spara den här frågan och hur dess resultat visas i panelen"
+    add_to_dashboard:
+      en: "Add to Dashboard"
+      sv: "Lägg till i instrumentpanel"
+    add_to_dashboard_tooltip:
+      en: "Add this query and how its result is shown as a panel"
+      sv: "Lägg till den här frågan och hur dess resultat visas som en panel"
+    saving_runs_first:
+      en: "Saving runs the query first. Show its result as a table or a chart to save it so."
+      sv: "När du sparar körs frågan först. Visa resultatet som tabell eller diagram för att spara det så."
+    back_to_dashboard:
+      en: "Back to Dashboard"
+      sv: "Tillbaka till instrumentpanelen"
+  picker:
+    filter:
+      en: "Filter"
+      sv: "Filtrera"
+    listing_databases:
+      en: "%{connection}: listing databases"
+      sv: "%{connection}: listar databaser"
+    connecting:
+      en: "Connecting…"
+      sv: "Ansluter…"
+    no_databases:
+      en: "No databases"
+      sv: "Inga databaser"
+    runs_read_only_on:
+      en: "Runs read only on %{target}"
+      sv: "Körs skrivskyddat på %{target}"
+    runs_read_only_unpicked:
+      en: "Pick a connection. The panel runs read only on it."
+      sv: "Välj en anslutning. Panelen körs skrivskyddat på den."
+  thresholds:
+    title:
+      en: "Thresholds"
+      sv: "Tröskelvärden"
+    column:
+      en: "Column"
+      sv: "Kolumn"
+    warning_at:
+      en: "Warning at"
+      sv: "Varning vid"
+    critical_at:
+      en: "Critical at"
+      sv: "Kritiskt vid"
+    help:
+      en: "Numbers turn yellow at the warning value and red at the critical one, green below both. A critical value under the warning one means lower is worse. Leave both empty to color nothing."
+      sv: "Tal blir gula vid varningsvärdet och röda vid det kritiska, gröna under båda. Ett kritiskt värde under varningsvärdet betyder att lägre är sämre. Lämna båda tomma för att inte färga något."
+    warning_not_a_number:
+      en: "The warning value is no number."
+      sv: "Varningsvärdet är inget tal."
+    critical_not_a_number:
+      en: "The critical value is no number."
+      sv: "Det kritiska värdet är inget tal."
+    pick_column:
+      en: "Pick the column to color."
+      sv: "Välj kolumnen som ska färgas."
+  variables:
+    loading_choices:
+      en: "%{dashboard}: loading variable choices"
+      sv: "%{dashboard}: läser in variabelval"
+    its_connection:
+      en: "its connection"
+      sv: "dess anslutning"
+    add_title:
+      en: "Add Variable"
+      sv: "Lägg till variabel"
+    edit_title:
+      en: "Edit Variable"
+      sv: "Redigera variabel"
+    edit:
+      en: "Edit…"
+      sv: "Redigera…"
+    remove:
+      en: "Remove"
+      sv: "Ta bort"
+    connection_deleted:
+      en: "The variable's connection was deleted."
+      sv: "Variabelns anslutning har tagits bort."
+    could_not_connect:
+      en: "Could not connect: %{error}"
+      sv: "Kunde inte ansluta: %{error}"
+    name:
+      en: "Name"
+      sv: "Namn"
+    choices:
+      en: "Choices"
+      sv: "Val"
+    values:
+      en: "Values"
+      sv: "Värden"
+    query:
+      en: "Query"
+      sv: "Fråga"
+    invalid_name:
+      en: "A name is letters, digits and underscores, and starts with a letter."
+      sv: "Ett namn består av bokstäver, siffror och understreck och börjar med en bokstav."
+    name_taken:
+      en: "The dashboard already has a $%{name}."
+      sv: "Instrumentpanelen har redan en $%{name}."
+    query_missing:
+      en: "Write the query whose first column gives the choices."
+      sv: "Skriv frågan vars första kolumn ger valen."
+    add_panel_first:
+      en: "Add a panel first: a query variable runs on a panel's connection."
+      sv: "Lägg till en panel först. En frågevariabel körs på en panels anslutning."
+    values_missing:
+      en: "List at least one value, one per line."
+      sv: "Ange minst ett värde, ett per rad."
+    query_hint:
+      en: "The first column of the rows is the choices. Runs read only on %{connection}, and may use $__timeFilter."
+      sv: "Radernas första kolumn är valen. Körs skrivskyddat på %{connection} och får använda $__timeFilter."
+    query_hint_no_panel:
+      en: "A query variable runs on a panel's connection, and this dashboard has no panel yet."
+      sv: "En frågevariabel körs på en panels anslutning, och den här instrumentpanelen har ingen panel än."
+    values_hint:
+      en: "One value per line."
+      sv: "Ett värde per rad."
+    syntax_hint:
+      en: "Panels write $name or ${name} for the value as a string, ${name:raw} for it as it is."
+      sv: "Paneler skriver $name eller ${name} för värdet som sträng, ${name:raw} för värdet som det är."
+chart:
+  chart:
+    en: "Chart"
+    sv: "Diagram"
+  kind:
+    line:
+      en: "Line"
+      sv: "Linje"
+    bar:
+      en: "Bar"
+      sv: "Stapel"
+    pie:
+      en: "Pie"
+      sv: "Cirkel"
+  aggregate_label:
+    en: "Aggregate"
+    sv: "Sammanställning"
+  aggregate:
+    none:
+      en: "None"
+      sv: "Ingen"
+    sum:
+      en: "Sum"
+      sv: "Summa"
+    avg:
+      en: "Avg"
+      sv: "Medel"
+    count:
+      en: "Count"
+      sv: "Antal"
+  x_axis:
+    en: "X-axis"
+    sv: "X-axel"
+  y_axis:
+    en: "Y-axis"
+    sv: "Y-axel"
+  categories:
+    en: "Categories"
+    sv: "Kategorier"
+  keys:
+    en: "Keys"
+    sv: "Nycklar"
+  values:
+    en: "Values"
+    sv: "Värden"
+  series:
+    en: "Series"
+    sv: "Serier"
+  series_none:
+    en: "None"
+    sv: "Ingen"
+  select_column:
+    en: "Select a column"
+    sv: "Välj en kolumn"
+  select_numeric_column:
+    en: "Select a numeric column"
+    sv: "Välj en numerisk kolumn"
+  stepped:
+    en: "Stepped"
+    sv: "Trappsteg"
+  show_points:
+    en: "Show points"
+    sv: "Visa punkter"
+  select_axis_and_value:
+    en: "Select an axis and a numeric value column."
+    sv: "Välj en axel och en numerisk värdekolumn."
+  no_plottable_rows:
+    en: "No plottable rows (all values are NULL or non-numeric)."
+    sv: "Inga rader att rita (alla värden är NULL eller inte numeriska)."
+  pie_needs_positive_values:
+    en: "Pie charts require positive values."
+    sv: "Cirkeldiagram kräver positiva värden."

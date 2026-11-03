@@ -118,7 +118,7 @@ impl KeyringSecretStore {
                     found
                         .map(|(_, bytes)| {
                             String::from_utf8(bytes)
-                                .context("connection credential is not valid UTF-8")
+                                .context(t!("shell.credentials.not_utf8").into_owned())
                         })
                         .transpose()
                 });

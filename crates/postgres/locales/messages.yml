@@ -1,0 +1,58 @@
+_version: 2
+# Messages the PostgreSQL driver (also CockroachDB's) writes around the
+# server's errors. See the glossary at the top of crates/blanco/locales/app.yml.
+postgres:
+  invalid_connection_string:
+    en: "Failed to parse connection string: %{error}"
+    sv: "Det gick inte att tolka anslutningssträngen: %{error}"
+  invalid_connection_string_format:
+    en: "Invalid PostgreSQL connection string format"
+    sv: "Ogiltigt format på anslutningssträngen för PostgreSQL"
+  database_required:
+    en: "Database name is required in connection string"
+    sv: "Anslutningssträngen måste ange ett databasnamn"
+  username_required:
+    en: "Username is required in connection string"
+    sv: "Anslutningssträngen måste ange ett användarnamn"
+  connect_database_failed:
+    en: "Failed to connect to database '%{database}'"
+    sv: "Det gick inte att ansluta till databasen '%{database}'"
+  connect_failed:
+    en: "Failed to connect to %{backend}"
+    sv: "Det gick inte att ansluta till %{backend}"
+  connect_timed_out:
+    en: "%{backend} connection timed out after %{seconds}s"
+    sv: "Anslutningen till %{backend} överskred tidsgränsen efter %{seconds} s"
+  connection_check_failed:
+    en: "%{backend} connection check failed"
+    sv: "Kontrollen av anslutningen till %{backend} misslyckades"
+  pool_failed:
+    en: "Failed to get connection pool for database '%{database}'"
+    sv: "Det gick inte att få en anslutningspool för databasen '%{database}'"
+  pool_failed_because:
+    en: "Failed to get connection pool for database '%{database}': %{error}"
+    sv: "Det gick inte att få en anslutningspool för databasen '%{database}': %{error}"
+  query_failed:
+    en: "%{backend} query execution failed"
+    sv: "Frågan misslyckades i %{backend}"
+  query_failed_because:
+    en: "%{backend} query execution failed: %{error}"
+    sv: "Frågan misslyckades i %{backend}: %{error}"
+  script_failed:
+    en: "%{backend} script execution failed"
+    sv: "Skriptet misslyckades i %{backend}"
+  describe_failed:
+    en: "%{backend} describe failed"
+    sv: "%{backend} kunde inte beskriva frågan"
+  write_failed:
+    en: "%{backend} write failed"
+    sv: "Skrivningen misslyckades i %{backend}"
+  fetch_row_failed:
+    en: "Failed to fetch row: %{error}"
+    sv: "Det gick inte att hämta raden: %{error}"
+  table_not_found:
+    en: "Table '%{table}' not found"
+    sv: "Tabellen '%{table}' hittades inte"
+  storage_parameters:
+    en: "Storage parameters"
+    sv: "Lagringsparametrar"

@@ -294,7 +294,8 @@ impl CreateNewQueryTabParams for TreeItemMetadata {
 
 impl ConnectionsPanel {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let filter_input = cx.new(|cx| InputState::new(window, cx).placeholder("Filter"));
+        let filter_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder(t!("sidebar.filter")));
         let filter_subscription =
             cx.subscribe(&filter_input, |this, _input, event: &InputEvent, cx| {
                 if let InputEvent::Change = event {
@@ -332,7 +333,19 @@ impl ConnectionsPanel {
             database_metadata,
             tree_state,
             filter_input,
-            _subscriptions: vec![filter_subscription, tree_subscription],
+            _subscriptions: vec![
+                filter_subscription,
+                tree_subscription,
+                // The tree's category labels and the filter's placeholder are
+                // made once, so they are made again in the new language.
+                cx.observe_global_in::<crate::i18n::Locale>(window, |this, window, cx| {
+                    this.filter_input.update(cx, |input, cx| {
+                        input.set_placeholder(t!("sidebar.filter"), window, cx)
+                    });
+                    this.rebuild_tree(cx);
+                    cx.notify();
+                }),
+            ],
             loaded_connections,
             expanded_connections,
             expanded_categories,
@@ -820,33 +833,17 @@ impl ConnectionsPanel {
         let new_name_input = is_rename.then(|| {
             cx.new(|cx| {
                 InputState::new(window, cx)
-                    .placeholder("New name")
+                    .placeholder(t!("sidebar.table_operation.new_name"))
                     .default_value(&table_name)
             })
         });
-        let prod_note = match metadata.environment_type {
-            Some(environment) if environment.confirms_writes() => {
-                format!(" on a {environment} connection")
-            }
-            _ => String::new(),
-        };
-        let title = format!(
-            "{} {}?",
-            operation.label(),
-            entity.display_name().to_lowercase()
-        );
-        let description = match &operation {
-            TableOperation::Drop => format!(
-                "\"{table_name}\" and all of its data will be permanently deleted{prod_note}."
-            ),
-            TableOperation::Truncate => {
-                format!("All rows in \"{table_name}\" will be permanently deleted{prod_note}.")
-            }
-            TableOperation::Rename { .. } => {
-                format!("Enter the new name for \"{table_name}\"{prod_note}.")
-            }
-        };
-        let confirm_label = operation.label();
+        let confirming_environment = metadata
+            .environment_type
+            .filter(|environment| environment.confirms_writes());
+        let title: SharedString = table_operation_title(&operation, entity).into();
+        let description: SharedString =
+            table_operation_description(&operation, &table_name, confirming_environment).into();
+        let confirm_label: SharedString = table_operation_label(&operation).into();
         let this_handle = cx.entity().downgrade();
 
         window.open_dialog(cx, move |dialog, _, _| {
@@ -861,14 +858,17 @@ impl ConnectionsPanel {
             dialog.footer(
                 DialogFooter::new()
                     .child(
-                        DialogClose::new()
-                            .child(Button::new("table-op-cancel").label("Cancel").outline()),
+                        DialogClose::new().child(
+                            Button::new("table-op-cancel")
+                                .label(t!("sidebar.cancel"))
+                                .outline(),
+                        ),
                     )
                     .child(
                         DialogAction::new().child(
                             Button::new("table-op-confirm")
                                 .danger()
-                                .label(confirm_label)
+                                .label(confirm_label.clone())
                                 .on_click(move |_, window, cx| {
                                     let operation = match (&operation, &new_name_input) {
                                         (TableOperation::Rename { .. }, Some(input)) => {
@@ -904,6 +904,8 @@ impl ConnectionsPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        use blanco_core::ddl::TableOperation;
+
         let Some(table_name) = metadata.table_name.clone() else {
             return;
         };
@@ -917,7 +919,15 @@ impl ConnectionsPanel {
             window.push_notification(
                 (
                     NotificationType::Error,
-                    format!("{} is not supported for this object", operation.label()),
+                    match operation {
+                        TableOperation::Drop => t!("sidebar.table_operation.drop_unsupported"),
+                        TableOperation::Truncate => {
+                            t!("sidebar.table_operation.truncate_unsupported")
+                        }
+                        TableOperation::Rename { .. } => {
+                            t!("sidebar.table_operation.rename_unsupported")
+                        }
+                    },
                 ),
                 cx,
             );
@@ -944,7 +954,19 @@ impl ConnectionsPanel {
                     window.push_notification(
                         (
                             NotificationType::Success,
-                            format!("{label} {table_name} succeeded"),
+                            match operation {
+                                TableOperation::Drop => {
+                                    t!("sidebar.table_operation.drop_succeeded", table = table_name)
+                                }
+                                TableOperation::Truncate => t!(
+                                    "sidebar.table_operation.truncate_succeeded",
+                                    table = table_name
+                                ),
+                                TableOperation::Rename { .. } => t!(
+                                    "sidebar.table_operation.rename_succeeded",
+                                    table = table_name
+                                ),
+                            },
                         ),
                         cx,
                     );
@@ -955,7 +977,23 @@ impl ConnectionsPanel {
                     window.push_notification(
                         (
                             NotificationType::Error,
-                            format!("{label} {table_name} failed: {error:#}"),
+                            match operation {
+                                TableOperation::Drop => t!(
+                                    "sidebar.table_operation.drop_failed",
+                                    table = table_name,
+                                    error = format!("{error:#}")
+                                ),
+                                TableOperation::Truncate => t!(
+                                    "sidebar.table_operation.truncate_failed",
+                                    table = table_name,
+                                    error = format!("{error:#}")
+                                ),
+                                TableOperation::Rename { .. } => t!(
+                                    "sidebar.table_operation.rename_failed",
+                                    table = table_name,
+                                    error = format!("{error:#}")
+                                ),
+                            },
                         ),
                         cx,
                     );
@@ -1104,8 +1142,11 @@ impl ConnectionsPanel {
                     .ghost()
                     .icon(IconName::Funnel)
                     .tooltip(match tag_filter {
-                        Some(tag) => format!("Showing {} connections", tag.display_name()),
-                        None => "Filter by environment".to_string(),
+                        Some(tag) => t!(
+                            "sidebar.environment_filter.showing",
+                            environment = tag.display_name()
+                        ),
+                        None => t!("sidebar.environment_filter.tooltip"),
                     })
                     .dropdown_menu(move |menu, _, _| {
                         let set_filter = |tag: Option<EnvironmentType>| {
@@ -1122,7 +1163,7 @@ impl ConnectionsPanel {
                         };
                         blanco_core::environment_tags().into_iter().fold(
                             menu.item(
-                                PopupMenuItem::new("All environments")
+                                PopupMenuItem::new(t!("sidebar.environment_filter.all"))
                                     .checked(tag_filter.is_none())
                                     .on_click(set_filter(None)),
                             )
@@ -1152,12 +1193,21 @@ impl ConnectionsPanel {
                     .icon(IconName::Ellipsis)
                     .ghost()
                     .small()
-                    .tooltip("Connections")
+                    .tooltip(t!("sidebar.connections_menu.tooltip"))
                     .dropdown_menu(|menu, _, _| {
-                        menu.menu("New Connection…", Box::new(OpenNewConnectionModal))
-                            .separator()
-                            .menu("Import Connections…", Box::new(ImportConnections))
-                            .menu("Export Connections…", Box::new(ExportConnections))
+                        menu.menu(
+                            t!("sidebar.connections_menu.new_connection"),
+                            Box::new(OpenNewConnectionModal),
+                        )
+                        .separator()
+                        .menu(
+                            t!("sidebar.connections_menu.import"),
+                            Box::new(ImportConnections),
+                        )
+                        .menu(
+                            t!("sidebar.connections_menu.export"),
+                            Box::new(ExportConnections),
+                        )
                     }),
             )
     }
@@ -1197,15 +1247,19 @@ impl ConnectionsPanel {
                 let note = match result {
                     Ok(()) => (
                         NotificationType::Success,
-                        SharedString::from(format!(
-                            "Exported {count} connection{} to {}.",
-                            if count == 1 { "" } else { "s" },
-                            path.display()
-                        )),
+                        SharedString::from(if count == 1 {
+                            t!("sidebar.transfer.exported_one", path = path.display())
+                        } else {
+                            t!(
+                                "sidebar.transfer.exported_other",
+                                count = count,
+                                path = path.display()
+                            )
+                        }),
                     ),
                     Err(error) => (
                         NotificationType::Error,
-                        SharedString::from(format!("Export failed: {error}")),
+                        SharedString::from(t!("sidebar.transfer.export_failed", error = error)),
                     ),
                 };
                 window.push_notification(note, cx);
@@ -1222,7 +1276,7 @@ impl ConnectionsPanel {
             files: true,
             directories: false,
             multiple: false,
-            prompt: Some("Import connections".into()),
+            prompt: Some(t!("sidebar.transfer.import_prompt").into()),
         });
         cx.spawn_in(window, async move |this, cx| {
             let Ok(Ok(Some(paths))) = paths.await else {
@@ -1244,7 +1298,10 @@ impl ConnectionsPanel {
                 Err(error) => window.push_notification(
                     (
                         NotificationType::Error,
-                        SharedString::from(format!("Import failed: {error:#}")),
+                        SharedString::from(t!(
+                            "sidebar.transfer.import_failed",
+                            error = format!("{error:#}")
+                        )),
                     ),
                     cx,
                 ),
@@ -1262,11 +1319,11 @@ impl ConnectionsPanel {
     ) {
         if plan.add.is_empty() {
             let message = if plan.skipped.is_empty() {
-                "The file holds no connections.".to_string()
+                t!("sidebar.transfer.file_empty")
             } else {
-                format!(
-                    "Nothing to import: {} already saved.",
-                    plan.skipped.join(", ")
+                t!(
+                    "sidebar.transfer.nothing_to_import",
+                    names = plan.skipped.join(", ")
                 )
             };
             window.push_notification((NotificationType::Info, SharedString::from(message)), cx);
@@ -1277,57 +1334,88 @@ impl ConnectionsPanel {
         window.open_dialog(cx, move |dialog, _, cx| {
             let add_lines = plan.add.iter().map(|(connection, renamed_from)| {
                 let line = match renamed_from {
-                    Some(original) => format!("{} (renamed from {original})", connection.name),
+                    Some(original) => t!(
+                        "sidebar.transfer.renamed_from",
+                        name = connection.name,
+                        original = original
+                    )
+                    .into_owned(),
                     None => connection.name.clone(),
                 };
                 div().text_sm().child(line)
             });
             dialog
-                .title("Import Connections")
+                .title(t!("sidebar.transfer.import_title"))
                 .w(px(480.))
                 .child(
                     v_flex()
                         .gap_2()
-                        .child(div().text_sm().font_weight(gpui::FontWeight::SEMIBOLD).child(format!(
-                            "Add {} connection{}:",
-                            plan.add.len(),
-                            if plan.add.len() == 1 { "" } else { "s" }
-                        )))
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .child(if plan.add.len() == 1 {
+                                    t!("sidebar.transfer.add_one")
+                                } else {
+                                    t!("sidebar.transfer.add_other", count = plan.add.len())
+                                }),
+                        )
                         .children(add_lines)
                         .when(!plan.skipped.is_empty(), |this| {
-                            this.child(div().text_sm().text_color(cx.theme().muted_foreground).child(
-                                format!("Skip, already saved: {}", plan.skipped.join(", ")),
-                            ))
+                            this.child(
+                                div()
+                                    .text_sm()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(t!(
+                                        "sidebar.transfer.skipped",
+                                        names = plan.skipped.join(", ")
+                                    )),
+                            )
                         })
-                        .child(div().text_xs().text_color(cx.theme().muted_foreground).child(
-                            "Passwords are not part of the file. Add them by editing each connection.",
-                        )),
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(t!("sidebar.transfer.passwords_note")),
+                        ),
                 )
                 .footer(
                     DialogFooter::new()
                         .child(
-                            DialogClose::new()
-                                .child(Button::new("import-cancel").label("Cancel").outline()),
+                            DialogClose::new().child(
+                                Button::new("import-cancel")
+                                    .label(t!("sidebar.cancel"))
+                                    .outline(),
+                            ),
                         )
-                        .child(DialogAction::new().child(
-                            Button::new("import-confirm").primary().label("Import").on_click({
-                                let this_handle = this_handle.clone();
-                                let plan = plan.clone();
-                                move |_, window, cx| {
-                                    let connections: Vec<ConnectionData> = plan
-                                        .add
-                                        .iter()
-                                        .map(|(connection, _)| connection.clone())
-                                        .collect();
-                                    this_handle
-                                        .update(cx, |this, cx| {
-                                            this.save_imported_connections(connections, window, cx)
-                                        })
-                                        .log_err();
-                                    window.close_dialog(cx);
-                                }
-                            }),
-                        )),
+                        .child(
+                            DialogAction::new().child(
+                                Button::new("import-confirm")
+                                    .primary()
+                                    .label(t!("sidebar.transfer.import"))
+                                    .on_click({
+                                        let this_handle = this_handle.clone();
+                                        let plan = plan.clone();
+                                        move |_, window, cx| {
+                                            let connections: Vec<ConnectionData> = plan
+                                                .add
+                                                .iter()
+                                                .map(|(connection, _)| connection.clone())
+                                                .collect();
+                                            this_handle
+                                                .update(cx, |this, cx| {
+                                                    this.save_imported_connections(
+                                                        connections,
+                                                        window,
+                                                        cx,
+                                                    )
+                                                })
+                                                .log_err();
+                                            window.close_dialog(cx);
+                                        }
+                                    }),
+                            ),
+                        ),
                 )
         });
     }
@@ -1360,17 +1448,19 @@ impl ConnectionsPanel {
                 let note = if failures.is_empty() {
                     (
                         NotificationType::Success,
-                        SharedString::from(format!(
-                            "Imported {saved} connection{}",
-                            if saved == 1 { "" } else { "s" }
-                        )),
+                        SharedString::from(if saved == 1 {
+                            t!("sidebar.transfer.imported_one")
+                        } else {
+                            t!("sidebar.transfer.imported_other", count = saved)
+                        }),
                     )
                 } else {
                     (
                         NotificationType::Error,
-                        SharedString::from(format!(
-                            "Imported {saved}, failed: {}",
-                            failures.join("; ")
+                        SharedString::from(t!(
+                            "sidebar.transfer.imported_with_failures",
+                            count = saved,
+                            failures = failures.join("; ")
                         )),
                     )
                 };
@@ -1435,23 +1525,31 @@ impl ConnectionsPanel {
 
         window.open_dialog(cx, move |dialog, _, _| {
             dialog
-                .title("Confirm Remove Connection")
-                .child(format!(
-                    "Are you sure you want to remove the connection \"{}\"?",
-                    connection_name
+                .title(t!("sidebar.remove_connection.title"))
+                .child(t!(
+                    "sidebar.remove_connection.question",
+                    name = connection_name
                 ))
                 .footer(
                     DialogFooter::new()
                         .child(
-                            DialogClose::new().child(Button::new("cancel").label("No").outline()),
+                            DialogClose::new().child(
+                                Button::new("cancel")
+                                    .label(t!("sidebar.remove_connection.decline"))
+                                    .outline(),
+                            ),
                         )
-                        .child(DialogAction::new().child(
-                            Button::new("confirm").danger().label("Yes").on_click({
-                                let this_handle = this_handle.clone();
-                                move |_, window, cx| {
-                                    let this_handle = this_handle.clone();
-                                    let app_database = AppDatabase::global(cx).clone();
-                                    cx.spawn(async move |cx| {
+                        .child(
+                            DialogAction::new().child(
+                                Button::new("confirm")
+                                    .danger()
+                                    .label(t!("sidebar.remove_connection.confirm"))
+                                    .on_click({
+                                        let this_handle = this_handle.clone();
+                                        move |_, window, cx| {
+                                            let this_handle = this_handle.clone();
+                                            let app_database = AppDatabase::global(cx).clone();
+                                            cx.spawn(async move |cx| {
                                         if let Err(e) =
                                             app_database.delete_connection(connection_id).await
                                         {
@@ -1482,10 +1580,11 @@ impl ConnectionsPanel {
                                             .log_err();
                                     })
                                     .detach();
-                                    window.close_dialog(cx);
-                                }
-                            }),
-                        )),
+                                            window.close_dialog(cx);
+                                        }
+                                    }),
+                            ),
+                        ),
                 )
         });
     }
@@ -1532,16 +1631,101 @@ impl ConnectionsPanel {
     }
 }
 
+/// The confirmation title for running `operation` on an object of `entity`'s
+/// kind, one sentence per pair so a language can word each as it needs.
+fn table_operation_title(
+    operation: &blanco_core::ddl::TableOperation,
+    entity: blanco_core::EntityType,
+) -> std::borrow::Cow<'static, str> {
+    use blanco_core::EntityType;
+    use blanco_core::ddl::TableOperation;
+    match (operation, entity) {
+        (TableOperation::Drop, EntityType::Table) => t!("sidebar.table_operation.drop_table_title"),
+        (TableOperation::Drop, EntityType::View) => t!("sidebar.table_operation.drop_view_title"),
+        (TableOperation::Drop, EntityType::MaterializedView) => {
+            t!("sidebar.table_operation.drop_materialized_view_title")
+        }
+        (TableOperation::Truncate, EntityType::Table) => {
+            t!("sidebar.table_operation.truncate_table_title")
+        }
+        (TableOperation::Truncate, EntityType::View) => {
+            t!("sidebar.table_operation.truncate_view_title")
+        }
+        (TableOperation::Truncate, EntityType::MaterializedView) => {
+            t!("sidebar.table_operation.truncate_materialized_view_title")
+        }
+        (TableOperation::Rename { .. }, EntityType::Table) => {
+            t!("sidebar.table_operation.rename_table_title")
+        }
+        (TableOperation::Rename { .. }, EntityType::View) => {
+            t!("sidebar.table_operation.rename_view_title")
+        }
+        (TableOperation::Rename { .. }, EntityType::MaterializedView) => {
+            t!("sidebar.table_operation.rename_materialized_view_title")
+        }
+    }
+}
+
+/// What the confirmation of `operation` on `table` says will happen, naming
+/// the environment of a connection whose writes are confirmed.
+fn table_operation_description(
+    operation: &blanco_core::ddl::TableOperation,
+    table: &str,
+    environment: Option<EnvironmentType>,
+) -> std::borrow::Cow<'static, str> {
+    use blanco_core::ddl::TableOperation;
+    match (operation, environment) {
+        (TableOperation::Drop, None) => {
+            t!("sidebar.table_operation.drop_description", table = table)
+        }
+        (TableOperation::Drop, Some(environment)) => t!(
+            "sidebar.table_operation.drop_description_environment",
+            table = table,
+            environment = environment
+        ),
+        (TableOperation::Truncate, None) => {
+            t!(
+                "sidebar.table_operation.truncate_description",
+                table = table
+            )
+        }
+        (TableOperation::Truncate, Some(environment)) => t!(
+            "sidebar.table_operation.truncate_description_environment",
+            table = table,
+            environment = environment
+        ),
+        (TableOperation::Rename { .. }, None) => {
+            t!("sidebar.table_operation.rename_description", table = table)
+        }
+        (TableOperation::Rename { .. }, Some(environment)) => t!(
+            "sidebar.table_operation.rename_description_environment",
+            table = table,
+            environment = environment
+        ),
+    }
+}
+
+fn table_operation_label(
+    operation: &blanco_core::ddl::TableOperation,
+) -> std::borrow::Cow<'static, str> {
+    use blanco_core::ddl::TableOperation;
+    match operation {
+        TableOperation::Drop => t!("sidebar.table_operation.drop"),
+        TableOperation::Truncate => t!("sidebar.table_operation.truncate"),
+        TableOperation::Rename { .. } => t!("sidebar.table_operation.rename"),
+    }
+}
+
 /// Connection names are unique in the app database, so a duplicate gets the
 /// first free "name copy", "name copy 2", ... name.
 fn duplicate_name<'a>(name: &str, existing_names: impl Iterator<Item = &'a str>) -> String {
     let existing_names: std::collections::HashSet<&str> = existing_names.collect();
-    let first = format!("{name} copy");
+    let first = t!("sidebar.copy_name", name = name).into_owned();
     if !existing_names.contains(first.as_str()) {
         return first;
     }
     (2usize..)
-        .map(|number| format!("{name} copy {number}"))
+        .map(|number| t!("sidebar.copy_name_numbered", name = name, number = number).into_owned())
         .find(|candidate| !existing_names.contains(candidate.as_str()))
         .unwrap_or(first)
 }

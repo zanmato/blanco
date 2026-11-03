@@ -71,11 +71,13 @@ async fn run_steps(
         }
     }
     if let Some(mut dump) = dump {
-        dump.flush().await.context("Could not write the backup")?;
+        dump.flush()
+            .await
+            .context(t!("backup.runner.could_not_write_backup"))?;
         let sink = dump.into_inner().await;
         smol::unblock(move || sink.finish())
             .await
-            .context("Could not write the backup")?;
+            .context(t!("backup.runner.could_not_write_backup"))?;
     }
     Ok(RunOutcome::Finished)
 }
@@ -111,19 +113,26 @@ async fn run_step(
         .stderr(Stdio::piped())
         .kill_on_drop(true);
     hide_console_window(&mut command);
-    let mut child = command
-        .spawn()
-        .with_context(|| format!("Could not start {}", step.program.display()))?;
+    let mut child = command.spawn().with_context(|| {
+        t!(
+            "backup.runner.could_not_start",
+            program = step.program.display()
+        )
+    })?;
 
     let stdin = child.stdin.take();
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| anyhow!("{program_name} has no output pipe"))?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| anyhow!("{program_name} has no error pipe"))?;
+    let stdout = child.stdout.take().ok_or_else(|| {
+        anyhow!(
+            "{}",
+            t!("backup.runner.no_output_pipe", program = program_name)
+        )
+    })?;
+    let stderr = child.stderr.take().ok_or_else(|| {
+        anyhow!(
+            "{}",
+            t!("backup.runner.no_error_pipe", program = program_name)
+        )
+    })?;
     let error_tail = Mutex::new(VecDeque::with_capacity(ERROR_TAIL_LINES));
 
     let feed = async {
@@ -140,7 +149,7 @@ async fn run_step(
             (StandardOutput::Dump, Some(dump)) => {
                 futures::io::copy(stdout, dump)
                     .await
-                    .context("Could not write the backup")?;
+                    .context(t!("backup.runner.could_not_write_backup"))?;
             }
             _ => forward_lines(stdout, events, None).await?,
         }
@@ -167,25 +176,38 @@ async fn run_step(
             }
         };
 
-    let status = status.with_context(|| format!("{program_name} did not exit"))?;
+    let status =
+        status.with_context(|| t!("backup.runner.did_not_exit", program = program_name))?;
     if !status.success() {
         let tail: Vec<String> = error_tail
             .lock()
             .map(|tail| tail.iter().cloned().collect())
             .unwrap_or_default();
-        let exit = status
-            .code()
-            .map(|code| format!("exited with code {code}"))
-            .unwrap_or_else(|| "was stopped".to_string());
-        return Err(if tail.is_empty() {
-            anyhow!("{program_name} {exit}")
-        } else {
-            anyhow!("{program_name} {exit}: {}", tail.join("\n"))
-        });
+        let output = tail.join("\n");
+        let message = match (status.code(), tail.is_empty()) {
+            (Some(code), true) => t!(
+                "backup.runner.exited_with_code",
+                program = program_name,
+                code = code
+            ),
+            (Some(code), false) => t!(
+                "backup.runner.exited_with_code_output",
+                program = program_name,
+                code = code,
+                output = output
+            ),
+            (None, true) => t!("backup.runner.stopped", program = program_name),
+            (None, false) => t!(
+                "backup.runner.stopped_output",
+                program = program_name,
+                output = output
+            ),
+        };
+        return Err(anyhow!("{message}"));
     }
     output?;
     errors?;
-    fed.context("Could not read the dump")?;
+    fed.context(t!("backup.runner.could_not_read_dump"))?;
     Ok(RunOutcome::Finished)
 }
 
@@ -243,12 +265,15 @@ pub async fn capture_output(program: &Path, arguments: &[String]) -> Result<Stri
     let output = command
         .output()
         .await
-        .with_context(|| format!("Could not start {}", program.display()))?;
+        .with_context(|| t!("backup.runner.could_not_start", program = program.display()))?;
     if !output.status.success() {
         return Err(anyhow!(
-            "{} failed: {}",
-            program.display(),
-            String::from_utf8_lossy(&output.stderr).trim()
+            "{}",
+            t!(
+                "backup.runner.failed",
+                program = program.display(),
+                output = String::from_utf8_lossy(&output.stderr).trim()
+            )
         ));
     }
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
@@ -266,8 +291,8 @@ pub fn hide_console_window(command: &mut smol::process::Command) {
 }
 
 fn open_input(path: &Path, gzip: bool, read: Arc<AtomicU64>) -> Result<Box<dyn Read + Send>> {
-    let file =
-        std::fs::File::open(path).with_context(|| format!("Cannot open {}", path.display()))?;
+    let file = std::fs::File::open(path)
+        .with_context(|| t!("backup.errors.cannot_open", path = path.display()))?;
     let counted = CountingReader { inner: file, read };
     Ok(if gzip {
         Box::new(flate2::read::GzDecoder::new(std::io::BufReader::new(
@@ -296,20 +321,20 @@ impl<R: Read> Read for CountingReader<R> {
 /// The file a dump written to standard output goes to.
 enum DumpSink {
     Plain(std::io::BufWriter<std::fs::File>),
-    Gzip(flate2::write::GzEncoder<std::io::BufWriter<std::fs::File>>),
+    Gzip(Box<flate2::write::GzEncoder<std::io::BufWriter<std::fs::File>>>),
 }
 
 impl DumpSink {
     fn create(path: &Path, gzip_level: Option<u32>) -> Result<Self> {
         let file = std::io::BufWriter::new(
             std::fs::File::create(path)
-                .with_context(|| format!("Cannot create {}", path.display()))?,
+                .with_context(|| t!("backup.runner.cannot_create", path = path.display()))?,
         );
         Ok(match gzip_level {
-            Some(level) => DumpSink::Gzip(flate2::write::GzEncoder::new(
+            Some(level) => DumpSink::Gzip(Box::new(flate2::write::GzEncoder::new(
                 file,
                 flate2::Compression::new(level),
-            )),
+            ))),
             None => DumpSink::Plain(file),
         })
     }
@@ -317,7 +342,7 @@ impl DumpSink {
     fn finish(self) -> std::io::Result<()> {
         let mut file = match self {
             DumpSink::Plain(file) => file,
-            DumpSink::Gzip(encoder) => encoder.finish()?,
+            DumpSink::Gzip(encoder) => (*encoder).finish()?,
         };
         file.flush()?;
         file.get_ref().sync_all()

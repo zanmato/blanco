@@ -94,9 +94,13 @@ async fn server_version(
         .first()
         .and_then(|row| row.first())
         .and_then(|value| value.clone())
-        .ok_or_else(|| anyhow!("The server did not report its version"))?;
-    Version::parse_server(tools, &text)
-        .ok_or_else(|| anyhow!("The server reported an unexpected version: {text}"))
+        .ok_or_else(|| anyhow!("{}", t!("backup.errors.no_server_version")))?;
+    Version::parse_server(tools, &text).ok_or_else(|| {
+        anyhow!(
+            "{}",
+            t!("backup.errors.unexpected_server_version", version = text)
+        )
+    })
 }
 
 async fn check_tool(
@@ -243,23 +247,34 @@ impl ToolRun {
         let seconds = elapsed.as_secs();
         let clock = format!("{}:{:02}", seconds / 60, seconds % 60);
         let detail = match &self.progress {
-            ProgressSource::Lines { total, .. } => {
-                format!("{} of {total} done", self.counted.min(*total))
-            }
-            ProgressSource::InputBytes { total } => format!(
-                "{} of {} read",
-                format_bytes(self.input_read.load(Ordering::Relaxed)),
-                format_bytes(*total)
-            ),
+            ProgressSource::Lines { total, .. } => t!(
+                "backup.run.lines_done",
+                done = self.counted.min(*total),
+                total = total
+            )
+            .into_owned(),
+            ProgressSource::InputBytes { total } => t!(
+                "backup.run.bytes_read",
+                read = format_bytes(self.input_read.load(Ordering::Relaxed)),
+                total = format_bytes(*total)
+            )
+            .into_owned(),
             ProgressSource::Unknown => String::new(),
         };
         match &self.state {
-            RunState::Running if detail.is_empty() => format!("Running for {clock}"),
+            RunState::Running if detail.is_empty() => {
+                t!("backup.run.running_for", clock = clock).into_owned()
+            }
             RunState::Running => format!("{detail} · {clock}"),
-            RunState::Stopping => "Stopping…".to_string(),
-            RunState::Finished => format!("{} in {clock}", self.finished_message),
-            RunState::Stopped => "Stopped".to_string(),
-            RunState::Failed(_) => format!("Failed after {clock}"),
+            RunState::Stopping => t!("backup.run.stopping").into_owned(),
+            RunState::Finished => t!(
+                "backup.run.finished_in",
+                message = self.finished_message,
+                clock = clock
+            )
+            .into_owned(),
+            RunState::Stopped => t!("backup.run.stopped").into_owned(),
+            RunState::Failed(_) => t!("backup.run.failed_after", clock = clock).into_owned(),
         }
     }
 
@@ -462,10 +477,10 @@ fn select_row(select: &Entity<SelectState<Vec<String>>>, cx: &App) -> usize {
         .unwrap_or(0)
 }
 
-fn labelled(label: &'static str, field: impl IntoElement) -> impl IntoElement {
+fn labelled(label: impl Into<SharedString>, field: impl IntoElement) -> impl IntoElement {
     v_flex()
         .gap_1()
-        .child(div().text_sm().child(label))
+        .child(div().text_sm().child(label.into()))
         .child(field)
 }
 
@@ -480,18 +495,20 @@ fn render_tool_check(
 ) -> impl IntoElement + use<> {
     let muted = cx.theme().muted_foreground;
     match check {
-        Lookup::Pending => {
-            note(format!("Looking for {}…", program.display_name()), muted).into_any_element()
-        }
+        Lookup::Pending => note(
+            t!("backup.run.looking_for", program = program.display_name()),
+            muted,
+        )
+        .into_any_element(),
         Lookup::Failed(message) => note(message.clone(), cx.theme().danger).into_any_element(),
         Lookup::Ready(check) => v_flex()
             .gap_1()
             .child(note(
-                format!(
-                    "{} {} at {}",
-                    check.tool.program.display_name(),
-                    check.tool.version,
-                    check.tool.path.display()
+                t!(
+                    "backup.run.tool_found",
+                    program = check.tool.program.display_name(),
+                    version = check.tool.version,
+                    path = check.tool.path.display()
                 ),
                 muted,
             ))
@@ -594,7 +611,7 @@ impl BackupDialog {
             .clone();
         let file_name_input = cx.new(|cx| InputState::new(window, cx).default_value(pattern));
         let extra_arguments_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Passed to the tool as is"));
+            cx.new(|cx| InputState::new(window, cx).placeholder(t!("backup.dialog.passed_as_is")));
 
         let subscriptions = vec![
             cx.subscribe_in(
@@ -637,7 +654,13 @@ impl BackupDialog {
                 let tables = list_tables(&db_service, &context).await;
                 let check = match &server {
                     Ok(server) => check_tool(ToolProgram::dump(tools), server, &settings).await,
-                    Err(error) => Err(anyhow!("Could not connect: {error:#}")),
+                    Err(error) => Err(anyhow!(
+                        "{}",
+                        t!(
+                            "backup.errors.could_not_connect",
+                            error = format!("{error:#}")
+                        )
+                    )),
                 };
                 this.update(cx, |this, cx| {
                     this.server = server.ok();
@@ -741,11 +764,14 @@ impl BackupDialog {
     fn request(&self, cx: &App) -> Result<BackupRequest> {
         let directory = self.directory_input.read(cx).value().trim().to_string();
         if directory.is_empty() {
-            return Err(anyhow!("Choose a folder for the backup"));
+            return Err(anyhow!("{}", t!("backup.errors.choose_folder")));
         }
         let directory = PathBuf::from(directory);
         if !directory.is_dir() {
-            return Err(anyhow!("{} is not a folder", directory.display()));
+            return Err(anyhow!(
+                "{}",
+                t!("backup.errors.not_a_folder", path = directory.display())
+            ));
         }
         let format = self.format(cx);
         let compression = self.compression(cx);
@@ -809,12 +835,16 @@ impl BackupDialog {
                     Ok(plan) => {
                         let database = &context.database_name;
                         let messages = RunMessages {
-                            finished: format!(
-                                "Backed up {database} to {}",
-                                request.output.display()
-                            ),
-                            stopped: format!("Backup of {database} stopped"),
-                            failed: format!("Backup of {database} failed"),
+                            finished: t!(
+                                "backup.dialog.backed_up",
+                                database = database,
+                                path = request.output.display()
+                            )
+                            .into_owned(),
+                            stopped: t!("backup.dialog.backup_stopped", database = database)
+                                .into_owned(),
+                            failed: t!("backup.dialog.backup_failed", database = database)
+                                .into_owned(),
                         };
                         this.run = Some(start_run(plan, messages, window, cx));
                     }
@@ -838,10 +868,13 @@ impl BackupDialog {
         let footer = DialogFooter::new();
         match &this.run {
             Some(run) if run.is_running() => footer
-                .child(DialogClose::new().child(Button::new("backup-close").label("Close")))
+                .child(
+                    DialogClose::new()
+                        .child(Button::new("backup-close").label(t!("backup.dialog.close"))),
+                )
                 .child(
                     Button::new("backup-stop")
-                        .label("Stop")
+                        .label(t!("backup.dialog.stop"))
                         .disabled(run.state == RunState::Stopping)
                         .on_click({
                             let dialog = dialog.clone();
@@ -849,17 +882,24 @@ impl BackupDialog {
                         }),
                 ),
             Some(_) => footer.child(
-                DialogClose::new().child(Button::new("backup-done").primary().label("Done")),
+                DialogClose::new().child(
+                    Button::new("backup-done")
+                        .primary()
+                        .label(t!("backup.dialog.done")),
+                ),
             ),
             None => footer
                 .child(
-                    DialogClose::new()
-                        .child(Button::new("backup-cancel").label("Cancel").outline()),
+                    DialogClose::new().child(
+                        Button::new("backup-cancel")
+                            .label(t!("backup.dialog.cancel"))
+                            .outline(),
+                    ),
                 )
                 .child(
                     Button::new("backup-start")
                         .primary()
-                        .label("Back Up")
+                        .label(t!("backup.dialog.back_up"))
                         .loading(this.starting)
                         .disabled(!this.can_start())
                         .on_click({
@@ -875,13 +915,15 @@ impl BackupDialog {
     fn render_tables(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let tables = match &self.tables {
             Lookup::Pending => {
-                return note("Loading tables…", cx.theme().muted_foreground).into_any_element();
+                return note(
+                    t!("backup.dialog.loading_tables"),
+                    cx.theme().muted_foreground,
+                )
+                .into_any_element();
             }
             Lookup::Failed(message) => {
                 return note(
-                    format!(
-                        "Tables could not be listed, the whole database is backed up: {message}"
-                    ),
+                    t!("backup.dialog.tables_not_listed", error = message),
                     cx.theme().warning,
                 )
                 .into_any_element();
@@ -889,7 +931,7 @@ impl BackupDialog {
             Lookup::Ready(tables) => tables,
         };
         if tables.is_empty() {
-            return note("The database has no tables", cx.theme().muted_foreground)
+            return note(t!("backup.dialog.no_tables"), cx.theme().muted_foreground)
                 .into_any_element();
         }
         let all_included = tables.iter().all(|table| table.include);
@@ -910,11 +952,14 @@ impl BackupDialog {
                 div().flex_1().child(
                     Checkbox::new("backup-all-tables")
                         .small()
-                        .label(format!(
-                            "{} of {} tables",
-                            tables.iter().filter(|table| table.include).count(),
-                            tables.len()
-                        ))
+                        .label(
+                            t!(
+                                "backup.dialog.tables_selected",
+                                selected = tables.iter().filter(|table| table.include).count(),
+                                total = tables.len()
+                            )
+                            .into_owned(),
+                        )
                         .checked(all_included)
                         .on_click(cx.listener(|this, checked: &bool, _, cx| {
                             this.set_all_tables(*checked, cx);
@@ -929,7 +974,7 @@ impl BackupDialog {
                     .gap_2()
                     .text_xs()
                     .text_color(cx.theme().table_head_foreground)
-                    .child("Structure only")
+                    .child(t!("backup.dialog.structure_only"))
                     .child(
                         Checkbox::new("backup-all-structure")
                             .small()
@@ -1035,50 +1080,52 @@ impl Render for BackupDialog {
                 h_flex()
                     .gap_3()
                     .when(formats.len() > 1, |this| {
-                        this.child(
-                            div()
-                                .flex_1()
-                                .child(labelled("Format", Select::new(&self.format_select))),
-                        )
+                        this.child(div().flex_1().child(labelled(
+                            t!("backup.dialog.format"),
+                            Select::new(&self.format_select),
+                        )))
                     })
-                    .child(
-                        div().flex_1().child(labelled(
-                            "Compression",
-                            Select::new(&self.compression_select),
-                        )),
-                    ),
+                    .child(div().flex_1().child(labelled(
+                        t!("backup.dialog.compression"),
+                        Select::new(&self.compression_select),
+                    ))),
             )
             .child(labelled(
-                "Folder",
+                t!("backup.dialog.folder"),
                 h_flex()
                     .gap_2()
                     .child(Input::new(&self.directory_input).flex_1())
-                    .child(Button::new("backup-browse").label("Browse…").on_click({
-                        let input = self.directory_input.clone();
-                        move |_, window, cx| {
-                            browse_into(
-                                input.clone(),
-                                gpui::PathPromptOptions {
-                                    files: false,
-                                    directories: true,
-                                    multiple: false,
-                                    prompt: Some("Choose".into()),
-                                },
-                                window,
-                                cx,
-                            );
-                        }
-                    })),
+                    .child(
+                        Button::new("backup-browse")
+                            .label(t!("backup.dialog.browse"))
+                            .on_click({
+                                let input = self.directory_input.clone();
+                                move |_, window, cx| {
+                                    browse_into(
+                                        input.clone(),
+                                        gpui::PathPromptOptions {
+                                            files: false,
+                                            directories: true,
+                                            multiple: false,
+                                            prompt: Some(t!("backup.dialog.choose").into()),
+                                        },
+                                        window,
+                                        cx,
+                                    );
+                                }
+                            }),
+                    ),
             ))
             .child(
                 v_flex()
                     .gap_1()
-                    .child(labelled("File name", Input::new(&self.file_name_input)))
+                    .child(labelled(
+                        t!("backup.dialog.file_name"),
+                        Input::new(&self.file_name_input),
+                    ))
                     .child(note(
                         match &file_name {
-                            Ok(name) => format!(
-                                "Saved as {name}. {{database}}, {{connection}}, {{date}} and {{time}} are filled in."
-                            ),
+                            Ok(name) => t!("backup.dialog.saved_as", name = name).into_owned(),
                             Err(error) => format!("{error:#}"),
                         },
                         if file_name.is_ok() {
@@ -1088,9 +1135,9 @@ impl Render for BackupDialog {
                         },
                     )),
             )
-            .child(labelled("Tables", self.render_tables(cx)))
+            .child(labelled(t!("backup.dialog.tables"), self.render_tables(cx)))
             .child(labelled(
-                "Extra arguments",
+                t!("backup.dialog.extra_arguments"),
                 Input::new(&self.extra_arguments_input),
             ))
             .when_some(self.error.clone(), |this, error| {
@@ -1128,10 +1175,11 @@ impl RestoreDialog {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let file_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("A .sql, .sql.gz or .dump file"));
+        let file_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(t!("backup.dialog.dump_placeholder"))
+        });
         let extra_arguments_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Passed to the tool as is"));
+            cx.new(|cx| InputState::new(window, cx).placeholder(t!("backup.dialog.passed_as_is")));
         let subscriptions = vec![
             cx.subscribe(&file_input, |this, _, event: &InputEvent, cx| {
                 if matches!(event, InputEvent::Change) {
@@ -1155,7 +1203,13 @@ impl RestoreDialog {
                 for program in programs {
                     let check = match &server {
                         Ok(server) => check_tool(*program, server, &settings).await,
-                        Err(error) => Err(anyhow!("Could not connect: {error:#}")),
+                        Err(error) => Err(anyhow!(
+                            "{}",
+                            t!(
+                                "backup.errors.could_not_connect",
+                                error = format!("{error:#}")
+                            )
+                        )),
                     };
                     checks.push((*program, Lookup::from_result(check)));
                 }
@@ -1290,11 +1344,16 @@ impl RestoreDialog {
                             .map(|name| name.to_string_lossy().into_owned())
                             .unwrap_or_else(|| dump.path.display().to_string());
                         let messages = RunMessages {
-                            finished: format!("Restored {file} into {database}"),
-                            stopped: format!(
-                                "Restore into {database} stopped, the database may be partly restored"
-                            ),
-                            failed: format!("Restore into {database} failed"),
+                            finished: t!(
+                                "backup.dialog.restored",
+                                file = file,
+                                database = database
+                            )
+                            .into_owned(),
+                            stopped: t!("backup.dialog.restore_stopped", database = database)
+                                .into_owned(),
+                            failed: t!("backup.dialog.restore_failed", database = database)
+                                .into_owned(),
                         };
                         this.run = Some(start_run(plan, messages, window, cx));
                     }
@@ -1329,10 +1388,13 @@ impl RestoreDialog {
         };
         match &this.run {
             Some(run) if run.is_running() => footer
-                .child(DialogClose::new().child(Button::new("restore-close").label("Close")))
+                .child(
+                    DialogClose::new()
+                        .child(Button::new("restore-close").label(t!("backup.dialog.close"))),
+                )
                 .child(
                     Button::new("restore-stop")
-                        .label("Stop")
+                        .label(t!("backup.dialog.stop"))
                         .disabled(run.state == RunState::Stopping)
                         .on_click({
                             let dialog = dialog.clone();
@@ -1340,12 +1402,16 @@ impl RestoreDialog {
                         }),
                 ),
             Some(_) => footer.child(
-                DialogClose::new().child(Button::new("restore-done").primary().label("Done")),
+                DialogClose::new().child(
+                    Button::new("restore-done")
+                        .primary()
+                        .label(t!("backup.dialog.done")),
+                ),
             ),
             None if this.confirming_prod => footer
                 .child(
                     Button::new("restore-back")
-                        .label("Back")
+                        .label(t!("backup.dialog.back"))
                         .outline()
                         .on_click({
                             let dialog = dialog.clone();
@@ -1357,22 +1423,25 @@ impl RestoreDialog {
                 .child(
                     Button::new("restore-confirm")
                         .danger()
-                        .label("Restore to PROD")
+                        .label(t!("backup.dialog.restore_to_prod"))
                         .loading(this.starting)
                         .on_click(start),
                 ),
             None => footer
                 .child(
-                    DialogClose::new()
-                        .child(Button::new("restore-cancel").label("Cancel").outline()),
+                    DialogClose::new().child(
+                        Button::new("restore-cancel")
+                            .label(t!("backup.dialog.cancel"))
+                            .outline(),
+                    ),
                 )
                 .child(
                     Button::new("restore-start")
                         .primary()
                         .label(if this.context.confirms_writes() {
-                            "Restore…"
+                            t!("backup.dialog.restore_confirm")
                         } else {
-                            "Restore"
+                            t!("backup.dialog.restore")
                         })
                         .loading(this.starting)
                         .disabled(!this.can_start())
@@ -1394,14 +1463,16 @@ impl RestoreDialog {
                 div()
                     .text_sm()
                     .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .child("Restore into PROD?"),
+                    .child(t!("backup.dialog.confirm_title")),
             )
-            .child(div().text_sm().child(format!(
-                "\"{}\" is tagged as a production connection. The statements in {file} will run against database \"{}\" and can overwrite or drop its objects.",
-                self.context.connection_name, self.context.database_name
+            .child(div().text_sm().child(t!(
+                "backup.dialog.confirm_body",
+                connection = self.context.connection_name,
+                file = file,
+                database = self.context.database_name
             )))
             .child(note(
-                "A backup of the database first is the only way back.",
+                t!("backup.dialog.confirm_note"),
                 cx.theme().muted_foreground,
             ))
     }
@@ -1446,40 +1517,47 @@ impl Render for RestoreDialog {
         };
         v_flex()
             .gap_4()
-            .child(div().text_sm().child(format!(
-                "The dump runs against database \"{}\" on \"{}\". Objects it creates replace or collide with the ones already there.",
-                self.context.database_name, self.context.connection_name
+            .child(div().text_sm().child(t!(
+                "backup.dialog.restore_intro",
+                database = self.context.database_name,
+                connection = self.context.connection_name
             )))
             .child(
                 v_flex()
                     .gap_1()
                     .child(labelled(
-                        "Dump",
+                        t!("backup.dialog.dump"),
                         h_flex()
                             .gap_2()
                             .child(Input::new(&self.file_input).flex_1())
-                            .child(Button::new("restore-browse").label("Browse…").on_click({
-                                let input = self.file_input.clone();
-                                move |_, window, cx| {
-                                    browse_into(
-                                        input.clone(),
-                                        gpui::PathPromptOptions {
-                                            files: true,
-                                            directories: true,
-                                            multiple: false,
-                                            prompt: Some("Restore".into()),
-                                        },
-                                        window,
-                                        cx,
-                                    );
-                                }
-                            })),
+                            .child(
+                                Button::new("restore-browse")
+                                    .label(t!("backup.dialog.browse"))
+                                    .on_click({
+                                        let input = self.file_input.clone();
+                                        move |_, window, cx| {
+                                            browse_into(
+                                                input.clone(),
+                                                gpui::PathPromptOptions {
+                                                    files: true,
+                                                    directories: true,
+                                                    multiple: false,
+                                                    prompt: Some(
+                                                        t!("backup.dialog.restore").into(),
+                                                    ),
+                                                },
+                                                window,
+                                                cx,
+                                            );
+                                        }
+                                    }),
+                            ),
                     ))
                     .children(detected),
             )
             .children(tool)
             .child(labelled(
-                "Extra arguments",
+                t!("backup.dialog.extra_arguments"),
                 Input::new(&self.extra_arguments_input),
             ))
             .when_some(self.error.clone(), |this, error| {
@@ -1494,7 +1572,11 @@ pub fn open_backup(context: ConnectionContext, window: &mut Window, cx: &mut App
     let Some(tools) = context.db_type.dialect().client_tools() else {
         return;
     };
-    let title = format!("Back Up \"{}\"", context.database_name);
+    let title: SharedString = t!(
+        "backup.dialog.backup_title",
+        database = context.database_name
+    )
+    .into();
     let dialog = cx.new(|cx| BackupDialog::new(context, tools, window, cx));
     window.open_dialog(cx, move |modal, _, cx| {
         modal
@@ -1511,7 +1593,11 @@ pub fn open_restore(context: ConnectionContext, window: &mut Window, cx: &mut Ap
     let Some(tools) = context.db_type.dialect().client_tools() else {
         return;
     };
-    let title = format!("Restore \"{}\"", context.database_name);
+    let title: SharedString = t!(
+        "backup.dialog.restore_title",
+        database = context.database_name
+    )
+    .into();
     let dialog = cx.new(|cx| RestoreDialog::new(context, tools, window, cx));
     window.open_dialog(cx, move |modal, _, cx| {
         modal

@@ -1,15 +1,21 @@
-use blanco_ui::IconName;
+use std::ops::Range;
+
+use blanco_ui::{
+    IconName,
+    sticky_rows::{StickyRows, StickyRowsHost, scroll_to_entry},
+};
 use gpui::{
-    AnyElement, AppContext as _, Context, Entity, FontWeight, InteractiveElement, IntoElement,
-    MouseButton, ParentElement, Render, ScrollHandle, StatefulInteractiveElement as _, Styled,
-    Subscription, Window, div, prelude::FluentBuilder, px,
+    AnyElement, App, AppContext as _, Context, Entity, FontWeight, InteractiveElement, IntoElement,
+    ListSizingBehavior, MouseButton, ParentElement, Render, ScrollStrategy,
+    StatefulInteractiveElement as _, Styled, Subscription, UniformListScrollHandle, Window, div,
+    prelude::FluentBuilder, px, uniform_list,
 };
 use gpui_component::{
     ActiveTheme as _, Icon, Sizable as _,
     button::{Button, ButtonVariants as _},
     h_flex,
     menu::ContextMenuExt as _,
-    scroll::ScrollableElement as _,
+    scroll::Scrollbar,
     tooltip::Tooltip,
     v_flex,
 };
@@ -18,15 +24,32 @@ use super::EditorPanel;
 use super::render::DraggedTab;
 use crate::app::NewQueryTab;
 
+/// Headers and tabs share one height, as `uniform_list` and the pinned
+/// headers both need.
 const ROW_HEIGHT: gpui::Pixels = px(28.);
+
+/// A row of the open tabs list.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum OpenTabsEntry {
+    /// A connection's header, or the trailing one for tabs without a
+    /// connection. `first_tab` names the connection.
+    Header {
+        connection_id: Option<i64>,
+        first_tab: usize,
+    },
+    Tab(usize),
+}
 
 /// The sidebar's list of the window's tabs, grouped by connection like the
 /// strip's overflow menu. It holds no tab state of its own: everything is read
 /// from and done through the `EditorPanel`, so the strip and the list always
-/// agree.
+/// agree. A group's header stays pinned to the top while its tabs scroll
+/// past, as the connection tree's folders do.
 pub struct OpenTabsPanel {
     editor_panel: Entity<EditorPanel>,
-    scroll_handle: ScrollHandle,
+    scroll_handle: UniformListScrollHandle,
+    /// The rows of the last render, which the pinned headers are read from.
+    entries: Vec<OpenTabsEntry>,
     /// The tab the list last scrolled to. The list follows the active tab
     /// only when it changes, so scrolling by hand is not undone on every
     /// render.
@@ -39,23 +62,100 @@ impl OpenTabsPanel {
         let subscription = cx.observe(&editor_panel, |_, _, cx| cx.notify());
         Self {
             editor_panel,
-            scroll_handle: ScrollHandle::new(),
+            scroll_handle: UniformListScrollHandle::new(),
+            entries: Vec::new(),
             scrolled_to_tab: None,
             _subscription: subscription,
         }
+    }
+
+    fn render_entry(
+        &mut self,
+        ix: usize,
+        pinned_slot: Option<usize>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let row = match self.entries.get(ix) {
+            Some(OpenTabsEntry::Header {
+                connection_id,
+                first_tab,
+            }) => {
+                let header = self.editor_panel.read(cx).render_open_tabs_header(
+                    *connection_id,
+                    *first_tab,
+                    cx,
+                );
+                match pinned_slot {
+                    Some(slot) => header
+                        .id(("open-tabs-pinned-header", slot))
+                        .cursor_pointer()
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _, _, cx| {
+                                this.on_pinned_header_click(ix, slot, cx)
+                            }),
+                        )
+                        .into_any_element(),
+                    None => header.into_any_element(),
+                }
+            }
+            Some(OpenTabsEntry::Tab(tab_ix)) => {
+                let tab_ix = *tab_ix;
+                self.editor_panel
+                    .update(cx, |panel, cx| panel.render_open_tab_row(tab_ix, cx))
+                    .unwrap_or_else(|| div().into_any_element())
+            }
+            None => div().into_any_element(),
+        };
+        div().h(ROW_HEIGHT).px_1().child(row).into_any_element()
+    }
+
+    /// Scrolls a pinned header's row back into the slot it was pinned in,
+    /// which brings its group's first tabs into view.
+    fn on_pinned_header_click(&mut self, ix: usize, slot: usize, cx: &mut Context<Self>) {
+        self.scroll_handle
+            .scroll_to_item_strict_with_offset(ix, ScrollStrategy::Top, slot);
+        cx.notify();
+    }
+}
+
+impl StickyRowsHost for OpenTabsPanel {
+    fn entry_count(&self) -> usize {
+        self.entries.len()
+    }
+
+    fn entry_depth(&self, ix: usize) -> usize {
+        match self.entries.get(ix) {
+            Some(OpenTabsEntry::Tab(_)) => 1,
+            _ => 0,
+        }
+    }
+
+    fn render_sticky_row(
+        &mut self,
+        ix: usize,
+        slot: usize,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        self.render_entry(ix, Some(slot), cx)
     }
 }
 
 impl Render for OpenTabsPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let (rows, active) = self
-            .editor_panel
-            .update(cx, |panel, cx| panel.render_open_tabs(cx));
-        if let Some((tab_ix, row_ix)) = active
-            && self.scrolled_to_tab != Some(tab_ix)
+        let panel = self.editor_panel.read(cx);
+        self.entries = panel.open_tab_entries(cx);
+        let active_tab_ix = panel.active_tab_ix;
+        let active_row = self
+            .entries
+            .iter()
+            .position(|entry| *entry == OpenTabsEntry::Tab(active_tab_ix));
+        if let Some(row_ix) = active_row
+            && self.scrolled_to_tab != Some(active_tab_ix)
         {
-            self.scrolled_to_tab = Some(tab_ix);
-            self.scroll_handle.scroll_to_item(row_ix);
+            self.scrolled_to_tab = Some(active_tab_ix);
+            scroll_to_entry(&self.scroll_handle, row_ix, 1, ScrollStrategy::Top);
         }
 
         v_flex()
@@ -75,14 +175,14 @@ impl Render for OpenTabsPanel {
                             .flex_1()
                             .text_sm()
                             .text_color(cx.theme().muted_foreground)
-                            .child("Open Tabs"),
+                            .child(t!("shell.sidebar.open_tabs")),
                     )
                     .child(
                         Button::new("open-tabs-new-query")
                             .ghost()
                             .xsmall()
                             .icon(IconName::Plus)
-                            .tooltip("New Query Tab")
+                            .tooltip(crate::keybindings::action_label("NewQueryTab"))
                             .on_click(|_, window, cx| {
                                 window.dispatch_action(Box::new(NewQueryTab), cx);
                             }),
@@ -94,18 +194,29 @@ impl Render for OpenTabsPanel {
                     .min_h_0()
                     .relative()
                     .child(
-                        v_flex()
-                            .id("open-tabs-scroll")
-                            .size_full()
-                            .px_1()
-                            .py_1()
-                            .overflow_y_scroll()
-                            .track_scroll(&self.scroll_handle)
-                            .children(rows),
+                        uniform_list(
+                            "open-tabs-list",
+                            self.entries.len(),
+                            cx.processor(|this, range: Range<usize>, _window, cx| {
+                                range
+                                    .map(|ix| this.render_entry(ix, None, cx))
+                                    .collect::<Vec<_>>()
+                            }),
+                        )
+                        .with_decoration(StickyRows(cx.entity()))
+                        .size_full()
+                        .track_scroll(&self.scroll_handle)
+                        .with_sizing_behavior(ListSizingBehavior::Auto),
                     )
-                    // Beside the list rather than inside it, so the list's
-                    // children are exactly the rows `scroll_to_item` counts.
-                    .vertical_scrollbar(&self.scroll_handle),
+                    .child(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .right_0()
+                            .bottom_0()
+                            .w(px(16.))
+                            .child(Scrollbar::vertical(&self.scroll_handle)),
+                    ),
             )
     }
 }
@@ -113,7 +224,7 @@ impl Render for OpenTabsPanel {
 impl EditorPanel {
     /// Tab indices in strip order, bucketed by connection in the order each
     /// connection first appears. Tabs without one go into a trailing bucket.
-    fn open_tab_groups(&self, cx: &gpui::App) -> Vec<(Option<i64>, Vec<usize>)> {
+    fn open_tab_groups(&self, cx: &App) -> Vec<(Option<i64>, Vec<usize>)> {
         let mut groups: Vec<(Option<i64>, Vec<usize>)> = Vec::new();
         let mut unbound = Vec::new();
         for (ix, tab) in self.tabs.iter().enumerate() {
@@ -136,57 +247,53 @@ impl EditorPanel {
         groups
     }
 
-    /// The list's rows, group headers included, and the active tab's index
-    /// with the position of its row.
-    pub(super) fn render_open_tabs(
-        &mut self,
-        cx: &mut Context<Self>,
-    ) -> (Vec<AnyElement>, Option<(usize, usize)>) {
-        let groups = self.open_tab_groups(cx);
-        let mut rows = Vec::new();
-        let mut active = None;
-        for (group_ix, (connection_id, indices)) in groups.into_iter().enumerate() {
-            let header_context = connection_id
-                .and_then(|_| indices.first())
-                .and_then(|ix| self.tabs.get(*ix))
-                .and_then(|tab| tab.context(cx));
-            rows.push(
-                h_flex()
-                    .flex_none()
-                    .px_2()
-                    .gap_2()
-                    .items_center()
-                    .h(px(24.))
-                    .when(group_ix > 0, |this| this.mt_2())
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .text_xs()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(cx.theme().foreground)
-                            .child(match &header_context {
-                                Some(context) => context.connection_name.clone(),
-                                None => "Other".to_string(),
-                            }),
-                    )
-                    .when_some(
-                        header_context.and_then(|context| context.environment_type),
-                        |this, env_type| this.child(Self::environment_badge(env_type, cx)),
-                    )
-                    .into_any_element(),
-            );
-            for ix in indices {
-                if let Some(row) = self.render_open_tab_row(ix, cx) {
-                    if ix == self.active_tab_ix {
-                        active = Some((ix, rows.len()));
-                    }
-                    rows.push(row);
-                }
-            }
+    /// The list's rows: each group's header followed by its tabs.
+    fn open_tab_entries(&self, cx: &App) -> Vec<OpenTabsEntry> {
+        let mut entries = Vec::new();
+        for (connection_id, indices) in self.open_tab_groups(cx) {
+            let Some(&first_tab) = indices.first() else {
+                continue;
+            };
+            entries.push(OpenTabsEntry::Header {
+                connection_id,
+                first_tab,
+            });
+            entries.extend(indices.into_iter().map(OpenTabsEntry::Tab));
         }
-        (rows, active)
+        entries
+    }
+
+    fn render_open_tabs_header(
+        &self,
+        connection_id: Option<i64>,
+        first_tab: usize,
+        cx: &App,
+    ) -> gpui::Div {
+        let header_context = connection_id
+            .and_then(|_| self.tabs.get(first_tab))
+            .and_then(|tab| tab.context(cx));
+        h_flex()
+            .size_full()
+            .px_2()
+            .gap_2()
+            .items_center()
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_xs()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(cx.theme().foreground)
+                    .child(match &header_context {
+                        Some(context) => context.connection_name.clone(),
+                        None => t!("editor.tab_group_other").into_owned(),
+                    }),
+            )
+            .when_some(
+                header_context.and_then(|context| context.environment_type),
+                |this, env_type| this.child(Self::environment_badge(env_type, cx)),
+            )
     }
 
     fn render_open_tab_row(&self, ix: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -308,7 +415,7 @@ impl EditorPanel {
 #[cfg(test)]
 impl OpenTabsPanel {
     pub fn scroll_offset_y(&self) -> gpui::Pixels {
-        self.scroll_handle.offset().y
+        self.scroll_handle.0.borrow().base_handle.offset().y
     }
 
     pub fn group_titles(&self, cx: &gpui::App) -> Vec<(Option<i64>, Vec<String>)> {

@@ -47,7 +47,7 @@ fn udf_signature(function: &FunctionSignatureInfo) -> SignatureInformation {
     }
     let mut documentation = String::new();
     if let Some(schema) = &function.schema {
-        documentation.push_str(&format!("*User-defined function in `{schema}`*"));
+        documentation.push_str(&t!("completion.user_defined_function", schema = schema));
     }
     if let Some(comment) = function.comment.as_deref().filter(|c| !c.is_empty()) {
         if !documentation.is_empty() {

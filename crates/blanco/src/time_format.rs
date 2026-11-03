@@ -21,7 +21,12 @@ pub fn format_duration(duration_us: i64) -> String {
     } else {
         let minutes = duration_ms / 60000;
         let seconds = (duration_ms % 60000) / 1000;
-        format!("{}m {}s", minutes, seconds)
+        t!(
+            "shell.time.minutes_seconds",
+            minutes = minutes,
+            seconds = seconds
+        )
+        .into_owned()
     }
 }
 
@@ -33,12 +38,17 @@ pub fn format_elapsed(duration: std::time::Duration) -> String {
 /// statement that returned no rows.
 pub fn format_timing(timing: &blanco_core::QueryTiming) -> String {
     match timing.fetch {
-        Some(fetch) => format!(
-            "execution {} · fetch {}",
-            format_elapsed(timing.execution),
-            format_elapsed(fetch)
-        ),
-        None => format!("execution {}", format_elapsed(timing.execution)),
+        Some(fetch) => t!(
+            "shell.time.execution_fetch",
+            execution = format_elapsed(timing.execution),
+            fetch = format_elapsed(fetch)
+        )
+        .into_owned(),
+        None => t!(
+            "shell.time.execution",
+            execution = format_elapsed(timing.execution)
+        )
+        .into_owned(),
     }
 }
 
@@ -57,17 +67,17 @@ pub fn format_relative(timestamp_secs: i64) -> String {
     let delta = now - timestamp_secs;
 
     if delta < 0 {
-        return "just now".to_string();
+        return t!("shell.time.just_now").into_owned();
     }
 
     match delta {
-        0..=9 => "just now".to_string(),
-        10..=59 => format!("{}s ago", delta),
-        60..=3599 => format!("{}m ago", delta / 60),
-        3600..=86399 => format!("{}h ago", delta / 3600),
-        86400..=604799 => format!("{}d ago", delta / 86400),
+        0..=9 => t!("shell.time.just_now").into_owned(),
+        10..=59 => t!("shell.time.seconds_ago", count = delta).into_owned(),
+        60..=3599 => t!("shell.time.minutes_ago", count = delta / 60).into_owned(),
+        3600..=86399 => t!("shell.time.hours_ago", count = delta / 3600).into_owned(),
+        86400..=604799 => t!("shell.time.days_ago", count = delta / 86400).into_owned(),
         _ => DateTime::<Utc>::from_timestamp(timestamp_secs, 0)
             .map(|dt| dt.format("%Y-%m-%d").to_string())
-            .unwrap_or_else(|| "unknown".to_string()),
+            .unwrap_or_else(|| t!("shell.time.unknown").into_owned()),
     }
 }

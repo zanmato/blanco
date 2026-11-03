@@ -279,15 +279,21 @@ impl PostgresConnection {
         let database_name = database_name.ok_or(anyhow::anyhow!("missing database"))?;
 
         let pool = self.get_or_create_pool(database_name).await.map_err(|e| {
-            anyhow::anyhow!(
-                "Failed to get connection pool for database '{}': {}",
-                database_name,
-                e
-            )
+            anyhow::anyhow!(t!(
+                "postgres.pool_failed_because",
+                database = database_name,
+                error = e
+            ))
         })?;
 
         self.execute_query_with_params(&pool, query, parameters)
             .await
-            .map_err(|e| anyhow::anyhow!("PostgreSQL query execution failed: {}", e))
+            .map_err(|e| {
+                anyhow::anyhow!(t!(
+                    "postgres.query_failed_because",
+                    backend = "PostgreSQL",
+                    error = e
+                ))
+            })
     }
 }

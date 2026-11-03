@@ -11,6 +11,7 @@ use blanco_core::ddl::{
 use blanco_core::{
     ColumnInfo, ConnectionContext, ForeignKeyConstraint, IndexInfo, ObjectKind, TableInfo,
 };
+use blanco_ui::table::{DataTable, TableDelegate, TableEvent, TableState};
 use blanco_ui::{IconName, SqlView, SqlViewMessage};
 use gpui::{
     AnyElement, App, AppContext, Context, Entity, FocusHandle, Focusable, FontWeight,
@@ -26,7 +27,6 @@ use gpui_component::{
     input::{Input, InputEvent, InputState, Textarea, TextareaState},
     notification::NotificationType,
     scroll::ScrollableElement,
-    table::{DataTable, TableEvent, TableState},
     v_flex,
 };
 
@@ -165,13 +165,14 @@ impl TableStructureTab {
             .col_selectable(false)
         });
 
-        let column_search = cx.new(|cx| InputState::new(window, cx).placeholder("Filter columns"));
+        let column_search =
+            cx.new(|cx| InputState::new(window, cx).placeholder(t!("structure.filter_columns")));
         let table_comment = cx.new(|cx| {
             TextareaState::new(window, cx)
                 .auto_grow(3, 8)
-                .placeholder("No comment")
+                .placeholder(t!("structure.no_comment"))
         });
-        let subscriptions = vec![
+        let mut subscriptions = vec![
             cx.subscribe(&column_search, |this, search, event: &InputEvent, cx| {
                 if let InputEvent::Change = event {
                     let filter = search.read(cx).value().to_string();
@@ -189,7 +190,7 @@ impl TableStructureTab {
                     // A selection made before switching sections arrives
                     // after the switch, and must not open its row there.
                     if this.section == Section::Columns
-                        && let Some(row) = selected_row(event)
+                        && let Some(row) = selected_row(event, table.read(cx))
                         && let Some(column_ix) = table.read(cx).delegate().column_at(row)
                     {
                         this.show_column(column_ix, false, window, cx);
@@ -199,9 +200,9 @@ impl TableStructureTab {
             cx.subscribe_in(
                 &indexes_table_state,
                 window,
-                |this, _, event: &TableEvent, _, cx| {
+                |this, table, event: &TableEvent, _, cx| {
                     if this.section == Section::Indexes
-                        && let Some(row) = selected_row(event)
+                        && let Some(row) = selected_row(event, table.read(cx))
                     {
                         this.panel = Some(Panel::Index(row));
                         cx.notify();
@@ -215,7 +216,7 @@ impl TableStructureTab {
                     if this.section != Section::ForeignKeys {
                         return;
                     }
-                    let Some(row) = selected_row(event) else {
+                    let Some(row) = selected_row(event, table.read(cx)) else {
                         return;
                     };
                     match table
@@ -233,6 +234,38 @@ impl TableStructureTab {
                 },
             ),
         ];
+        // The grids' headings and the inputs' placeholders are made once, so
+        // they are made again in the new language.
+        subscriptions.push(cx.observe_global_in::<crate::i18n::Locale>(
+            window,
+            |this: &mut Self, window, cx| {
+                this.columns_table_state.update(cx, |table, cx| {
+                    table.delegate_mut().relabel();
+                    table.refresh_column_names(cx);
+                });
+                this.indexes_table_state.update(cx, |table, cx| {
+                    table.delegate_mut().relabel();
+                    table.refresh_column_names(cx);
+                });
+                this.foreign_keys_table_state.update(cx, |table, cx| {
+                    table.delegate_mut().relabel();
+                    table.refresh_column_names(cx);
+                });
+                this.column_search.update(cx, |input, cx| {
+                    input.set_placeholder(t!("structure.filter_columns"), window, cx)
+                });
+                this.table_comment.update(cx, |input, cx| {
+                    input.set_placeholder(t!("structure.no_comment"), window, cx)
+                });
+                if let Some(name) = &this.creating {
+                    this.title = t!("structure.new_table_title").into_owned();
+                    name.update(cx, |input, cx| {
+                        input.set_placeholder(t!("structure.table_name_placeholder"), window, cx)
+                    });
+                }
+                cx.notify();
+            },
+        ));
 
         let mut tab = Self {
             title,
@@ -283,9 +316,11 @@ impl TableStructureTab {
     ) -> Self {
         let dialect = context.dialect();
         let mut tab = Self::new(context, String::new(), Vec::new(), Vec::new(), window, cx);
-        tab.title = "New table".to_string();
+        tab.title = t!("structure.new_table_title").into_owned();
         tab.sql_visible = true;
-        let name = cx.new(|cx| InputState::new(window, cx).placeholder("Table name"));
+        let name = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(t!("structure.table_name_placeholder"))
+        });
         tab._subscriptions
             .push(cx.subscribe(&name, |this, _, event: &InputEvent, cx| {
                 if let InputEvent::Change = event {
@@ -421,10 +456,13 @@ impl TableStructureTab {
         let app_database = AppDatabase::global(cx).clone();
         let virtual_keys_database = database_name.clone();
         let virtual_keys_schema = schema_name.clone();
-        let activity = ActivityReporter::global(cx).begin(format!(
-            "{}: loading structure",
-            self.context.connection_name
-        ));
+        let activity = ActivityReporter::global(cx).begin(
+            t!(
+                "structure.activity_loading",
+                connection = self.context.connection_name
+            )
+            .into_owned(),
+        );
 
         cx.spawn_in(window, async move |this, cx| {
             let _activity = activity;
@@ -700,7 +738,16 @@ impl TableStructureTab {
         ) {
             Ok(statements) => Some(PendingChange { change, statements }),
             Err(error) => {
-                self.notify_error(format!("{}: {error}", change.label()), window, cx);
+                self.notify_error(
+                    t!(
+                        "structure.change_refused",
+                        change = change.label(),
+                        reason = error
+                    )
+                    .into_owned(),
+                    window,
+                    cx,
+                );
                 None
             }
         }
@@ -726,7 +773,11 @@ impl TableStructureTab {
                 .get(ix)
                 .map(|pending| pending.change.label())
                 .unwrap_or_default();
-            self.notify_error(format!("{label}: {reason}"), window, cx);
+            self.notify_error(
+                t!("structure.change_refused", change = label, reason = reason).into_owned(),
+                window,
+                cx,
+            );
             return false;
         }
         let previous = std::mem::replace(&mut self.pending, pending);
@@ -737,7 +788,11 @@ impl TableStructureTab {
                 .unwrap_or_else(|| "new_table".to_string());
             if let Err(error) = self.create_statements(&name) {
                 self.pending = previous;
-                self.notify_error(format!("New table: {error}"), window, cx);
+                self.notify_error(
+                    t!("structure.new_table_error", error = error).into_owned(),
+                    window,
+                    cx,
+                );
                 return false;
             }
         }
@@ -842,14 +897,19 @@ impl TableStructureTab {
                 .rev()
                 .map(|(ix, reason)| {
                     let pending = self.pending.remove(*ix);
-                    format!("{} ({reason})", pending.change.describe())
+                    t!(
+                        "structure.change_with_reason",
+                        change = pending.change.describe(),
+                        reason = reason
+                    )
+                    .into_owned()
                 })
                 .collect();
             dropped.reverse();
             window.push_notification(
                 (
                     NotificationType::Warning,
-                    format!("Undid changes that no longer apply: {}", dropped.join(", ")),
+                    t!("structure.undid_changes", changes = dropped.join(", ")).into_owned(),
                 ),
                 cx,
             );
@@ -864,10 +924,12 @@ impl TableStructureTab {
             window.push_notification(
                 (
                     NotificationType::Warning,
-                    format!(
-                        "Undid a change that no longer applies: {} ({reason})",
-                        undone.change.describe()
-                    ),
+                    t!(
+                        "structure.undid_change",
+                        change = undone.change.describe(),
+                        reason = reason
+                    )
+                    .into_owned(),
                 ),
                 cx,
             );
@@ -1076,7 +1138,11 @@ impl TableStructureTab {
         let key = match form.read(cx).virtual_key(cx) {
             Ok(key) => key,
             Err(message) => {
-                self.notify_error(format!("Virtual key: {message}"), window, cx);
+                self.notify_error(
+                    t!("structure.virtual_key_error", error = message).into_owned(),
+                    window,
+                    cx,
+                );
                 return;
             }
         };
@@ -1098,9 +1164,9 @@ impl TableStructureTab {
                 }
                 Err(error) => {
                     let message = if matches!(&error, sqlx::Error::Database(db) if db.is_unique_violation()) {
-                        format!("The table already has a virtual key named \"{}\"", key.name)
+                        t!("structure.virtual_key_exists", name = key.name).into_owned()
                     } else {
-                        format!("Saving the virtual key failed: {error}")
+                        t!("structure.virtual_key_save_failed", error = error).into_owned()
                     };
                     this.notify_error(message, window, cx);
                 }
@@ -1123,7 +1189,7 @@ impl TableStructureTab {
                     this.show_staged(window, cx);
                 }
                 Err(error) => this.notify_error(
-                    format!("Deleting the virtual key failed: {error}"),
+                    t!("structure.virtual_key_delete_failed", error = error).into_owned(),
                     window,
                     cx,
                 ),
@@ -1238,7 +1304,7 @@ impl TableStructureTab {
     fn select_column_row(&mut self, column_ix: usize, cx: &mut Context<Self>) {
         self.columns_table_state.update(cx, |table, cx| {
             if let Some(row) = table.delegate().row_of(column_ix) {
-                table.set_selected_row(row, cx);
+                table.set_selection(blanco_ui::table::TableSelection::row(row), cx);
                 table.scroll_to_row(row, cx);
             }
         });
@@ -1357,7 +1423,7 @@ impl TableStructureTab {
         if self.is_creating() {
             let name = self.new_table_name(cx);
             let statements = if name.is_empty() {
-                Err("Name the table to see its statement".to_string())
+                Err(t!("structure.name_table_to_see_statement").into_owned())
             } else {
                 self.create_statements(&name)
                     .map_err(|error| error.to_string())
@@ -1394,7 +1460,7 @@ impl TableStructureTab {
             return;
         }
         if self.is_creating() && self.new_table_name(cx).is_empty() {
-            self.notify_error("Name the table first".to_string(), window, cx);
+            self.notify_error(t!("structure.name_table_first").into_owned(), window, cx);
             return;
         }
         if !self.context.confirms_writes() {
@@ -1406,24 +1472,39 @@ impl TableStructureTab {
             .environment_type
             .map(|environment| environment.to_string())
             .unwrap_or_default();
-        let count = if self.is_creating() {
-            format!("the table {}", self.new_table_name(cx))
+        let (title, confirm_label): (SharedString, SharedString) = if self.is_creating() {
+            (
+                t!(
+                    "structure.confirm_create_title",
+                    table = self.new_table_name(cx),
+                    environment = environment
+                )
+                .into(),
+                t!("structure.confirm_create_button", environment = environment).into(),
+            )
         } else {
-            changes_label(self.pending.len())
-        };
-        let action = if self.is_creating() {
-            "Create"
-        } else {
-            "Apply"
+            (
+                t!(
+                    "structure.confirm_apply_title",
+                    changes = changes_label(self.pending.len()),
+                    environment = environment
+                )
+                .into(),
+                t!("structure.apply_on", environment = environment).into(),
+            )
         };
         let preview = self.apply_preview.clone();
         let tab = cx.entity().downgrade();
         window.open_dialog(cx, move |dialog, _, _| {
             let tab = tab.clone();
             dialog
-                .title(format!("{action} {count} on {environment}?"))
+                .title(title.clone())
                 .w(px(560.))
-                .child(div().text_sm().child("The statements run in this order."))
+                .child(
+                    div()
+                        .text_sm()
+                        .child(SharedString::from(t!("structure.statements_run_in_order"))),
+                )
                 .child(
                     v_flex()
                         .h(px(280.))
@@ -1436,7 +1517,7 @@ impl TableStructureTab {
                         .child(
                             DialogClose::new().child(
                                 Button::new("apply-structure-cancel")
-                                    .label("Cancel")
+                                    .label(t!("structure.cancel"))
                                     .outline(),
                             ),
                         )
@@ -1445,7 +1526,7 @@ impl TableStructureTab {
                                 Button::new("apply-structure-confirm")
                                     .danger()
                                     .icon(IconName::Check)
-                                    .label(format!("{action} on {environment}"))
+                                    .label(confirm_label.clone())
                                     .on_click(move |_, window, cx| {
                                         tab.update(cx, |tab, cx| tab.apply_changes(window, cx))
                                             .log_err();
@@ -1470,7 +1551,11 @@ impl TableStructureTab {
             Some(name) => match self.create_statements(name) {
                 Ok(statements) => statements,
                 Err(error) => {
-                    self.notify_error(format!("New table: {error}"), window, cx);
+                    self.notify_error(
+                        t!("structure.new_table_error", error = error).into_owned(),
+                        window,
+                        cx,
+                    );
                     return;
                 }
             },
@@ -1487,15 +1572,20 @@ impl TableStructureTab {
         let connection_id = self.context.connection_id;
         let database_name = self.context.database_name.clone();
         let table_name = new_name.clone().unwrap_or_else(|| self.table_name.clone());
-        let activity = ActivityReporter::global(cx).begin(format!(
-            "{}: {}",
-            self.context.connection_name,
+        let activity = ActivityReporter::global(cx).begin(
             if new_name.is_some() {
-                "creating a table"
+                t!(
+                    "structure.activity_creating",
+                    connection = self.context.connection_name
+                )
             } else {
-                "applying structure changes"
+                t!(
+                    "structure.activity_applying",
+                    connection = self.context.connection_name
+                )
             }
-        ));
+            .into_owned(),
+        );
         self.applying = true;
         self.panel = None;
         self.show_staged(window, cx);
@@ -1524,23 +1614,35 @@ impl TableStructureTab {
                             this.title = table_name.clone();
                             this.initial_changes.clear();
                             this.sql_visible = false;
-                            format!("Created {table_name}")
+                            t!("structure.created", table = table_name).into_owned()
                         } else {
-                            format!("Applied {} to {table_name}", changes_label(change_count))
+                            t!(
+                                "structure.applied",
+                                changes = changes_label(change_count),
+                                table = table_name
+                            )
+                            .into_owned()
                         };
                         window.push_notification((NotificationType::Success, message), cx);
                     }
                     Err(error) => {
-                        let what = if this.is_creating() {
-                            format!("Creating {table_name}")
+                        let message = if this.is_creating() {
+                            tracing::error!("Creating {table_name} failed: {error:#}");
+                            t!(
+                                "structure.create_failed",
+                                table = table_name,
+                                error = format!("{error:#}")
+                            )
                         } else {
-                            format!("Applying changes to {table_name}")
+                            tracing::error!("Applying changes to {table_name} failed: {error:#}");
+                            t!(
+                                "structure.apply_failed",
+                                table = table_name,
+                                error = format!("{error:#}")
+                            )
                         };
-                        tracing::error!("{what} failed: {error:#}");
-                        window.push_notification(
-                            (NotificationType::Error, format!("{what} failed: {error:#}")),
-                            cx,
-                        );
+                        window
+                            .push_notification((NotificationType::Error, message.into_owned()), cx);
                         // A failed create leaves nothing to reload, and the
                         // definition stays to be fixed.
                         if this.is_creating() {
@@ -1569,7 +1671,7 @@ impl TableStructureTab {
                 connection_id: self.context.connection_id,
                 database_name: self.context.database_name.clone(),
                 schema_name: self.context.schema_name.clone(),
-                title: format!("{} DDL", self.table_name),
+                title: t!("structure.ddl_tab_title", table = self.table_name).into_owned(),
                 sql: ddl,
             }),
             cx,
@@ -1588,18 +1690,22 @@ struct Loaded {
     read_only: bool,
 }
 
-/// The row a click or a keyboard move selected in one of the grids.
-fn selected_row(event: &TableEvent) -> Option<usize> {
-    match event {
-        TableEvent::SelectRow(row) | TableEvent::SelectCell(row, _) => Some(*row),
+/// The row a click or a keyboard move selected in one of the grids: one
+/// selected row or a selected cell's row. Several rows open nothing.
+fn selected_row<D: TableDelegate>(event: &TableEvent, table: &TableState<D>) -> Option<usize> {
+    if !matches!(event, TableEvent::SelectionChanged) {
+        return None;
+    }
+    match table.selection().rows().as_slice() {
+        [row] => Some(*row),
         _ => None,
     }
 }
 
 fn changes_label(count: usize) -> String {
     match count {
-        1 => "1 change".to_string(),
-        count => format!("{count} changes"),
+        1 => t!("structure.changes_one").into_owned(),
+        count => t!("structure.changes_other", count = count).into_owned(),
     }
 }
 
@@ -1669,7 +1775,7 @@ impl TableStructureTab {
                     div()
                         .text_xs()
                         .text_color(theme.muted_foreground)
-                        .child("Read-only connection"),
+                        .child(SharedString::from(t!("structure.read_only_connection"))),
                 )
             })
             .child(div().flex_1())
@@ -1678,23 +1784,23 @@ impl TableStructureTab {
                     .ghost()
                     .small()
                     .icon(IconName::RotateCcw)
-                    .tooltip("Reload the structure from the server")
+                    .tooltip(t!("structure.reload_tooltip"))
                     .loading(self.loading)
                     .on_click(cx.listener(|this, _, window, cx| this.reload(window, cx))),
             )
     }
 
-    fn sections(&self) -> Vec<(Section, &'static str, Option<usize>)> {
+    fn sections(&self) -> Vec<(Section, SharedString, Option<usize>)> {
         let live = |marks: &[RowMark]| marks.iter().filter(|mark| mark.is_live()).count();
         let mut sections = vec![
             (
                 Section::Columns,
-                "Columns",
+                t!("structure.section.columns").into(),
                 Some(live(&self.staged.column_marks)),
             ),
             (
                 Section::Indexes,
-                "Indexes",
+                t!("structure.section.indexes").into(),
                 Some(live(&self.staged.index_marks)),
             ),
         ];
@@ -1703,15 +1809,19 @@ impl TableStructureTab {
         if !self.is_creating() || self.shows_foreign_keys() {
             sections.push((
                 Section::ForeignKeys,
-                "Foreign keys",
+                t!("structure.section.foreign_keys").into(),
                 Some(live(&self.staged.foreign_key_marks) + self.virtual_keys.len()),
             ));
         }
         if !self.is_creating() {
-            sections.push((Section::Table, "Table", None));
+            sections.push((Section::Table, t!("structure.section.table").into(), None));
         }
         if self.supports_table_ddl() {
-            sections.push((Section::CreateStatement, "Create statement", None));
+            sections.push((
+                Section::CreateStatement,
+                t!("structure.section.create_statement").into(),
+                None,
+            ));
         }
         sections
     }
@@ -1729,7 +1839,7 @@ impl TableStructureTab {
             .children(self.sections().into_iter().map(|(section, label, count)| {
                 let active = self.section == section;
                 h_flex()
-                    .id(SharedString::from(format!("structure-section-{label}")))
+                    .id(SharedString::from(format!("structure-section-{section:?}")))
                     .justify_between()
                     .px_2()
                     .py_1p5()
@@ -1793,7 +1903,7 @@ impl TableStructureTab {
                                 .outline()
                                 .small()
                                 .icon(IconName::Plus)
-                                .label("Column")
+                                .label(t!("structure.add_column_button"))
                                 .on_click(
                                     cx.listener(|this, _, window, cx| this.new_column(window, cx)),
                                 ),
@@ -1805,7 +1915,7 @@ impl TableStructureTab {
                             .outline()
                             .small()
                             .icon(IconName::Plus)
-                            .label("Index")
+                            .label(t!("structure.add_index_button"))
                             .on_click(
                                 cx.listener(|this, _, window, cx| this.new_index(window, cx)),
                             ),
@@ -1815,23 +1925,23 @@ impl TableStructureTab {
                     .child(div().flex_1())
                     .when(!self.is_creating(), |this| {
                         this.child(
-                        Button::new("add-virtual-key")
-                            .outline()
-                            .small()
-                            .icon(IconName::Plus)
-                            .label("Virtual Key")
-                            // Virtual keys are stored with their connection,
-                            // which a file opened directly does not have.
-                            .disabled(self.context.is_temporary())
-                            .tooltip(if self.context.is_temporary() {
-                                "Save the connection to give its tables virtual keys"
-                            } else {
-                                "A foreign key kept in Blanco, for the grid and the schema graph"
-                            })
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.edit_virtual_key(0, window, cx)
-                            })),
-                    )
+                            Button::new("add-virtual-key")
+                                .outline()
+                                .small()
+                                .icon(IconName::Plus)
+                                .label(t!("structure.add_virtual_key_button"))
+                                // Virtual keys are stored with their connection,
+                                // which a file opened directly does not have.
+                                .disabled(self.context.is_temporary())
+                                .tooltip(if self.context.is_temporary() {
+                                    t!("structure.virtual_key_needs_saved_connection")
+                                } else {
+                                    t!("structure.virtual_key_tooltip")
+                                })
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.edit_virtual_key(0, window, cx)
+                                })),
+                        )
                     })
                     // A new table declares its keys inline, which every
                     // backend with foreign keys takes.
@@ -1848,7 +1958,7 @@ impl TableStructureTab {
                                     .outline()
                                     .small()
                                     .icon(IconName::Plus)
-                                    .label("Foreign Key")
+                                    .label(t!("structure.add_foreign_key_button"))
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.new_foreign_key(window, cx)
                                     })),
@@ -1861,7 +1971,7 @@ impl TableStructureTab {
                     Button::new("open-table-ddl")
                         .outline()
                         .small()
-                        .label("Open in Query Tab")
+                        .label(t!("structure.open_in_query_tab"))
                         .disabled(self.ddl_text.is_none())
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.open_ddl_in_query_tab(window, cx)
@@ -1922,13 +2032,13 @@ impl TableStructureTab {
                 div()
                     .p_4()
                     .text_color(theme.danger_foreground)
-                    .child(format!("Error: {error}"))
+                    .child(SharedString::from(t!("structure.error", error = error)))
                     .into_any_element()
             } else if self.ddl_loading {
                 div()
                     .p_4()
                     .text_color(theme.muted_foreground)
-                    .child("Loading…")
+                    .child(SharedString::from(t!("structure.loading")))
                     .into_any_element()
             } else {
                 self.ddl_log.clone().into_any_element()
@@ -1950,12 +2060,12 @@ impl TableStructureTab {
                 .border_color(theme.border)
                 .rounded(theme.radius)
         };
-        let title = |text: &'static str| {
+        let title = |text: std::borrow::Cow<'static, str>| {
             div()
                 .text_sm()
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(theme.foreground)
-                .child(text)
+                .child(SharedString::from(text))
         };
         let stat = |label: String, value: String, note: Option<String>| {
             h_flex()
@@ -1985,26 +2095,42 @@ impl TableStructureTab {
         let mut stats = Vec::new();
         if let Some(rows) = info.estimated_rows {
             stats.push(stat(
-                "Rows".into(),
-                format!("about {}", group_digits(rows)),
+                t!("structure.info.rows").into_owned(),
+                t!("structure.info.about", value = group_digits(rows)).into_owned(),
                 None,
             ));
         }
         if let Some(bytes) = info.data_bytes {
-            stats.push(stat("Data size".into(), format_bytes(bytes), None));
+            stats.push(stat(
+                t!("structure.info.data_size").into_owned(),
+                format_bytes(bytes),
+                None,
+            ));
         }
         if let Some(bytes) = info.index_bytes {
-            stats.push(stat("Index size".into(), format_bytes(bytes), None));
+            stats.push(stat(
+                t!("structure.info.index_size").into_owned(),
+                format_bytes(bytes),
+                None,
+            ));
         }
         if let (Some(data), Some(index)) = (info.data_bytes, info.index_bytes) {
-            stats.push(stat("Total size".into(), format_bytes(data + index), None));
+            stats.push(stat(
+                t!("structure.info.total_size").into_owned(),
+                format_bytes(data + index),
+                None,
+            ));
         }
         if let Some(created) = &info.created {
-            stats.push(stat("Created".into(), created.clone(), None));
+            stats.push(stat(
+                t!("structure.info.created").into_owned(),
+                created.clone(),
+                None,
+            ));
         }
         if let Some(modified) = &info.last_modified {
             stats.push(stat(
-                "Last modified".into(),
+                t!("structure.info.last_modified").into_owned(),
                 modified.at.clone(),
                 Some(modified.note.clone()),
             ));
@@ -2025,7 +2151,7 @@ impl TableStructureTab {
                 .when(dialect.supports_comments(), |this| {
                     this.child(
                         card()
-                            .child(title("Comment"))
+                            .child(title(t!("structure.info.comment")))
                             .child(Textarea::new(&self.table_comment).disabled(!can_comment))
                             .when(can_comment, |this| {
                                 this.child(
@@ -2033,7 +2159,7 @@ impl TableStructureTab {
                                         Button::new("stage-table-comment")
                                             .small()
                                             .primary()
-                                            .label("Save Comment")
+                                            .label(t!("structure.info.save_comment"))
                                             .disabled(!comment_changed)
                                             .on_click(cx.listener(|this, _, window, cx| {
                                                 this.stage_table_comment(window, cx)
@@ -2043,23 +2169,29 @@ impl TableStructureTab {
                             }),
                     )
                 })
-                .child(card().child(title("Information")).map(|this| {
-                    if stats.is_empty() {
-                        this.child(div().text_sm().text_color(theme.muted_foreground).child(
-                            format!(
-                                "{} records no size or change times for tables.",
-                                self.context.db_type
-                            ),
-                        ))
-                    } else {
-                        this.child(v_flex().children(stats)).child(
-                            div()
-                                .text_xs()
-                                .text_color(theme.muted_foreground)
-                                .child("Rows and sizes are the server's estimates."),
-                        )
-                    }
-                })),
+                .child(
+                    card()
+                        .child(title(t!("structure.info.information")))
+                        .map(|this| {
+                            if stats.is_empty() {
+                                this.child(
+                                    div().text_sm().text_color(theme.muted_foreground).child(
+                                        SharedString::from(t!(
+                                            "structure.info.no_statistics",
+                                            backend = self.context.db_type
+                                        )),
+                                    ),
+                                )
+                            } else {
+                                this.child(v_flex().children(stats)).child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(theme.muted_foreground)
+                                        .child(SharedString::from(t!("structure.info.estimates"))),
+                                )
+                            }
+                        }),
+                ),
         )
     }
 
@@ -2067,10 +2199,13 @@ impl TableStructureTab {
         let can_edit = self.can_edit_structure();
         let (title, mark, body, buttons) = match panel {
             Panel::NewColumn(form) => (
-                "New column".to_string(),
+                t!("structure.panel.new_column").into_owned(),
                 None,
                 form.clone().into_any_element(),
-                vec![self.cancel_button(cx), self.save_button("Add Column", cx)],
+                vec![
+                    self.cancel_button(cx),
+                    self.save_button(t!("structure.panel.add_column").into(), cx),
+                ],
             ),
             Panel::Column { row, form } => {
                 let column = self.staged.columns.get(*row);
@@ -2084,13 +2219,24 @@ impl TableStructureTab {
                     (Some(form), _) => form.clone().into_any_element(),
                     (None, Some(column)) => details(
                         vec![
-                            ("Type", column.display_type()),
+                            (t!("structure.panel.type"), column.display_type()),
                             (
-                                "Nullable",
-                                if column.is_nullable { "Yes" } else { "No" }.to_string(),
+                                t!("structure.panel.nullable"),
+                                if column.is_nullable {
+                                    t!("structure.answer_yes")
+                                } else {
+                                    t!("structure.answer_no")
+                                }
+                                .into_owned(),
                             ),
-                            ("Default", column.default_value.clone().unwrap_or_default()),
-                            ("Comment", column.comment.clone().unwrap_or_default()),
+                            (
+                                t!("structure.panel.default"),
+                                column.default_value.clone().unwrap_or_default(),
+                            ),
+                            (
+                                t!("structure.panel.comment"),
+                                column.comment.clone().unwrap_or_default(),
+                            ),
                         ],
                         cx,
                     ),
@@ -2108,7 +2254,7 @@ impl TableStructureTab {
                                 Button::new("panel-drop-column")
                                     .ghost()
                                     .small()
-                                    .label("Drop")
+                                    .label(t!("structure.panel.drop"))
                                     .on_click(cx.listener(move |this, _, window, cx| {
                                         this.drop_column(row, window, cx)
                                     }))
@@ -2121,26 +2267,30 @@ impl TableStructureTab {
                     }
                     if form.is_some() {
                         buttons.push(div().flex_1().into_any_element());
-                        buttons.push(self.save_button("Save", cx));
+                        buttons.push(self.save_button(t!("structure.panel.save").into(), cx));
                     }
                 }
                 (
-                    format!(
-                        "Column {}",
-                        column
+                    t!(
+                        "structure.panel.column_title",
+                        name = column
                             .map(|column| column.name.as_str())
                             .unwrap_or_default()
-                    ),
+                    )
+                    .into_owned(),
                     Some(mark),
                     body,
                     buttons,
                 )
             }
             Panel::NewIndex(form) => (
-                "New index".to_string(),
+                t!("structure.panel.new_index").into_owned(),
                 None,
                 form.clone().into_any_element(),
-                vec![self.cancel_button(cx), self.save_button("Add Index", cx)],
+                vec![
+                    self.cancel_button(cx),
+                    self.save_button(t!("structure.panel.add_index").into(), cx),
+                ],
             ),
             Panel::Index(row) => {
                 let index = self.staged.indexes.get(*row);
@@ -2153,19 +2303,25 @@ impl TableStructureTab {
                 let body = match index {
                     Some(index) => details(
                         vec![
-                            ("Columns", index.column_names.join(", ")),
+                            (t!("structure.panel.columns"), index.column_names.join(", ")),
                             (
-                                "Unique",
+                                t!("structure.panel.unique"),
                                 match (index.is_unique, index.nulls_not_distinct) {
-                                    (true, true) => "Yes, NULLs not distinct",
-                                    (true, false) => "Yes",
-                                    (false, _) => "No",
+                                    (true, true) => t!("structure.panel.unique_nulls_not_distinct"),
+                                    (true, false) => t!("structure.answer_yes"),
+                                    (false, _) => t!("structure.answer_no"),
                                 }
-                                .to_string(),
+                                .into_owned(),
                             ),
-                            ("Method", index.algorithm.clone()),
-                            ("Condition", index.condition.clone().unwrap_or_default()),
-                            ("Comment", index.comment.clone().unwrap_or_default()),
+                            (t!("structure.panel.method"), index.algorithm.clone()),
+                            (
+                                t!("structure.panel.condition"),
+                                index.condition.clone().unwrap_or_default(),
+                            ),
+                            (
+                                t!("structure.panel.comment"),
+                                index.comment.clone().unwrap_or_default(),
+                            ),
                         ],
                         cx,
                     ),
@@ -2179,7 +2335,7 @@ impl TableStructureTab {
                             Button::new("panel-drop-index")
                                 .ghost()
                                 .small()
-                                .label("Drop Index")
+                                .label(t!("structure.panel.drop_index"))
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     this.drop_index(row, window, cx)
                                 }))
@@ -2190,22 +2346,23 @@ impl TableStructureTab {
                     }
                 }
                 (
-                    format!(
-                        "Index {}",
-                        index.map(|index| index.name.as_str()).unwrap_or_default()
-                    ),
+                    t!(
+                        "structure.panel.index_title",
+                        name = index.map(|index| index.name.as_str()).unwrap_or_default()
+                    )
+                    .into_owned(),
                     Some(mark),
                     body,
                     buttons,
                 )
             }
             Panel::NewForeignKey(form) => (
-                "New foreign key".to_string(),
+                t!("structure.panel.new_foreign_key").into_owned(),
                 None,
                 form.clone().into_any_element(),
                 vec![
                     self.cancel_button(cx),
-                    self.save_button("Add Foreign Key", cx),
+                    self.save_button(t!("structure.panel.add_foreign_key").into(), cx),
                 ],
             ),
             Panel::ForeignKey(row) => {
@@ -2219,9 +2376,12 @@ impl TableStructureTab {
                 let body = match foreign_key {
                     Some(foreign_key) => details(
                         vec![
-                            ("Columns", foreign_key.columns.join(", ")),
                             (
-                                "References",
+                                t!("structure.panel.columns"),
+                                foreign_key.columns.join(", "),
+                            ),
+                            (
+                                t!("structure.panel.references"),
                                 format!(
                                     "{}{} ({})",
                                     foreign_key
@@ -2233,8 +2393,14 @@ impl TableStructureTab {
                                     foreign_key.referenced_columns.join(", ")
                                 ),
                             ),
-                            ("On update", foreign_key.on_update.clone()),
-                            ("On delete", foreign_key.on_delete.clone()),
+                            (
+                                t!("structure.panel.on_update"),
+                                foreign_key.on_update.clone(),
+                            ),
+                            (
+                                t!("structure.panel.on_delete"),
+                                foreign_key.on_delete.clone(),
+                            ),
                         ],
                         cx,
                     ),
@@ -2248,7 +2414,7 @@ impl TableStructureTab {
                             Button::new("panel-drop-foreign-key")
                                 .ghost()
                                 .small()
-                                .label("Drop Foreign Key")
+                                .label(t!("structure.panel.drop_foreign_key"))
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     this.drop_foreign_key(row, window, cx)
                                 }))
@@ -2259,11 +2425,18 @@ impl TableStructureTab {
                     }
                 }
                 let name = match foreign_key {
-                    Some(key) if key.name.is_empty() => "(generated)".to_string(),
+                    Some(key) if key.name.is_empty() => {
+                        t!("structure.foreign_keys_list.generated").into_owned()
+                    }
                     Some(key) => key.name.clone(),
                     None => String::new(),
                 };
-                (format!("Foreign key {name}"), Some(mark), body, buttons)
+                (
+                    t!("structure.panel.foreign_key_title", name = name).into_owned(),
+                    Some(mark),
+                    body,
+                    buttons,
+                )
             }
             Panel::VirtualKey { id, form } => {
                 let mut buttons = Vec::new();
@@ -2273,7 +2446,7 @@ impl TableStructureTab {
                         Button::new("panel-delete-virtual-key")
                             .ghost()
                             .small()
-                            .label("Delete")
+                            .label(t!("structure.panel.delete"))
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.delete_virtual_key(id, window, cx)
                             }))
@@ -2283,11 +2456,22 @@ impl TableStructureTab {
                 } else {
                     buttons.push(self.cancel_button(cx));
                 }
-                buttons
-                    .push(self.save_button(if *id == 0 { "Add Virtual Key" } else { "Save" }, cx));
+                buttons.push(
+                    self.save_button(
+                        if *id == 0 {
+                            t!("structure.panel.add_virtual_key")
+                        } else {
+                            t!("structure.panel.save")
+                        }
+                        .into(),
+                        cx,
+                    ),
+                );
                 let title = match self.virtual_keys.iter().find(|key| key.id == *id) {
-                    Some(key) => format!("Virtual key {}", key.name),
-                    None => "New virtual key".to_string(),
+                    Some(key) => {
+                        t!("structure.panel.virtual_key_title", name = key.name).into_owned()
+                    }
+                    None => t!("structure.panel.new_virtual_key").into_owned(),
                 };
                 (title, None, form.clone().into_any_element(), buttons)
             }
@@ -2297,11 +2481,16 @@ impl TableStructureTab {
         let badge = mark.and_then(|mark| {
             let (label, color) = match mark.state {
                 RowState::Unchanged => return None,
-                RowState::Added => ("new", theme.green),
-                RowState::Modified => ("changed", theme.yellow),
-                RowState::Dropped => ("dropped", theme.red),
+                RowState::Added => (t!("structure.panel.badge_new"), theme.green),
+                RowState::Modified => (t!("structure.panel.badge_changed"), theme.yellow),
+                RowState::Dropped => (t!("structure.panel.badge_dropped"), theme.red),
             };
-            Some(div().text_xs().text_color(color).child(label))
+            Some(
+                div()
+                    .text_xs()
+                    .text_color(color)
+                    .child(SharedString::from(label)),
+            )
         });
         v_flex()
             .w(px(340.))
@@ -2334,7 +2523,7 @@ impl TableStructureTab {
                             .ghost()
                             .xsmall()
                             .icon(IconName::Close)
-                            .tooltip("Close")
+                            .tooltip(t!("structure.panel.close"))
                             .on_click(cx.listener(|this, _, _, cx| this.close_panel(cx))),
                     ),
             )
@@ -2364,12 +2553,12 @@ impl TableStructureTab {
         Button::new("panel-cancel")
             .outline()
             .small()
-            .label("Cancel")
+            .label(t!("structure.cancel"))
             .on_click(cx.listener(|this, _, _, cx| this.close_panel(cx)))
             .into_any_element()
     }
 
-    fn save_button(&self, label: &'static str, cx: &mut Context<Self>) -> AnyElement {
+    fn save_button(&self, label: SharedString, cx: &mut Context<Self>) -> AnyElement {
         Button::new("panel-save")
             .primary()
             .small()
@@ -2384,9 +2573,9 @@ impl TableStructureTab {
         let change_ixs: Vec<usize> = mark.changes.iter().map(|(ix, _)| *ix).collect();
         let added = mark.state == RowState::Added;
         let label = match mark.state {
-            RowState::Added => "Remove",
-            RowState::Dropped => "Undo Drop",
-            RowState::Modified | RowState::Unchanged => "Undo Changes",
+            RowState::Added => t!("structure.panel.remove"),
+            RowState::Dropped => t!("structure.panel.undo_drop"),
+            RowState::Modified | RowState::Unchanged => t!("structure.panel.undo_changes"),
         };
         Button::new("panel-undo")
             .outline()
@@ -2415,39 +2604,51 @@ impl TableStructureTab {
             (count(ChangeKind::Drop), "−", theme.red),
         ];
         let partial_note = (!self.context.dialect().rolls_back_ddl()).then(|| {
-            format!(
-                "{} cannot roll back DDL, so a failing statement leaves the ones before it applied.",
-                self.context.db_type
-            )
+            SharedString::from(t!(
+                "structure.partial_apply_note",
+                backend = self.context.db_type
+            ))
         });
         let confirms_writes = self.context.confirms_writes();
         let creating = self.is_creating();
-        let verb = if creating { "Create Table" } else { "Apply" };
-        let apply_label = match self.context.environment_type {
-            Some(environment) if confirms_writes => format!("{verb} on {environment}"),
-            _ => verb.to_string(),
+        let apply_label: SharedString = match (self.context.environment_type, creating) {
+            (Some(environment), true) if confirms_writes => {
+                t!("structure.create_table_on", environment = environment).into()
+            }
+            (Some(environment), false) if confirms_writes => {
+                t!("structure.apply_on", environment = environment).into()
+            }
+            (_, true) => t!("structure.create_table").into(),
+            (_, false) => t!("structure.apply").into(),
         };
         // A new table counts what it will have rather than pending changes.
         let headline = if creating {
             let definition = self.new_table_definition();
-            let count = |count: usize, one: &str, many: &str| match count {
-                1 => format!("1 {one}"),
-                count => format!("{count} {many}"),
-            };
-            let mut parts = vec![count(definition.columns.len(), "column", "columns")];
-            if !definition.indexes.is_empty() {
-                parts.push(count(definition.indexes.len(), "index", "indexes"));
+            let mut parts = vec![match definition.columns.len() {
+                1 => t!("structure.count.columns_one").into_owned(),
+                count => t!("structure.count.columns_other", count = count).into_owned(),
+            }];
+            match definition.indexes.len() {
+                0 => {}
+                1 => parts.push(t!("structure.count.indexes_one").into_owned()),
+                count => {
+                    parts.push(t!("structure.count.indexes_other", count = count).into_owned())
+                }
             }
-            if !definition.foreign_keys.is_empty() {
-                parts.push(count(
-                    definition.foreign_keys.len(),
-                    "foreign key",
-                    "foreign keys",
-                ));
+            match definition.foreign_keys.len() {
+                0 => {}
+                1 => parts.push(t!("structure.count.foreign_keys_one").into_owned()),
+                count => {
+                    parts.push(t!("structure.count.foreign_keys_other", count = count).into_owned())
+                }
             }
-            format!("New table, {}", parts.join(", "))
+            t!("structure.new_table_headline", parts = parts.join(", ")).into_owned()
         } else {
-            format!("{} pending", changes_label(self.pending.len()))
+            t!(
+                "structure.pending_headline",
+                changes = changes_label(self.pending.len())
+            )
+            .into_owned()
         };
         let summary = if creating {
             Vec::new()
@@ -2483,9 +2684,9 @@ impl TableStructureTab {
                             .ghost()
                             .small()
                             .label(if self.sql_visible {
-                                "Hide SQL"
+                                t!("structure.hide_sql")
                             } else {
-                                "Show SQL"
+                                t!("structure.show_sql")
                             })
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.sql_visible = !this.sql_visible;
@@ -2497,7 +2698,7 @@ impl TableStructureTab {
                             Button::new("discard-structure-changes")
                                 .outline()
                                 .small()
-                                .label("Discard")
+                                .label(t!("structure.discard"))
                                 .disabled(self.applying)
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.discard_changes(window, cx)
@@ -2552,7 +2753,7 @@ impl TableStructureTab {
 }
 
 /// Label and value pairs, as the panel shows a row it cannot change.
-fn details(rows: Vec<(&'static str, String)>, cx: &App) -> AnyElement {
+fn details(rows: Vec<(std::borrow::Cow<'static, str>, String)>, cx: &App) -> AnyElement {
     let theme = cx.theme();
     v_flex()
         .gap_3()
@@ -2563,14 +2764,14 @@ fn details(rows: Vec<(&'static str, String)>, cx: &App) -> AnyElement {
                     div()
                         .text_xs()
                         .text_color(theme.muted_foreground)
-                        .child(label),
+                        .child(SharedString::from(label)),
                 )
                 .child(
                     div()
                         .text_sm()
                         .text_color(theme.foreground)
                         .child(if value.is_empty() {
-                            "None".to_string()
+                            t!("structure.form.none").into_owned()
                         } else {
                             value
                         }),
@@ -2586,13 +2787,13 @@ impl Render for TableStructureTab {
             div()
                 .p_4()
                 .text_color(cx.theme().danger_foreground)
-                .child(format!("Error: {error}"))
+                .child(SharedString::from(t!("structure.error", error = error)))
                 .into_any_element()
         } else if self.loading && self.columns.is_empty() {
             div()
                 .p_4()
                 .text_color(cx.theme().muted_foreground)
-                .child("Loading…")
+                .child(SharedString::from(t!("structure.loading")))
                 .into_any_element()
         } else {
             let rail = self.render_rail(cx).into_any_element();

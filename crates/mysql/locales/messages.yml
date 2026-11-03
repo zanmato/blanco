@@ -1,0 +1,76 @@
+_version: 2
+# Messages the MySQL and MariaDB driver writes around the server's errors.
+# See the glossary at the top of crates/blanco/locales/app.yml.
+mysql:
+  invalid_scheme:
+    en: "Invalid MySQL connection string. Expected mysql:// scheme"
+    sv: "Ogiltig anslutningssträng för MySQL. Den ska börja med mysql://"
+  database_required:
+    en: "Database name is required in connection string"
+    sv: "Anslutningssträngen måste ange ett databasnamn"
+  no_database_in_connection_string:
+    en: "No database name found in connection string"
+    sv: "Anslutningssträngen anger inget databasnamn"
+  username_required:
+    en: "Username is required in connection string"
+    sv: "Anslutningssträngen måste ange ett användarnamn"
+  schema_failed:
+    en: "Failed to get MySQL schema: %{error}"
+    sv: "Det gick inte att läsa schemat från MySQL: %{error}"
+  connect_failed:
+    en: "Failed to connect to MySQL"
+    sv: "Det gick inte att ansluta till MySQL"
+  connect_timed_out:
+    en: "MySQL connection timed out after %{seconds}s"
+    sv: "Anslutningen till MySQL överskred tidsgränsen efter %{seconds} s"
+  connection_check_failed:
+    en: "MySQL connection check failed"
+    sv: "Kontrollen av anslutningen till MySQL misslyckades"
+  server_version_failed:
+    en: "Failed to read the MySQL server version"
+    sv: "Det gick inte att läsa MySQL-serverns version"
+  no_database:
+    en: "No database specified"
+    sv: "Ingen databas har angetts"
+  no_initial_database:
+    en: "No initial database available"
+    sv: "Ingen startdatabas finns"
+  no_enums:
+    en: "MySQL has no enums"
+    sv: "MySQL har inga enum-typer"
+  no_composite_types:
+    en: "MySQL has no composite types"
+    sv: "MySQL har inga sammansatta typer"
+  no_domains:
+    en: "MySQL has no domains"
+    sv: "MySQL har inga domäner"
+  no_sequences:
+    en: "MySQL has no sequences"
+    sv: "MySQL har inga sekvenser"
+  show_create_failed:
+    en: "SHOW CREATE failed: %{error}"
+    sv: "SHOW CREATE misslyckades: %{error}"
+  show_create_table_failed:
+    en: "SHOW CREATE TABLE failed: %{error}"
+    sv: "SHOW CREATE TABLE misslyckades: %{error}"
+  table_not_found:
+    en: "Table '%{table}' not found"
+    sv: "Tabellen '%{table}' hittades inte"
+  modified_since_restart:
+    en: "since the server last started"
+    sv: "sedan servern senast startades"
+  modified_from_files:
+    en: "from the table's files"
+    sv: "enligt tabellens filer"
+  engine:
+    en: "Engine"
+    sv: "Lagringsmotor"
+  collation:
+    en: "Collation"
+    sv: "Sortering"
+  next_auto_increment:
+    en: "Next auto increment"
+    sv: "Nästa automatiska uppräkning"
+  row_format:
+    en: "Row format"
+    sv: "Radformat"

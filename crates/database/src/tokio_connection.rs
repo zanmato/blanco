@@ -65,10 +65,7 @@ impl TokioConnection {
         if self.read_only
             && write_guard::classify(self.inner.database_type(), text) == StatementAccess::Write
         {
-            anyhow::bail!(
-                "This connection is read-only. Only statements recognised as reads are allowed; \
-                 edit the connection to allow writes."
-            );
+            anyhow::bail!(t!("database.read_only_refused"));
         }
         Ok(())
     }

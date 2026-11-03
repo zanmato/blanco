@@ -55,9 +55,7 @@ impl MysqlConnectionKey {
         let url = url::Url::parse(connection_string)?;
 
         if url.scheme() != "mysql" {
-            return Err(anyhow::anyhow!(
-                "Invalid MySQL connection string. Expected mysql:// scheme"
-            ));
+            return Err(anyhow::anyhow!(t!("mysql.invalid_scheme")));
         }
 
         let host = url.host_str().unwrap_or("localhost").to_string();
@@ -69,19 +67,15 @@ impl MysqlConnectionKey {
         let database = if !url.path().is_empty() {
             url.path().trim_start_matches('/').to_string()
         } else {
-            return Err(anyhow::anyhow!(
-                "Database name is required in connection string"
-            ));
+            return Err(anyhow::anyhow!(t!("mysql.database_required")));
         };
 
         if username.is_empty() {
-            return Err(anyhow::anyhow!("Username is required in connection string"));
+            return Err(anyhow::anyhow!(t!("mysql.username_required")));
         }
 
         if database.is_empty() {
-            return Err(anyhow::anyhow!(
-                "Database name is required in connection string"
-            ));
+            return Err(anyhow::anyhow!(t!("mysql.database_required")));
         }
 
         Ok(MysqlConnectionKey {
@@ -231,15 +225,13 @@ impl MysqlConnection {
         let database = if !url.path().is_empty() {
             url.path().trim_start_matches('/').to_string()
         } else {
-            return Err(anyhow::anyhow!(
-                "No database name found in connection string"
-            ));
+            return Err(anyhow::anyhow!(t!(
+                "mysql.no_database_in_connection_string"
+            )));
         };
 
         if database.is_empty() {
-            return Err(anyhow::anyhow!(
-                "Database name is required in connection string"
-            ));
+            return Err(anyhow::anyhow!(t!("mysql.database_required")));
         }
 
         Ok(database)

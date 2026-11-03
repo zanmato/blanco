@@ -1,7 +1,8 @@
 use crate::app_settings::AppSettings;
 use crate::keybindings::{
-    BINDING_GROUPS, BindingDef, CUSTOMIZABLE_BINDINGS, conflicting_actions, default_keystroke,
-    effective_keystroke, is_bindable, parse_keystrokes, same_keystrokes,
+    BINDING_GROUPS, BindingDef, CUSTOMIZABLE_BINDINGS, action_label, conflicting_actions,
+    default_keystroke, effective_keystroke, group_label, is_bindable, parse_keystrokes,
+    same_keystrokes,
 };
 use blanco_ui::IconName;
 use gpui::{
@@ -34,12 +35,12 @@ pub fn keybindings_page(view_handle: WeakEntity<SettingsView>) -> SettingPage {
                 .filter(|def| def.group == group)
                 .map(|def| binding_item(def, view_handle.clone()))
                 .collect::<Vec<_>>();
-            SettingGroup::new().title(group).items(items)
+            SettingGroup::new().title(group_label(group)).items(items)
         })
         .collect::<Vec<_>>();
 
-    SettingPage::new("Keybindings")
-        .description("Changes take effect after a restart.")
+    SettingPage::new(t!("settings.keybindings.title"))
+        .description(t!("settings.keybindings.description").into_owned())
         .resettable(true)
         .groups(groups)
 }
@@ -48,7 +49,10 @@ pub fn keybindings_page(view_handle: WeakEntity<SettingsView>) -> SettingPage {
 /// an item's description is text only and cannot hold the `Kbd` tags.
 fn binding_item(def: &'static BindingDef, view_handle: WeakEntity<SettingsView>) -> SettingItem {
     let action = def.action;
+    let label = action_label(action);
+    let group = group_label(def.group);
     SettingItem::render({
+        let label = label.clone();
         let view_handle = view_handle.clone();
         move |_, window, cx| {
             let recorder = window.use_keyed_state(
@@ -58,7 +62,10 @@ fn binding_item(def: &'static BindingDef, view_handle: WeakEntity<SettingsView>)
             );
             // The page is rebuilt on every render, so a conflict shows as
             // soon as a shortcut is recorded.
-            let conflicts = conflicting_actions(&AppSettings::global(cx).settings, action);
+            let conflicts = conflicting_actions(&AppSettings::global(cx).settings, action)
+                .into_iter()
+                .map(action_label)
+                .collect::<Vec<_>>();
 
             h_flex()
                 .w_full()
@@ -69,7 +76,7 @@ fn binding_item(def: &'static BindingDef, view_handle: WeakEntity<SettingsView>)
                     v_flex()
                         .flex_1()
                         .gap_1()
-                        .child(Label::new(def.label).text_sm())
+                        .child(Label::new(label.clone()).text_sm())
                         .child(
                             h_flex()
                                 .gap_1()
@@ -78,24 +85,28 @@ fn binding_item(def: &'static BindingDef, view_handle: WeakEntity<SettingsView>)
                                 .text_color(cx.theme().muted_foreground)
                                 .map(|this| match parse_keystrokes(def.default) {
                                     Some(chords) if !chords.is_empty() => this
-                                        .child("Default")
+                                        .child(SharedString::from(t!(
+                                            "settings.keybindings.default"
+                                        )))
                                         .children(chords.into_iter().map(Kbd::new)),
-                                    _ => this.child("Unbound by default"),
+                                    _ => this.child(SharedString::from(t!(
+                                        "settings.keybindings.unbound_by_default"
+                                    ))),
                                 }),
                         )
                         .when(!conflicts.is_empty(), |this| {
-                            this.child(
-                                div()
-                                    .text_sm()
-                                    .text_color(cx.theme().warning)
-                                    .child(format!("Also used by {}", conflicts.join(", "))),
-                            )
+                            this.child(div().text_sm().text_color(cx.theme().warning).child(
+                                SharedString::from(t!(
+                                    "settings.keybindings.also_used_by",
+                                    actions = conflicts.join(", ")
+                                )),
+                            ))
                         }),
                 )
                 .child(recorder)
         }
     })
-    .keywords([def.label, def.group])
+    .keywords([label, group])
     .on_reset(
         move |cx| !is_default(action, cx),
         move |_, cx| save_keystrokes(action, default_keystroke(action), &view_handle, cx),
@@ -207,7 +218,7 @@ impl KeybindingRecorder {
             }
         }
         if is_bindable(keystroke) {
-            self.save(&keystroke.unparse(), cx);
+            self.save(&keystroke.unparse(crate::keybindings::HOST_OS), cx);
         }
     }
 
@@ -232,7 +243,7 @@ impl Render for KeybindingRecorder {
                         .ghost()
                         .xsmall()
                         .icon(IconName::RotateCcw)
-                        .tooltip("Reset to Default")
+                        .tooltip(t!("settings.keybindings.reset_to_default"))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.save(default_keystroke(action), cx);
                         })),
@@ -267,12 +278,16 @@ impl Render for KeybindingRecorder {
                     .map(|this| {
                         let muted = cx.theme().muted_foreground;
                         if recording {
-                            return this.child(div().text_color(muted).child("Press a shortcut"));
+                            return this.child(div().text_color(muted).child(SharedString::from(
+                                t!("settings.keybindings.press_shortcut"),
+                            )));
                         }
                         match parse_keystrokes(&keystrokes) {
-                            Some(chords) if chords.is_empty() => {
-                                this.child(div().text_color(muted).child("Not set"))
-                            }
+                            Some(chords) if chords.is_empty() => this.child(
+                                div()
+                                    .text_color(muted)
+                                    .child(SharedString::from(t!("settings.keybindings.not_set"))),
+                            ),
                             Some(chords) => this.children(chords.into_iter().map(Kbd::new)),
                             // A value typed before shortcuts were recorded.
                             None => {
@@ -300,7 +315,8 @@ mod tests {
             cx.new(|cx| KeybindingRecorder::new(action, WeakEntity::new_invalid(), window, cx))
         });
         let press = |keystroke: &str, cx: &mut VisualTestContext| {
-            let keystroke = Keystroke::parse(keystroke).expect("keystroke");
+            let keystroke = Keystroke::parse_with_os(keystroke, crate::keybindings::HOST_OS)
+                .expect("keystroke");
             recorder.update_in(cx, |recorder, window, cx| {
                 if !recorder.is_recording() {
                     recorder.start_recording(window, cx);

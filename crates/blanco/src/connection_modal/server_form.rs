@@ -3,6 +3,8 @@
 //! defaults and the SSL mode list, which live in [`ServerFormSpec`], so adding
 //! a similar backend is a new spec rather than a new 400 line file.
 
+use std::borrow::Cow;
+
 use gpui::{
     AnyElement, App, AppContext, Context, Entity, IntoElement, ParentElement, Styled, Window, div,
     prelude::FluentBuilder,
@@ -30,7 +32,7 @@ pub(super) struct ServerFormSpec {
     pub db_type: database::DatabaseType,
     /// Stable prefix for element ids so the forms do not collide in one modal.
     pub id_prefix: &'static str,
-    pub host_label: &'static str,
+    pub host_label: fn() -> Cow<'static, str>,
     pub default_port: i32,
     /// Used when the port field is left empty and the host carries no port.
     /// ClickHouse picks 8443 for `https://` hosts.
@@ -38,7 +40,7 @@ pub(super) struct ServerFormSpec {
     /// Whether the host may carry its own port (`host:port`, URLs), which
     /// makes the port field optional.
     pub port_optional_when_in_host: bool,
-    pub database_placeholder: &'static str,
+    pub database_placeholder: fn() -> Cow<'static, str>,
     pub username_placeholder: &'static str,
     pub ssl_modes: &'static [&'static str],
 }
@@ -46,11 +48,11 @@ pub(super) struct ServerFormSpec {
 pub(super) const POSTGRES_SPEC: ServerFormSpec = ServerFormSpec {
     db_type: database::DatabaseType::PostgreSQL,
     id_prefix: "postgres",
-    host_label: "Host",
+    host_label: || t!("connection_dialog.host"),
     default_port: 5432,
     port_for_host: |_| 5432,
     port_optional_when_in_host: false,
-    database_placeholder: "Database Name",
+    database_placeholder: || t!("connection_dialog.database_name_placeholder"),
     username_placeholder: "postgres",
     ssl_modes: &[
         "preferred",
@@ -65,11 +67,11 @@ pub(super) const POSTGRES_SPEC: ServerFormSpec = ServerFormSpec {
 pub(super) const COCKROACHDB_SPEC: ServerFormSpec = ServerFormSpec {
     db_type: database::DatabaseType::CockroachDb,
     id_prefix: "cockroachdb",
-    host_label: "Host",
+    host_label: || t!("connection_dialog.host"),
     default_port: 26257,
     port_for_host: |_| 26257,
     port_optional_when_in_host: false,
-    database_placeholder: "defaultdb",
+    database_placeholder: || "defaultdb".into(),
     username_placeholder: "root",
     ssl_modes: &[
         "preferred",
@@ -84,11 +86,11 @@ pub(super) const COCKROACHDB_SPEC: ServerFormSpec = ServerFormSpec {
 pub(super) const MYSQL_SPEC: ServerFormSpec = ServerFormSpec {
     db_type: database::DatabaseType::MySQL,
     id_prefix: "mysql",
-    host_label: "Host",
+    host_label: || t!("connection_dialog.host"),
     default_port: 3306,
     port_for_host: |_| 3306,
     port_optional_when_in_host: false,
-    database_placeholder: "Database Name",
+    database_placeholder: || t!("connection_dialog.database_name_placeholder"),
     username_placeholder: "root",
     ssl_modes: &[
         "preferred",
@@ -102,7 +104,7 @@ pub(super) const MYSQL_SPEC: ServerFormSpec = ServerFormSpec {
 pub(super) const CLICKHOUSE_SPEC: ServerFormSpec = ServerFormSpec {
     db_type: database::DatabaseType::ClickHouse,
     id_prefix: "clickhouse",
-    host_label: "Host (http:// or https://)",
+    host_label: || t!("connection_dialog.host_http"),
     default_port: 8123,
     port_for_host: |host| {
         if host.starts_with("https://") {
@@ -112,7 +114,7 @@ pub(super) const CLICKHOUSE_SPEC: ServerFormSpec = ServerFormSpec {
         }
     },
     port_optional_when_in_host: true,
-    database_placeholder: "default",
+    database_placeholder: || "default".into(),
     username_placeholder: "default",
     ssl_modes: &["disabled", "required", "preferred"],
 };
@@ -164,7 +166,7 @@ impl ServerForm {
         let database_input = make_input(
             window,
             cx,
-            spec.database_placeholder,
+            &(spec.database_placeholder)(),
             false,
             conn.and_then(|c| c.database_name.as_deref()),
         );
@@ -178,7 +180,7 @@ impl ServerForm {
         let password_input = make_input(
             window,
             cx,
-            "Password",
+            &t!("connection_dialog.password"),
             true,
             conn.and_then(|c| c.password.as_deref()),
         );
@@ -186,7 +188,7 @@ impl ServerForm {
         let ssh_host_input = make_input(
             window,
             cx,
-            "SSH Host",
+            &t!("connection_dialog.ssh_host_placeholder"),
             false,
             conn.and_then(|c| c.ssh_host.as_deref()),
         );
@@ -194,35 +196,35 @@ impl ServerForm {
         let ssh_user_input = make_input(
             window,
             cx,
-            "SSH Username (optional)",
+            &t!("connection_dialog.ssh_username_optional"),
             false,
             conn.and_then(|c| c.ssh_user.as_deref()),
         );
         let ssh_password_input = make_input(
             window,
             cx,
-            "SSH Password (optional)",
+            &t!("connection_dialog.ssh_password_optional"),
             true,
             conn.and_then(|c| c.ssh_password.as_deref()),
         );
         let ssh_private_key_input = make_input(
             window,
             cx,
-            "Private Key Path (optional)",
+            &t!("connection_dialog.private_key_path_optional"),
             false,
             conn.and_then(|c| c.ssh_private_key_path.as_deref()),
         );
         let ssh_private_key_password_input = make_input(
             window,
             cx,
-            "Private Key Password (optional)",
+            &t!("connection_dialog.private_key_password_optional"),
             true,
             conn.and_then(|c| c.ssh_private_key_password.as_deref()),
         );
         let ssh_jump_hosts_input = make_input(
             window,
             cx,
-            "From ~/.ssh/config, or user@bastion:22, other",
+            &t!("connection_dialog.jump_hosts_placeholder"),
             false,
             conn.and_then(|c| c.ssh_jump_hosts.as_deref()),
         );
@@ -237,21 +239,21 @@ impl ServerForm {
         let ssl_key_input = make_input(
             window,
             cx,
-            "SSL Key Path (optional)",
+            &t!("connection_dialog.ssl_key_path_optional"),
             false,
             conn.and_then(|c| c.ssl_key_path.as_deref()),
         );
         let ssl_cert_input = make_input(
             window,
             cx,
-            "SSL Cert Path (optional)",
+            &t!("connection_dialog.ssl_cert_path_optional"),
             false,
             conn.and_then(|c| c.ssl_cert_path.as_deref()),
         );
         let ssl_ca_cert_input = make_input(
             window,
             cx,
-            "SSL CA Cert Path (optional)",
+            &t!("connection_dialog.ssl_ca_cert_path_optional"),
             false,
             conn.and_then(|c| c.ssl_ca_cert_path.as_deref()),
         );
@@ -306,19 +308,19 @@ impl ServerForm {
         let username = self.username_input.read(cx).value();
 
         if host.is_empty() {
-            return Some("Host is required".to_string());
+            return Some(t!("connection_dialog.errors.host_required").into_owned());
         }
         if port_str.is_empty() && !self.port_is_optional(&host) {
-            return Some("Port is required".to_string());
+            return Some(t!("connection_dialog.errors.port_required").into_owned());
         }
         if !port_str.is_empty() && port_str.parse::<u16>().is_err() {
-            return Some("Port must be a valid number (1-65535)".to_string());
+            return Some(t!("connection_dialog.errors.port_invalid").into_owned());
         }
         if database.is_empty() {
-            return Some("Database name is required".to_string());
+            return Some(t!("connection_dialog.errors.database_name_required").into_owned());
         }
         if username.is_empty() {
-            return Some("Username is required".to_string());
+            return Some(t!("connection_dialog.errors.username_required").into_owned());
         }
         None
     }
@@ -423,14 +425,14 @@ fn render_base_fields(
                     v_flex()
                         .flex_1()
                         .gap_2()
-                        .child(div().text_sm().child(form.spec.host_label))
+                        .child(div().text_sm().child((form.spec.host_label)()))
                         .child(Input::new(&form.host_input)),
                 )
                 .child(
                     v_flex()
                         .flex_1()
                         .gap_2()
-                        .child(div().text_sm().child("Port"))
+                        .child(div().text_sm().child(t!("connection_dialog.port")))
                         .child(Input::new(&form.port_input)),
                 ),
         )
@@ -441,12 +443,12 @@ fn render_base_fields(
                     v_flex()
                         .flex_1()
                         .gap_2()
-                        .child(div().text_sm().child("User"))
+                        .child(div().text_sm().child(t!("connection_dialog.user")))
                         .child(Input::new(&form.username_input)),
                 )
                 .child(secret_field(
                     format!("{}-password-ask", form.spec.id_prefix),
-                    "Password",
+                    t!("connection_dialog.password"),
                     &form.password_input,
                     SecretKind::Password,
                     ask_secrets,
@@ -456,7 +458,7 @@ fn render_base_fields(
         .child(
             v_flex()
                 .gap_2()
-                .child(div().text_sm().child("Database name"))
+                .child(div().text_sm().child(t!("connection_dialog.database_name")))
                 .child(Input::new(&form.database_input)),
         )
         .into_any_element()
@@ -481,7 +483,7 @@ pub(super) fn render(
             v_flex()
                 .flex_1()
                 .gap_2()
-                .child(div().text_sm().child("SSL Mode"))
+                .child(div().text_sm().child(t!("connection_dialog.ssl_mode")))
                 .child(Select::new(&form.ssl_mode_select)),
         )
         .child(
@@ -489,9 +491,9 @@ pub(super) fn render(
                 .ghost()
                 .xsmall()
                 .child(if ssl_advanced_expanded {
-                    "Hide Advanced SSL"
+                    t!("connection_dialog.hide_advanced_ssl")
                 } else {
-                    "Show Advanced SSL"
+                    t!("connection_dialog.show_advanced_ssl")
                 })
                 .icon(if ssl_advanced_expanded {
                     IconName::ChevronUp

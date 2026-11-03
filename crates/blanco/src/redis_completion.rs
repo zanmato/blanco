@@ -82,33 +82,39 @@ fn make_item(
 
 fn build_items(candidates: Candidates, current_word: &str, range: Range) -> Vec<CompletionItem> {
     match candidates {
-        Candidates::Commands => tree_sitter_redis::commands::COMMANDS
-            .iter()
-            .filter(|command| matches_prefix(command, current_word))
-            .map(|command| {
-                make_item(
-                    command,
-                    CompletionItemKind::KEYWORD,
-                    "Redis command".to_string(),
-                    range,
-                )
-            })
-            .collect(),
+        Candidates::Commands => {
+            let detail = t!("completion.redis_command");
+            tree_sitter_redis::commands::COMMANDS
+                .iter()
+                .filter(|command| matches_prefix(command, current_word))
+                .map(|command| {
+                    make_item(
+                        command,
+                        CompletionItemKind::KEYWORD,
+                        detail.to_string(),
+                        range,
+                    )
+                })
+                .collect()
+        }
         Candidates::Subcommands {
             container,
             subcommands,
-        } => subcommands
-            .iter()
-            .filter(|subcommand| matches_prefix(subcommand, current_word))
-            .map(|subcommand| {
-                make_item(
-                    subcommand,
-                    CompletionItemKind::FUNCTION,
-                    format!("{container} subcommand"),
-                    range,
-                )
-            })
-            .collect(),
+        } => {
+            let detail = t!("completion.redis_subcommand", command = container);
+            subcommands
+                .iter()
+                .filter(|subcommand| matches_prefix(subcommand, current_word))
+                .map(|subcommand| {
+                    make_item(
+                        subcommand,
+                        CompletionItemKind::FUNCTION,
+                        detail.to_string(),
+                        range,
+                    )
+                })
+                .collect()
+        }
         Candidates::None => Vec::new(),
     }
 }

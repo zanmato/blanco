@@ -166,7 +166,7 @@ pub fn parse_jump_hosts(value: &str) -> Result<Vec<JumpHost>, String> {
                 // [IPv6]:port
                 let (host, after) = bracketed
                     .split_once(']')
-                    .ok_or_else(|| format!("Invalid jump host \"{hop}\""))?;
+                    .ok_or_else(|| t!("database.invalid_jump_host", hop = hop).into_owned())?;
                 (host, after.strip_prefix(':'))
             } else {
                 match rest.rsplit_once(':') {
@@ -175,12 +175,12 @@ pub fn parse_jump_hosts(value: &str) -> Result<Vec<JumpHost>, String> {
                 }
             };
             if host.is_empty() {
-                return Err(format!("Invalid jump host \"{hop}\""));
+                return Err(t!("database.invalid_jump_host", hop = hop).into_owned());
             }
             let port = port
                 .map(|port| {
                     port.parse::<u16>()
-                        .map_err(|_| format!("Invalid port in jump host \"{hop}\""))
+                        .map_err(|_| t!("database.invalid_jump_host_port", hop = hop).into_owned())
                 })
                 .transpose()?;
             Ok(JumpHost {

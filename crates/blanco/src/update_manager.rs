@@ -80,23 +80,36 @@ fn verify_sha256(path: &Path, asset_name: &str, checksums: &str) -> anyhow::Resu
             let name = parts.next()?.trim_start_matches('*');
             (name == asset_name).then(|| digest.to_ascii_lowercase())
         })
-        .with_context(|| format!("{CHECKSUMS_ASSET} has no entry for {asset_name}"))?;
+        .with_context(|| {
+            t!(
+                "shell.update.errors.no_checksum",
+                file = CHECKSUMS_ASSET,
+                asset = asset_name
+            )
+            .into_owned()
+        })?;
     let actual = sha256_of_file(path)?;
     anyhow::ensure!(
         actual == expected,
-        "SHA-256 mismatch for {asset_name}: expected {expected}, got {actual}"
+        "{}",
+        t!(
+            "shell.update.errors.checksum_mismatch",
+            asset = asset_name,
+            expected = expected,
+            actual = actual
+        )
     );
     Ok(())
 }
 
 fn verify_minisign(public_key: &str, message: &[u8], signature: &str) -> anyhow::Result<()> {
     let public_key = minisign_verify::PublicKey::from_base64(public_key)
-        .context("Embedded update public key is malformed")?;
-    let signature =
-        minisign_verify::Signature::decode(signature).context("Release signature is malformed")?;
+        .context(t!("shell.update.errors.public_key_malformed").into_owned())?;
+    let signature = minisign_verify::Signature::decode(signature)
+        .context(t!("shell.update.errors.signature_malformed").into_owned())?;
     public_key
         .verify(message, &signature, false)
-        .context("Release signature does not verify against the embedded key")
+        .context(t!("shell.update.errors.signature_invalid").into_owned())
 }
 
 impl UpdateManager {
@@ -238,7 +251,9 @@ impl UpdateManager {
     /// back to `Available` and the error is returned for the caller to show.
     pub fn download_update(cx: &mut App) -> Task<anyhow::Result<()>> {
         let Some(state) = Self::try_global(cx).map(|this| this.state.clone()) else {
-            return Task::ready(Err(anyhow::anyhow!("Updates are not available")));
+            return Task::ready(Err(anyhow::anyhow!(
+                t!("shell.update.errors.unavailable").into_owned()
+            )));
         };
         let UpdateState::Available(version) = state.read(cx).clone() else {
             return Task::ready(Ok(()));
@@ -268,7 +283,7 @@ impl UpdateManager {
     /// stage its executable. Returns the staged version.
     fn stage_latest_release() -> anyhow::Result<Option<String>> {
         let (asset_name, executable_in_asset) =
-            release_asset().context("No release is built for this platform")?;
+            release_asset().context(t!("shell.update.errors.no_platform_release").into_owned())?;
         let Some(release) = Self::newer_release()? else {
             return Ok(None);
         };
@@ -284,7 +299,14 @@ impl UpdateManager {
                 .assets
                 .iter()
                 .find(|asset| asset.name == name)
-                .with_context(|| format!("Release {} has no {name} asset", release.version))
+                .with_context(|| {
+                    t!(
+                        "shell.update.errors.missing_asset",
+                        version = release.version,
+                        asset = name
+                    )
+                    .into_owned()
+                })
         };
         let asset = find_asset(asset_name)?;
         let checksums = find_asset(CHECKSUMS_ASSET)?;
@@ -327,7 +349,7 @@ impl UpdateManager {
             if let Err(remove_error) = std::fs::remove_dir_all(&download_dir) {
                 tracing::warn!("Failed to remove rejected download: {remove_error}");
             }
-            return Err(error.context("Downloaded update failed verification"));
+            return Err(error.context(t!("shell.update.errors.verification_failed").into_owned()));
         }
 
         // A bare executable is copied under the file name of the requested
@@ -340,12 +362,12 @@ impl UpdateManager {
             extract_dir.join(
                 Path::new(executable_in_asset)
                     .file_name()
-                    .context("Release executable path has no file name")?,
+                    .context(t!("shell.update.errors.executable_without_name").into_owned())?,
             ),
         ]
         .into_iter()
         .find(|path| path.is_file())
-        .context("Downloaded release does not contain the executable")?;
+        .context(t!("shell.update.errors.no_executable").into_owned())?;
 
         if let Some(staged_dir) = staged_binary.parent() {
             std::fs::create_dir_all(staged_dir)?;
@@ -377,7 +399,7 @@ impl UpdateManager {
 
     fn updates_dir() -> anyhow::Result<PathBuf> {
         Ok(dirs::data_local_dir()
-            .context("Failed to get data directory")?
+            .context(t!("shell.update.errors.no_data_directory").into_owned())?
             .join("blanco")
             .join("updates"))
     }
@@ -401,21 +423,24 @@ impl UpdateManager {
     /// success the app is quitting when this returns.
     pub fn apply_pending_update(cx: &mut App) -> anyhow::Result<()> {
         let state = Self::try_global(cx)
-            .context("Updates are not available")?
+            .context(t!("shell.update.errors.unavailable").into_owned())?
             .state
             .clone();
         let UpdateState::Ready(version) = state.read(cx).clone() else {
-            anyhow::bail!("No update has been downloaded");
+            anyhow::bail!(t!("shell.update.errors.not_downloaded").into_owned());
         };
         let staged_binary = Self::staged_binary_path(&version)?;
         anyhow::ensure!(
             staged_binary.exists(),
-            "No downloaded update found at {}",
-            staged_binary.display()
+            "{}",
+            t!(
+                "shell.update.errors.staged_missing",
+                path = staged_binary.display()
+            )
         );
 
         let expected_digest = std::fs::read_to_string(Self::staged_digest_path(&version)?)
-            .context("Downloaded update has no recorded digest")?;
+            .context(t!("shell.update.errors.no_digest").into_owned())?;
         if sha256_of_file(&staged_binary)? != expected_digest.trim() {
             if let Err(error) = std::fs::remove_file(&staged_binary) {
                 tracing::warn!("Failed to remove tampered staged update: {error}");
@@ -425,16 +450,21 @@ impl UpdateManager {
                 *state = UpdateState::Available(version);
                 cx.notify();
             });
-            anyhow::bail!("The downloaded update changed on disk and was discarded");
+            anyhow::bail!(t!("shell.update.errors.tampered").into_owned());
         }
 
         // Resolved before the swap: on Linux the path of a replaced executable
         // reads back with a " (deleted)" suffix.
-        let executable =
-            std::env::current_exe().context("Failed to resolve the executable path")?;
+        let executable = std::env::current_exe()
+            .context(t!("shell.update.errors.no_executable_path").into_owned())?;
 
-        self_update::self_replace::self_replace(&staged_binary)
-            .with_context(|| format!("Failed to replace {}", executable.display()))?;
+        self_update::self_replace::self_replace(&staged_binary).with_context(|| {
+            t!(
+                "shell.update.errors.replace_failed",
+                path = executable.display()
+            )
+            .into_owned()
+        })?;
 
         if let Err(error) = std::fs::write(
             Self::updates_dir()?.join(UPDATED_FROM_MARKER),

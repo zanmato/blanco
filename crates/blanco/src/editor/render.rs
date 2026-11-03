@@ -74,18 +74,20 @@ impl EditorPanel {
                         let form_clone = form_for_modal.clone();
                         let tab_index = tab_index;
                         modal
-                            .title("Rename Tab")
+                            .title(t!("editor.rename_tab.title"))
                             .w(px(300.))
                             .child(form_for_modal.clone())
                             .footer(
                                 DialogFooter::new()
+                                    .child(DialogClose::new().child(
+                                        Button::new("cancel").label(t!("editor.cancel")).outline(),
+                                    ))
                                     .child(
-                                        DialogClose::new()
-                                            .child(Button::new("cancel").label("Cancel").outline()),
-                                    )
-                                    .child(
-                                        DialogAction::new()
-                                            .child(Button::new("ok").primary().label("Rename")),
+                                        DialogAction::new().child(
+                                            Button::new("ok")
+                                                .primary()
+                                                .label(t!("editor.rename_tab.rename")),
+                                        ),
                                     ),
                             )
                             .on_ok({
@@ -210,7 +212,7 @@ impl EditorPanel {
         let has_right = closes_any(CloseScope::Right);
         let has_unpinned = closes_any(CloseScope::All);
         move |menu, _, _| {
-            let item = |label: &'static str,
+            let item = |label: SharedString,
                         enabled: bool,
                         action: fn(
                 &mut EditorPanel,
@@ -227,38 +229,52 @@ impl EditorPanel {
                             .log_err();
                     })
             };
-            menu.item(item("Duplicate", can_duplicate, |panel, ix, window, cx| {
-                panel.duplicate_tab(ix, window, cx)
-            }))
+            menu.item(item(
+                t!("editor.tab_menu.duplicate").into(),
+                can_duplicate,
+                |panel, ix, window, cx| panel.duplicate_tab(ix, window, cx),
+            ))
             .item(item(
-                if pinned { "Unpin" } else { "Pin" },
+                if pinned {
+                    t!("editor.tab_menu.unpin").into()
+                } else {
+                    t!("editor.tab_menu.pin").into()
+                },
                 true,
                 |panel, ix, window, cx| panel.toggle_pin(ix, window, cx),
             ))
-            .item(item("Move to New Window", can_move, |panel, ix, _, cx| {
-                panel.move_tab_to_new_window(ix, cx)
-            }))
-            .separator()
-            .item(item("Close", closable, |panel, ix, window, cx| {
-                panel.request_close_tab(ix, window, cx)
-            }))
-            .item(item("Close Others", has_others, |panel, ix, window, cx| {
-                panel.close_tabs(CloseScope::Others, ix, window, cx)
-            }))
             .item(item(
-                "Close to the Left",
+                t!("editor.tab_menu.move_to_new_window").into(),
+                can_move,
+                |panel, ix, _, cx| panel.move_tab_to_new_window(ix, cx),
+            ))
+            .separator()
+            .item(item(
+                t!("editor.tab_menu.close").into(),
+                closable,
+                |panel, ix, window, cx| panel.request_close_tab(ix, window, cx),
+            ))
+            .item(item(
+                t!("editor.tab_menu.close_others").into(),
+                has_others,
+                |panel, ix, window, cx| panel.close_tabs(CloseScope::Others, ix, window, cx),
+            ))
+            .item(item(
+                t!("editor.tab_menu.close_to_the_left").into(),
                 has_left,
                 |panel, ix, window, cx| panel.close_tabs(CloseScope::Left, ix, window, cx),
             ))
             .item(item(
-                "Close to the Right",
+                t!("editor.tab_menu.close_to_the_right").into(),
                 has_right,
                 |panel, ix, window, cx| panel.close_tabs(CloseScope::Right, ix, window, cx),
             ))
             .separator()
-            .item(item("Close All", has_unpinned, |panel, ix, window, cx| {
-                panel.close_tabs(CloseScope::All, ix, window, cx)
-            }))
+            .item(item(
+                t!("editor.tab_menu.close_all").into(),
+                has_unpinned,
+                |panel, ix, window, cx| panel.close_tabs(CloseScope::All, ix, window, cx),
+            ))
         }
     }
 
@@ -345,7 +361,7 @@ impl EditorPanel {
                             })
                     })
             }
-            None => item.group("Other"),
+            None => item.group(t!("editor.tab_group_other")),
         };
 
         // Every tab on a connection names it, whatever kind of tab it is.
@@ -423,7 +439,7 @@ impl EditorPanel {
                         .outline()
                         .small()
                         .icon(IconName::Plus)
-                        .label("Add")
+                        .label(t!("editor.grid.add_row"))
                         .disabled(commit_in_progress || !rows_editable)
                         .on_click(cx.listener(|this, _, _window, cx| {
                             this.with_active_results_panel(cx, |panel, cx| {
@@ -436,7 +452,7 @@ impl EditorPanel {
                         .outline()
                         .small()
                         .icon(IconName::Copy)
-                        .label("Duplicate")
+                        .label(t!("editor.grid.duplicate_row"))
                         .disabled(commit_in_progress)
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.with_active_results_panel(cx, |panel, cx| {
@@ -449,7 +465,7 @@ impl EditorPanel {
                         .outline()
                         .small()
                         .icon(IconName::Trash)
-                        .label("Delete")
+                        .label(t!("editor.grid.delete_row"))
                         .disabled(commit_in_progress)
                         .on_click(cx.listener(|this, _, _window, cx| {
                             this.with_active_results_panel(cx, |panel, cx| {
@@ -463,8 +479,8 @@ impl EditorPanel {
                         .outline()
                         .small()
                         .icon(IconName::CircleX)
-                        .label("Discard edits")
-                        .tooltip("Discard pending cell edits")
+                        .label(t!("editor.grid.discard_edits"))
+                        .tooltip(t!("editor.grid.discard_edits_tooltip"))
                         .disabled(
                             commit_in_progress
                                 || !query_tab.results_panel.read(cx).has_pending_edits(cx),
@@ -482,7 +498,7 @@ impl EditorPanel {
                     .outline()
                     .small()
                     .icon(IconName::Logs)
-                    .tooltip("Toggle SQL Log")
+                    .tooltip(t!("editor.toggle_sql_log"))
                     .when(query_tab.sql_view_visible, |btn| btn.primary())
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.toggle_sql_view_for_active_tab(window, cx);
@@ -493,7 +509,7 @@ impl EditorPanel {
                     .outline()
                     .small()
                     .icon(IconName::SquareTerminal)
-                    .tooltip("Toggle Terminal")
+                    .tooltip(t!("editor.toggle_terminal"))
                     .when(query_tab.terminal_enabled, |btn| btn.primary())
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.toggle_terminal_for_active_tab(window, cx);
@@ -513,8 +529,8 @@ impl EditorPanel {
             .outline()
             .small()
             .icon(IconName::Check)
-            .label("Apply edits")
-            .tooltip("Apply pending cell edits to the database")
+            .label(t!("editor.grid.apply_edits"))
+            .tooltip(t!("editor.grid.apply_edits_tooltip"))
             .disabled(!has_pending || commit_in_progress);
 
         if !has_pending || commit_in_progress {
@@ -543,7 +559,9 @@ impl EditorPanel {
                         log.clear(cx);
                         if statements.is_empty() {
                             log.append_text(
-                                &SqlViewMessage::Comment("no statements to apply".into()),
+                                &SqlViewMessage::Comment(
+                                    t!("editor.grid.no_statements_to_apply").into_owned(),
+                                ),
                                 cx,
                             );
                         } else {
@@ -566,7 +584,7 @@ impl EditorPanel {
                         div()
                             .text_sm()
                             .font_weight(FontWeight::BOLD)
-                            .child("Preview SQL"),
+                            .child(t!("editor.grid.preview_sql")),
                     )
                     .child(
                         v_flex()
@@ -583,7 +601,7 @@ impl EditorPanel {
                                 Button::new("preview-cancel")
                                     .outline()
                                     .small()
-                                    .label("Cancel")
+                                    .label(t!("editor.cancel"))
                                     .on_click(cx.listener(
                                         |state: &mut PopoverState, _, window, cx| {
                                             state.dismiss(window, cx);
@@ -595,7 +613,7 @@ impl EditorPanel {
                                     .primary()
                                     .small()
                                     .icon(IconName::Check)
-                                    .label("Confirm")
+                                    .label(t!("editor.grid.confirm"))
                                     .on_click({
                                         let results_panel = results_panel;
                                         let sql_view = sql_view;
@@ -693,10 +711,10 @@ impl EditorPanel {
                 div()
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
-                    .child(format!(
-                        "Ln {}, Col {}",
-                        position.line + 1,
-                        position.character + 1
+                    .child(t!(
+                        "editor.cursor_position",
+                        line = position.line + 1,
+                        column = position.character + 1
                     ))
             })
             .child(
@@ -711,8 +729,13 @@ impl EditorPanel {
                                 .outline()
                                 .small()
                                 .icon(IconName::WandSparkles)
-                                .label("Format")
-                                .tooltip(format!("Format ({})", self.format_query_keystroke))
+                                .label(t!("editor.format"))
+                                .tooltip(t!(
+                                    "editor.format_tooltip",
+                                    keystroke = self
+                                        .format_query_keystroke
+                                        .display(crate::keybindings::HOST_OS)
+                                ))
                                 .on_click(cx.listener(|panel, _, window, cx| {
                                     panel.format_current_query(window, cx)
                                 })),
@@ -725,8 +748,8 @@ impl EditorPanel {
                                     .danger()
                                     .small()
                                     .icon(IconName::SquareStop)
-                                    .label("Stop")
-                                    .tooltip("Abort the running query")
+                                    .label(t!("editor.stop"))
+                                    .tooltip(t!("editor.stop_query_tooltip"))
                                     .on_click(cx.listener(|panel, _, _window, cx| {
                                         panel.abort_running_query(cx);
                                     })),
@@ -737,11 +760,8 @@ impl EditorPanel {
                                     .outline()
                                     .small()
                                     .icon(IconName::Map)
-                                    .label("Explain")
-                                    .tooltip(
-                                        "Show the estimated plan of the statement \
-                                         at the cursor",
-                                    )
+                                    .label(t!("editor.explain"))
+                                    .tooltip(t!("editor.explain_tooltip"))
                                     .on_click(cx.listener(|panel, _, window, cx| {
                                         panel.on_explain_query(ExplainMode::Estimated, window, cx)
                                     }));
@@ -752,8 +772,12 @@ impl EditorPanel {
                                             .small()
                                             .button(explain)
                                             .dropdown_menu(|menu, _, _| {
-                                                menu.menu("Explain", Box::new(ExplainQuery)).menu(
-                                                    "Explain Analyze",
+                                                menu.menu(
+                                                    t!("editor.explain"),
+                                                    Box::new(ExplainQuery),
+                                                )
+                                                .menu(
+                                                    t!("editor.explain_analyze"),
                                                     Box::new(ExplainAnalyzeQuery),
                                                 )
                                             }),
@@ -767,8 +791,13 @@ impl EditorPanel {
                                     .outline()
                                     .small()
                                     .icon(IconName::Play)
-                                    .label("Run Current")
-                                    .tooltip(format!("Run Current ({})", self.run_query_keystroke))
+                                    .label(t!("editor.run_current"))
+                                    .tooltip(t!(
+                                        "editor.run_current_tooltip",
+                                        keystroke = self
+                                            .run_query_keystroke
+                                            .display(crate::keybindings::HOST_OS)
+                                    ))
                                     .on_click(cx.listener(|panel, _, window, cx| {
                                         panel.on_run_query(window, cx)
                                     })),
@@ -895,10 +924,10 @@ impl EditorPanel {
                                         div()
                                             .text_xs()
                                             .text_color(cx.theme().muted_foreground)
-                                            .child(format!(
-                                                "Ln {}, Col {}",
-                                                position.line + 1,
-                                                position.character + 1
+                                            .child(t!(
+                                                "editor.cursor_position",
+                                                line = position.line + 1,
+                                                column = position.character + 1
                                             ))
                                     })
                                     .child(h_flex().gap_2().map(|this| {
@@ -908,8 +937,8 @@ impl EditorPanel {
                                                     .danger()
                                                     .small()
                                                     .icon(IconName::SquareStop)
-                                                    .label("Stop")
-                                                    .tooltip("Stop the running script")
+                                                    .label(t!("editor.stop"))
+                                                    .tooltip(t!("editor.stop_script_tooltip"))
                                                     .on_click(cx.listener(
                                                         |panel, _, _window, cx| {
                                                             panel.cancel_running_script(cx);
@@ -922,10 +951,12 @@ impl EditorPanel {
                                                     .outline()
                                                     .small()
                                                     .icon(IconName::Play)
-                                                    .label("Run Script")
-                                                    .tooltip(format!(
-                                                        "Run Script ({})",
-                                                        self.run_query_keystroke
+                                                    .label(t!("editor.run_script"))
+                                                    .tooltip(t!(
+                                                        "editor.run_script_tooltip",
+                                                        keystroke = self
+                                                            .run_query_keystroke
+                                                            .display(crate::keybindings::HOST_OS)
                                                     ))
                                                     .on_click(cx.listener(
                                                         |panel, _, window, cx| {
@@ -979,7 +1010,7 @@ impl EditorPanel {
                                             .outline()
                                             .small()
                                             .icon(IconName::Logs)
-                                            .tooltip("Toggle console log")
+                                            .tooltip(t!("editor.toggle_console_log"))
                                             .when(script_tab.log_visible, |btn| btn.primary())
                                             .on_click(cx.listener(|this, _, _window, cx| {
                                                 if let Some(TabType::Script(script_tab)) =
@@ -996,7 +1027,7 @@ impl EditorPanel {
                                             .outline()
                                             .small()
                                             .icon(IconName::SquareTerminal)
-                                            .tooltip("Toggle Terminal")
+                                            .tooltip(t!("editor.toggle_terminal"))
                                             .when(script_tab.terminal_enabled, |btn| btn.primary())
                                             .on_click(cx.listener(|this, _, window, cx| {
                                                 this.toggle_terminal_for_active_tab(window, cx);

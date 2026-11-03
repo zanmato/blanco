@@ -13,8 +13,8 @@ use std::sync::Arc;
 use anyhow::Result;
 use async_trait::async_trait;
 use gpui::{
-    App, AppContext as _, Entity, Focusable as _, ParentElement as _, Styled as _, Window, div,
-    prelude::FluentBuilder as _, px,
+    App, AppContext as _, Entity, Focusable as _, ParentElement as _, SharedString, Styled as _,
+    Window, div, prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
     ActiveTheme as _, WindowExt as _,
@@ -89,16 +89,28 @@ pub(crate) fn prompt_text(request: &SecretPromptRequest) -> (String, String) {
     let account = &request.account;
     match request.kind {
         SecretKind::Password => (
-            format!("Password for {name}"),
-            format!("Enter the password for {account}."),
+            t!("shell.secret_prompt.password_title", name = name).into_owned(),
+            t!(
+                "shell.secret_prompt.password_description",
+                account = account
+            )
+            .into_owned(),
         ),
         SecretKind::SshPassword => (
-            format!("SSH Password for {name}"),
-            format!("Enter the SSH password for {account}."),
+            t!("shell.secret_prompt.ssh_password_title", name = name).into_owned(),
+            t!(
+                "shell.secret_prompt.ssh_password_description",
+                account = account
+            )
+            .into_owned(),
         ),
         SecretKind::SshPrivateKeyPassword => (
-            format!("Key Passphrase for {name}"),
-            format!("Enter the passphrase for the key {account}."),
+            t!("shell.secret_prompt.passphrase_title", name = name).into_owned(),
+            t!(
+                "shell.secret_prompt.passphrase_description",
+                account = account
+            )
+            .into_owned(),
         ),
     }
 }
@@ -112,7 +124,7 @@ fn open_prompt(
     let input: Entity<InputState> = cx.new(|cx| {
         InputState::new(window, cx)
             .masked(true)
-            .placeholder(capitalized(request.kind.label()))
+            .placeholder(placeholder(request.kind))
     });
     let (title, description) = prompt_text(&request);
     let retry_reason = request.retry_reason.clone();
@@ -150,19 +162,21 @@ fn open_prompt(
                         .gap_3()
                         .child(div().text_sm().child(description.clone()))
                         .when_some(retry_reason.clone(), |this, reason| {
-                            this.child(
-                                div()
-                                    .text_xs()
-                                    .text_color(cx.theme().danger)
-                                    .child(format!("Not accepted: {reason}")),
-                            )
+                            this.child(div().text_xs().text_color(cx.theme().danger).child(
+                                SharedString::from(t!(
+                                    "shell.secret_prompt.not_accepted",
+                                    reason = reason
+                                )),
+                            ))
                         })
                         .child(Input::new(&input).mask_toggle())
                         .child(
                             div()
                                 .text_xs()
                                 .text_color(cx.theme().muted_foreground)
-                                .child("Kept in memory until you disconnect."),
+                                .child(SharedString::from(t!(
+                                    "shell.secret_prompt.kept_in_memory"
+                                ))),
                         ),
                 )
                 .footer(
@@ -170,7 +184,7 @@ fn open_prompt(
                         .child(
                             DialogClose::new().child(
                                 Button::new("secret-prompt-cancel")
-                                    .label("Cancel")
+                                    .label(t!("shell.common.cancel"))
                                     .outline(),
                             ),
                         )
@@ -178,7 +192,7 @@ fn open_prompt(
                             DialogAction::new().child(
                                 Button::new("secret-prompt-connect")
                                     .primary()
-                                    .label("Connect"),
+                                    .label(t!("shell.secret_prompt.connect")),
                             ),
                         ),
                 )
@@ -199,12 +213,13 @@ fn open_prompt(
     input.focus_handle(cx).focus(window, cx);
 }
 
-fn capitalized(label: &str) -> String {
-    let mut chars = label.chars();
-    match chars.next() {
-        Some(first) => first.to_uppercase().chain(chars).collect(),
-        None => String::new(),
+fn placeholder(kind: SecretKind) -> SharedString {
+    match kind {
+        SecretKind::Password => t!("shell.secret_prompt.password_placeholder"),
+        SecretKind::SshPassword => t!("shell.secret_prompt.ssh_password_placeholder"),
+        SecretKind::SshPrivateKeyPassword => t!("shell.secret_prompt.passphrase_placeholder"),
     }
+    .into()
 }
 
 #[cfg(test)]
@@ -228,7 +243,7 @@ mod tests {
             )
         );
         assert_eq!(
-            capitalized(SecretKind::SshPrivateKeyPassword.label()),
+            placeholder(SecretKind::SshPrivateKeyPassword),
             "SSH key passphrase"
         );
     }

@@ -21,13 +21,13 @@ impl FileForm {
         connection_data: Option<&ConnectionData>,
     ) -> Self {
         let placeholder = match db_type {
-            DatabaseType::DuckDb => "/path/to/database.duckdb, or :memory:",
-            _ => "/path/to/database.db",
+            DatabaseType::DuckDb => t!("connection_dialog.duckdb_path_placeholder"),
+            _ => t!("connection_dialog.sqlite_path_placeholder"),
         };
         let file_path_input = make_input(
             window,
             cx,
-            placeholder,
+            &placeholder,
             false,
             connection_data
                 .filter(|connection| connection.db_type == db_type)
@@ -41,7 +41,7 @@ impl FileForm {
 
     pub fn validate(&self, cx: &App) -> Option<String> {
         if self.file_path_input.read(cx).value().is_empty() {
-            Some("Please enter a file path".to_string())
+            Some(t!("connection_dialog.errors.file_path_required").into_owned())
         } else {
             None
         }
@@ -71,7 +71,7 @@ impl FileForm {
             .gap_3()
             .child(file_picker_input(
                 id,
-                "Database path",
+                &t!("connection_dialog.database_path"),
                 &self.file_path_input,
                 cx,
             ))

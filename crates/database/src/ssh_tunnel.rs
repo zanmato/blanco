@@ -117,6 +117,56 @@ fn local_user_name() -> String {
         .unwrap_or_else(|_| "root".to_string())
 }
 
+/// Why an SSH host did not let the tunnel in. `secret_prompt::rejected_secret`
+/// reads it to tell which secret asking for could help, so the decision does
+/// not depend on the wording of the message, which is translated.
+#[derive(Debug)]
+pub(crate) enum SshAuthenticationError {
+    /// The key chosen for the connection did not load, which a passphrase
+    /// fixes.
+    KeyNotLoaded { path: String, error: String },
+    /// No key, agent or password was available.
+    NothingToTry { hop: String },
+    /// The SSH host refused everything offered.
+    Refused {
+        hop: String,
+        tried: Vec<String>,
+        tried_password: bool,
+    },
+    /// The SSH host hung up, most likely after too many attempts.
+    Closed {
+        hop: String,
+        error: String,
+        tried: Vec<String>,
+        tried_password: bool,
+    },
+}
+
+impl std::fmt::Display for SshAuthenticationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let message = match self {
+            Self::KeyNotLoaded { path, error } => {
+                t!("database.ssh_key_not_loaded", path = path, error = error)
+            }
+            Self::NothingToTry { hop } => t!("database.ssh_nothing_to_try", hop = hop),
+            Self::Refused { hop, tried, .. } => {
+                t!("database.ssh_refused", hop = hop, tried = tried.join(", "))
+            }
+            Self::Closed {
+                hop, error, tried, ..
+            } => t!(
+                "database.ssh_closed",
+                hop = hop,
+                error = error,
+                tried = tried.join(", ")
+            ),
+        };
+        f.write_str(&message)
+    }
+}
+
+impl std::error::Error for SshAuthenticationError {}
+
 /// Authenticate `hop`, trying in turn what the connection itself names (the
 /// key chosen in the dialog, then the password, which is only offered to the
 /// SSH host itself), then the hop's `IdentityFile`s (or the default keys),
@@ -133,16 +183,17 @@ async fn authenticate(
     is_target: bool,
 ) -> Result<()> {
     let mut tried: Vec<String> = Vec::new();
+    let mut tried_password = false;
     let user = hop.user.as_str();
     // The server hangs up once its attempts are used up, which surfaces as
     // a send error on the next one.
-    let closed = |tried: &[String], error: russh::Error| {
-        anyhow::anyhow!(
-            "SSH authentication failed for {hop}: the host closed the connection ({error}), \
-             most likely after too many attempts. Choose a private key for the connection or \
-             name one with IdentityFile in ~/.ssh/config; tried {}",
-            tried.join(", ")
-        )
+    let closed = |tried: &[String], tried_password: bool, error: russh::Error| {
+        anyhow::Error::new(SshAuthenticationError::Closed {
+            hop: hop.to_string(),
+            error: error.to_string(),
+            tried: tried.to_vec(),
+            tried_password,
+        })
     };
 
     if let Some(path) = &config.ssh_private_key_path {
@@ -152,24 +203,31 @@ async fn authenticate(
                 match session.authenticate_publickey(user, Arc::new(key)).await {
                     Ok(true) => return Ok(()),
                     Ok(false) => {}
-                    Err(error) => return Err(closed(&tried, error)),
+                    Err(error) => return Err(closed(&tried, tried_password, error)),
                 }
             }
             Err(error) if is_target => {
-                anyhow::bail!("Failed to load private key {path}: {error}");
+                return Err(SshAuthenticationError::KeyNotLoaded {
+                    path: path.clone(),
+                    error: error.to_string(),
+                }
+                .into());
             }
             // The key may be meant for the SSH host alone, so a jump host
             // carries on without it, but says so if nothing else works.
-            Err(error) => tried.push(format!("{path} (not loaded: {error})")),
+            Err(error) => {
+                tried.push(t!("database.ssh_key_skipped", path = path, error = error).into_owned())
+            }
         }
     }
 
     if let Some(password) = config.ssh_password.as_ref().filter(|_| is_target) {
-        tried.push("password".to_string());
+        tried.push(t!("database.ssh_tried_password").into_owned());
+        tried_password = true;
         match session.authenticate_password(user, password).await {
             Ok(true) => return Ok(()),
             Ok(false) => {}
-            Err(error) => return Err(closed(&tried, error)),
+            Err(error) => return Err(closed(&tried, tried_password, error)),
         }
     }
 
@@ -192,7 +250,7 @@ async fn authenticate(
                 match session.authenticate_publickey(user, Arc::new(key)).await {
                     Ok(true) => return Ok(()),
                     Ok(false) => {}
-                    Err(error) => return Err(closed(&tried, error)),
+                    Err(error) => return Err(closed(&tried, tried_password, error)),
                 }
             }
             Err(error) => {
@@ -200,7 +258,14 @@ async fn authenticate(
                 public_file.push(".pub");
                 match russh::keys::load_public_key(&public_file) {
                     Ok(public_key) => agent_first.push(public_key),
-                    Err(_) => tried.push(format!("{} (not loaded: {error})", file.display())),
+                    Err(_) => tried.push(
+                        t!(
+                            "database.ssh_key_skipped",
+                            path = file.display(),
+                            error = error
+                        )
+                        .into_owned(),
+                    ),
                 }
             }
         }
@@ -212,7 +277,7 @@ async fn authenticate(
         identities.sort_by_key(|key| !agent_first.contains(key));
         let count = identities.len();
         if count > 0 {
-            tried.push(format!("{count} key(s) from the SSH agent"));
+            tried.push(t!("database.ssh_agent_keys", count = count).into_owned());
         }
         for key in identities {
             let (returned, result) = session.authenticate_future(user, key, agent).await;
@@ -223,21 +288,24 @@ async fn authenticate(
                 // The agent could not sign with this key; the next may work.
                 Err(russh::AgentAuthError::Key(_)) => {}
                 Err(russh::AgentAuthError::Send(_)) => {
-                    return Err(closed(&tried, russh::Error::SendError));
+                    return Err(closed(&tried, tried_password, russh::Error::SendError));
                 }
             }
         }
     }
 
     if tried.is_empty() {
-        anyhow::bail!(
-            "No way to authenticate {hop}: no key file, SSH agent, default key or password"
-        );
+        return Err(SshAuthenticationError::NothingToTry {
+            hop: hop.to_string(),
+        }
+        .into());
     }
-    anyhow::bail!(
-        "SSH authentication failed for {hop}; tried {}",
-        tried.join(", ")
-    )
+    Err(SshAuthenticationError::Refused {
+        hop: hop.to_string(),
+        tried,
+        tried_password,
+    }
+    .into())
 }
 
 /// SSH tunnel information
@@ -451,7 +519,13 @@ impl SshTunnel {
                             0,
                         )
                         .await
-                        .map_err(|e| anyhow::anyhow!("Jump host could not reach {hop}: {e}"))?;
+                        .map_err(|error| {
+                            anyhow::anyhow!(t!(
+                                "database.jump_host_unreachable",
+                                hop = hop,
+                                error = error
+                            ))
+                        })?;
                     russh_client::connect_stream(
                         Arc::clone(&ssh_config),
                         channel.into_stream(),
@@ -461,12 +535,12 @@ impl SshTunnel {
                 }
             };
             let mut session = connected.map_err(|e| match e {
-                russh::Error::UnknownKey => anyhow::anyhow!(
-                    "The host key of {}:{} is not in ~/.ssh/known_hosts; connect once with ssh to add it",
-                    hop.host,
-                    hop.port
-                ),
-                e => anyhow::anyhow!("Failed to connect to SSH server {hop}: {e}"),
+                russh::Error::UnknownKey => anyhow::anyhow!(t!(
+                    "database.ssh_unknown_host_key",
+                    host = hop.host,
+                    port = hop.port
+                )),
+                e => anyhow::anyhow!(t!("database.ssh_connect_failed", hop = hop, error = e)),
             })?;
             authenticate(&mut session, hop, &self.config, ix == last).await?;
             sessions.push(session);
@@ -506,9 +580,11 @@ impl SshTunnel {
             .await
             .map_err(|e| {
                 if let Ok(mut status) = status.lock() {
-                    *status = TunnelStatus::Failed(format!("Failed to bind local port: {}", e));
+                    *status = TunnelStatus::Failed(
+                        t!("database.ssh_bind_failed", error = e).into_owned(),
+                    );
                 }
-                anyhow::anyhow!("Failed to bind local port: {}", e)
+                anyhow::anyhow!(t!("database.ssh_bind_failed", error = e))
             })?;
 
         tracing::info!(

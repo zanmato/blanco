@@ -8,6 +8,8 @@ description = "DuckDB database implementation for Blanco SQL editor"
 path = "src/duckdb_connection.rs"
 
 [dependencies]
+# The interface language, a process global the app sets at startup.
+rust-i18n = "4.2"
 blanco-core = { path = "../blanco-core" }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
@@ -18,7 +20,7 @@ duckdb = { version = "~1.10506.0", features = ["bundled"] }
 tracing = { workspace = true }
 tokio = { version = "1", features = ["rt"] }
 
-# Not used by a build script. They give the crates libduckdb-sys's build
+# Not used by the build script. They give the crates libduckdb-sys's build
 # script is compiled from the features the whole workspace turns on, so
 # building one package (`cargo test -p database`) reuses the DuckDB build of
 # a workspace build instead of compiling its C++ again. Keep this list in step

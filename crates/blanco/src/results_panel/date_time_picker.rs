@@ -182,7 +182,7 @@ impl Render for DateTimePicker {
                                 .flex_1()
                                 .text_sm()
                                 .text_color(cx.theme().muted_foreground)
-                                .child("Time"),
+                                .child(t!("results.date_time_picker.time")),
                         )
                         .child(TimeField::new(&time_field).small())
                         .when_some(zone_label, |this, zone_label| {
@@ -200,7 +200,7 @@ impl Render for DateTimePicker {
                     .gap_2()
                     .child(
                         Button::new("date-time-picker-now")
-                            .label("Now")
+                            .label(t!("results.date_time_picker.now"))
                             .ghost()
                             .small()
                             .on_click(cx.listener(|picker, _, _, cx| picker.pick_now(cx))),
@@ -208,13 +208,13 @@ impl Render for DateTimePicker {
                     .child(div().flex_1())
                     .child(
                         Button::new("date-time-picker-cancel")
-                            .label("Cancel")
+                            .label(t!("results.date_time_picker.cancel"))
                             .small()
                             .on_click(cx.listener(|picker, _, _, cx| picker.cancel(cx))),
                     )
                     .child(
                         Button::new("date-time-picker-apply")
-                            .label("Apply")
+                            .label(t!("results.date_time_picker.apply"))
                             .primary()
                             .small()
                             .on_click(cx.listener(|picker, _, _, cx| picker.apply(cx))),

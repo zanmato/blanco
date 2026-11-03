@@ -188,7 +188,7 @@ impl PostgresConnection {
     /// path component in the stored server connection string.
     fn connection_string_for_database(&self, database: &str) -> Result<String> {
         let mut parsed = url::Url::parse(&self.server_connection_string)
-            .map_err(|e| anyhow::anyhow!("Failed to parse connection string: {}", e))?;
+            .map_err(|e| anyhow::anyhow!(t!("postgres.invalid_connection_string", error = e)))?;
         parsed.set_path(&format!("/{}", database));
         Ok(parsed.to_string())
     }
@@ -205,7 +205,7 @@ impl PostgresConnection {
         use std::str::FromStr as _;
 
         let options = sqlx::postgres::PgConnectOptions::from_str(connection_string)
-            .map_err(|e| anyhow::anyhow!("Failed to parse connection string: {}", e))?;
+            .map_err(|e| anyhow::anyhow!(t!("postgres.invalid_connection_string", error = e)))?;
         let has_password = url::Url::parse(connection_string)
             .is_ok_and(|url| url.password().is_some_and(|password| !password.is_empty()));
         Ok(if has_password {
@@ -238,7 +238,7 @@ impl PostgresConnection {
             .await
             .map_err(|e| {
                 blanco_core::tag_sqlx(e)
-                    .context(format!("Failed to connect to database '{database}'"))
+                    .context(t!("postgres.connect_database_failed", database = database))
             })?;
 
         pools.insert(database.to_string(), pool.clone());

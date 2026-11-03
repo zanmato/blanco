@@ -8,6 +8,11 @@
 //! transactions carry over between runs, and takes a fresh connection for each
 //! catalog lookup so the sidebar does not wait behind a long query.
 
+#[macro_use]
+extern crate rust_i18n;
+
+rust_i18n::i18n!("locales", fallback = "en");
+
 mod connection_impl;
 
 use std::collections::HashMap;
@@ -52,7 +57,7 @@ impl Location {
             _ => (rest, ""),
         };
         if path.is_empty() {
-            anyhow::bail!("The DuckDB connection has no file path");
+            anyhow::bail!(t!("duckdb.no_file_path"));
         }
         let mut location = Location {
             path: path.to_string(),
@@ -168,11 +173,9 @@ impl SharedDatabase {
 fn open_error(path: &str, error: duckdb::Error) -> anyhow::Error {
     let message = error.to_string();
     if message.contains("lock") {
-        anyhow::anyhow!(
-            "{path} is open for writing in another program. Close it there, or connect read only. ({message})"
-        )
+        anyhow::anyhow!(t!("duckdb.file_locked", path = path, message = message))
     } else {
-        anyhow::Error::new(error).context(format!("Failed to open {path}"))
+        anyhow::Error::new(error).context(t!("duckdb.open_failed", path = path))
     }
 }
 
@@ -224,7 +227,7 @@ impl DuckdbConnection {
     fn shared(&self) -> Result<&Arc<SharedDatabase>> {
         self.shared
             .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("Not connected to DuckDB"))
+            .ok_or_else(|| anyhow::anyhow!(t!("duckdb.not_connected")))
     }
 
     /// A new DuckDB connection working in this connection's database.
@@ -243,7 +246,7 @@ impl DuckdbConnection {
         let session = self
             .session
             .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("Not connected to DuckDB"))?;
+            .ok_or_else(|| anyhow::anyhow!(t!("duckdb.not_connected")))?;
         let connection = Arc::clone(&session.connection);
         let guard = InterruptOnDrop {
             interrupt: Some(Arc::clone(&session.interrupt)),
@@ -253,7 +256,7 @@ impl DuckdbConnection {
             work(&mut connection)
         })
         .await
-        .context("The DuckDB worker stopped")?;
+        .context(t!("duckdb.worker_stopped"))?;
         guard.disarm();
         result
     }
@@ -267,7 +270,7 @@ impl DuckdbConnection {
         let connection = self.fresh_connection()?;
         tokio::task::spawn_blocking(move || work(&connection))
             .await
-            .context("The DuckDB worker stopped")?
+            .context(t!("duckdb.worker_stopped"))?
     }
 
     /// The rows of a catalog query, with text parameters.
@@ -291,7 +294,7 @@ fn use_database(connection: &duckdb::Connection, database: Option<&str>) -> Resu
             .quote_identifier(database);
         connection
             .execute_batch(&format!("USE {quoted}"))
-            .with_context(|| format!("Failed to switch to database {database}"))?;
+            .with_context(|| t!("duckdb.switch_database_failed", database = database))?;
     }
     Ok(())
 }
@@ -500,5 +503,58 @@ mod tests {
         assert!(location.is_memory());
         assert_eq!(location.cache_key(), ":memory:7");
         assert!(Location::parse("duckdb:").is_err());
+    }
+}
+
+#[cfg(test)]
+mod locale_tests {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    fn messages(locale: &str) -> BTreeMap<String, String> {
+        crate::_rust_i18n_backend()
+            .messages_for_locale(locale)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(key, value)| (key.into_owned(), value.into_owned()))
+            .collect()
+    }
+
+    fn placeholders(text: &str) -> BTreeSet<&str> {
+        text.split("%{")
+            .skip(1)
+            .filter_map(|rest| rest.split_once('}').map(|(name, _)| name))
+            .collect()
+    }
+
+    /// Every string has every translation, with the same placeholders.
+    #[test]
+    fn every_locale_translates_every_string() {
+        let english = messages("en");
+        assert!(!english.is_empty(), "no English strings");
+        let locales = crate::_rust_i18n_backend().available_locales();
+        assert!(
+            locales.iter().any(|locale| locale == "sv"),
+            "no Swedish strings"
+        );
+        let mut failures = Vec::new();
+        for locale in locales {
+            if locale == "en" {
+                continue;
+            }
+            let translation = messages(&locale);
+            for (key, text) in &english {
+                match translation.get(key) {
+                    None => failures.push(format!("{locale}: missing {key}")),
+                    Some(translated) if placeholders(translated) != placeholders(text) => {
+                        failures.push(format!("{locale}: {key} has other %{{}} placeholders"))
+                    }
+                    Some(_) => {}
+                }
+            }
+            for key in translation.keys().filter(|key| !english.contains_key(*key)) {
+                failures.push(format!("en: missing {key}"));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 }

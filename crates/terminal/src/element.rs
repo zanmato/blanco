@@ -310,7 +310,7 @@ impl TerminalElement {
 
         {
             let terminal = terminal.clone();
-            self.interactivity.on_scroll_wheel(move |event, _, cx| {
+            self.interactivity.on_scroll(move |event, _, cx| {
                 terminal.update(cx, |terminal, cx| {
                     terminal.scroll_wheel(event, event.position - grid_origin);
                     cx.notify();

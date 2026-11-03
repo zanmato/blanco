@@ -1,7 +1,7 @@
 use blanco_ui::IconName;
 use gpui::{
     App, AppContext as _, Context, Entity, Focusable, IntoElement, ParentElement, Render, Styled,
-    WeakEntity, Window, div, prelude::FluentBuilder as _, px,
+    Subscription, WeakEntity, Window, div, prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
     ActiveTheme, Sizable, WindowExt as _,
@@ -27,12 +27,21 @@ pub struct SnippetEditor {
     /// The word that offers the snippet in completion, optional.
     pub trigger_input: Entity<InputState>,
     pub editor: Entity<EditorState>,
+    _locale_subscription: Subscription,
 }
 
 impl SnippetEditor {
     pub fn new(kind: EditorKind, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let trigger_input = cx.new(|cx| InputState::new(window, cx).placeholder("Trigger word"));
+        let trigger_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(t!("editor.snippet.trigger_placeholder"))
+        });
         let editor = Self::build_editor(kind, window, cx);
+        let _locale_subscription = crate::i18n::placeholder_follows_locale(
+            &trigger_input,
+            "editor.snippet.trigger_placeholder",
+            window,
+            cx,
+        );
 
         Self {
             snippet_id: None,
@@ -40,6 +49,7 @@ impl SnippetEditor {
             kind,
             trigger_input,
             editor,
+            _locale_subscription,
         }
     }
 
@@ -130,7 +140,7 @@ impl SnippetEditor {
             window.push_notification(
                 (
                     NotificationType::Error,
-                    "A trigger is a single word, without spaces.",
+                    t!("editor.snippet.trigger_single_word"),
                 ),
                 cx,
             );
@@ -190,7 +200,10 @@ impl SnippetEditor {
                     Button::new(("snippet-kind", kind as usize))
                         .small()
                         .outline()
-                        .label(kind.label())
+                        .label(match kind {
+                            EditorKind::Query => t!("editor.snippet.kind_query"),
+                            EditorKind::Script => t!("editor.snippet.kind_script"),
+                        })
                         .when(self.kind == kind, |button| button.primary())
                         .on_click(cx.listener(move |this, _event, window, cx| {
                             this.set_kind(kind, window, cx);
@@ -202,8 +215,8 @@ impl SnippetEditor {
     pub fn get_title(&self) -> String {
         if self.name.is_empty() {
             match self.kind {
-                EditorKind::Query => "New Snippet".to_string(),
-                EditorKind::Script => "New Script Snippet".to_string(),
+                EditorKind::Query => t!("editor.snippet.new_snippet").into_owned(),
+                EditorKind::Script => t!("editor.snippet.new_script_snippet").into_owned(),
             }
         } else {
             self.name.clone()
@@ -255,7 +268,7 @@ impl Render for SnippetEditor {
                             .small()
                             .outline()
                             .icon(IconName::Save)
-                            .label("Save Snippet")
+                            .label(t!("editor.snippet.save"))
                             .on_click(cx.listener(move |this, _event, window, cx| {
                                 this.save(window, cx);
                             })),

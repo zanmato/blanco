@@ -239,7 +239,7 @@ pub fn preview_statements(
 ) -> Vec<String> {
     let columns: Vec<String> = compiled.iter().map(|m| m.table_column.clone()).collect();
     if columns.is_empty() {
-        return vec!["-- no columns mapped --".to_string()];
+        return vec![t!("import.preview_no_columns_mapped").into_owned()];
     }
     let quoted_cols: Vec<String> = columns.iter().map(|c| quote_ident(c, db_type)).collect();
 
@@ -265,7 +265,7 @@ pub fn preview_statements(
         .collect();
 
     if rows.is_empty() {
-        return vec!["-- no sample data --".to_string()];
+        return vec![t!("import.preview_no_sample_data").into_owned()];
     }
 
     let mut stmt = format!(

@@ -499,7 +499,7 @@ impl Render for DiffView {
                         .text_color(cx.theme().muted_foreground)
                         .border_b_1()
                         .border_color(cx.theme().border)
-                        .child("No differences"),
+                        .child(t!("ui.diff.no_differences")),
                 )
             })
             .child(

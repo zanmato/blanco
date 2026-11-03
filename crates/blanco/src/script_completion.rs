@@ -24,7 +24,8 @@ struct Member {
     name: &'static str,
     kind: CompletionItemKind,
     detail: &'static str,
-    documentation: &'static str,
+    /// Looked up when the item is built, as the locale is chosen at startup.
+    documentation_key: &'static str,
 }
 
 const DB_MEMBERS: &[Member] = &[
@@ -32,36 +33,25 @@ const DB_MEMBERS: &[Member] = &[
         name: "query",
         kind: CompletionItemKind::METHOD,
         detail: "query(sql, params?) -> QueryResult",
-        documentation: "Run a statement and return its rows.\n\n\
-             Returns `{ columns, rows, rowsAffected, executionTimeMs }`, where each row is an \
-             object keyed by column name whose values are strings or `null`.\n\n\
-             Blocks until the database answers.",
+        documentation_key: "completion.script.query",
     },
     Member {
         name: "execute",
         kind: CompletionItemKind::METHOD,
         detail: "execute(sql, params?) -> number",
-        documentation: "Run a statement and return the number of affected rows.\n\n\
-             Use this for INSERT/UPDATE/DELETE/DDL where the rows themselves don't matter.",
+        documentation_key: "completion.script.execute",
     },
     Member {
         name: "transaction",
         kind: CompletionItemKind::METHOD,
         detail: "transaction(statements) -> { rowsAffected, operationsExecuted }",
-        documentation: "Run an array of statements as one atomic unit.\n\n\
-             Backends with transactional DML roll the whole batch back on failure; those without \
-             (Redis, ClickHouse) report how many statements were applied before the error. \
-             Statements that cannot run inside a transaction (e.g. Postgres `DROP DATABASE`) \
-             belong in separate `db.execute` calls.",
+        documentation_key: "completion.script.transaction",
     },
     Member {
         name: "display",
         kind: CompletionItemKind::METHOD,
         detail: "display(value) -> void",
-        documentation: "Render a value in the results grid.\n\n\
-             A result from `db.query` keeps its original column types. Anything else is \
-             converted: an array of objects becomes rows and columns, an object becomes a \
-             single row, a scalar becomes a single cell.",
+        documentation_key: "completion.script.display",
     },
 ];
 
@@ -70,34 +60,27 @@ const RESULT_MEMBERS: &[Member] = &[
         name: "rows",
         kind: CompletionItemKind::FIELD,
         detail: "Array<{ [column: string]: string | null }>",
-        documentation: "The returned rows, each an object keyed by column name. \
-             SQL NULL arrives as `null`; every other value is a string.",
+        documentation_key: "completion.script.rows",
     },
     Member {
         name: "columns",
         kind: CompletionItemKind::FIELD,
         detail: "Array<string>",
-        documentation: "Column names in order. Unlike the row objects this preserves \
-             duplicate column names.",
+        documentation_key: "completion.script.columns",
     },
     Member {
         name: "rowsAffected",
         kind: CompletionItemKind::FIELD,
         detail: "number",
-        documentation: "Rows affected by the statement, as reported by the driver.",
+        documentation_key: "completion.script.rows_affected",
     },
     Member {
         name: "executionTimeMs",
         kind: CompletionItemKind::FIELD,
         detail: "number | null",
-        documentation: "Server-side execution time in milliseconds, when the driver reports one.",
+        documentation_key: "completion.script.execution_time_ms",
     },
 ];
-
-/// Appended to `query`/`execute` docs on backends without bind parameters,
-/// where passing `params` fails at the driver.
-const NO_BIND_PARAMETERS_NOTE: &str =
-    "This connection has no bind parameters: pass the command fully formed and omit `params`.";
 
 fn member_takes_parameters(member: &Member) -> bool {
     matches!(member.name, "query" | "execute")
@@ -237,10 +220,10 @@ fn build_items(
         .iter()
         .filter(|member| matches_prefix(member.name, current_word))
         .map(|member| {
-            let mut documentation = member.documentation.to_string();
+            let mut documentation = t!(member.documentation_key).into_owned();
             if !supports_bind_parameters && member_takes_parameters(member) {
                 documentation.push_str("\n\n");
-                documentation.push_str(NO_BIND_PARAMETERS_NOTE);
+                documentation.push_str(&t!("completion.script.no_bind_parameters"));
             }
 
             CompletionItem {
@@ -307,6 +290,15 @@ impl CompletionProvider for ScriptCompletionProvider {
 mod tests {
     use super::*;
     use lsp_types::Position;
+
+    #[test]
+    fn every_member_has_documentation() {
+        let backend = crate::_rust_i18n_backend();
+        for member in DB_MEMBERS.iter().chain(RESULT_MEMBERS) {
+            let key = member.documentation_key;
+            assert!(backend.translate("en", key).is_some(), "missing {key}");
+        }
+    }
 
     fn labels(text: &str) -> Vec<String> {
         let (candidates, current_word, _start) = analyze(text, text.len());

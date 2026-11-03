@@ -1,5 +1,7 @@
+use std::borrow::Cow;
 use std::ops::Range;
 
+use blanco_ui::table::{Column, ColumnSort, TableDelegate, TableState};
 use gpui::AppContext as _;
 use gpui::prelude::FluentBuilder;
 use gpui::{
@@ -15,7 +17,6 @@ use gpui_component::{
     h_flex,
     input::{Editor, EditorState, Input, InputState, MoveLeft, MoveRight},
     menu::{PopupMenu, PopupMenuItem},
-    table::{Column, ColumnSort, TableDelegate, TableState},
     tooltip::Tooltip,
     v_flex,
 };
@@ -50,8 +51,14 @@ fn deferred_display_text(
     const SHOWN_CHARACTERS: usize = 48;
     let mut shown = display_preview(preview, SHOWN_CHARACTERS, show_invisible);
     let size = blanco_core::binary::format_size(usize::try_from(size).unwrap_or(usize::MAX));
-    let state = if loading { ", loading" } else { "" };
-    shown.text.push_str(&format!(" ({size}{state})"));
+    // Only a cell being fetched looks its text up, so an idle grid of
+    // deferred cells calls no translation per cell.
+    let state = if loading {
+        t!("results.grid.deferred_loading", size = size).into_owned()
+    } else {
+        size
+    };
+    shown.text.push_str(&format!(" ({state})"));
     shown
 }
 
@@ -138,7 +145,7 @@ impl ResultsTableDelegate {
             .xsmall()
             .selected(self.edit_state.editing_as_expression)
             .tooltip_with_action(
-                "Send as a SQL expression instead of a value",
+                t!("results.cell_edit.expression_tooltip"),
                 &ToggleCellExpression,
                 Some(key_context),
             )
@@ -199,7 +206,7 @@ impl ResultsTableDelegate {
                         // The editor only stops wheel events that moved its own
                         // offset, so at its scroll limits they would fall
                         // through and scroll the table underneath the overlay.
-                        .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
+                        .on_scroll(|_, _, cx| cx.stop_propagation())
                         .child(
                             v_flex()
                                 .size_full()
@@ -222,7 +229,10 @@ impl ResultsTableDelegate {
                                             .text_color(cx.theme().danger)
                                             .border_t_1()
                                             .border_color(cx.theme().border)
-                                            .child(format!("Invalid JSON: {error}")),
+                                            .child(t!(
+                                                "results.cell_edit.invalid_json_preview",
+                                                error = error
+                                            )),
                                     )
                                 })
                                 .when_some(geometry_preview, |this, preview| {
@@ -245,7 +255,7 @@ impl ResultsTableDelegate {
                                             "expanded-json-format",
                                             row_ix * 1000 + col_ix,
                                         ))
-                                        .label("Format")
+                                        .label(t!("results.cell_edit.format_json"))
                                         .ghost()
                                         .xsmall()
                                         .on_click(
@@ -261,7 +271,7 @@ impl ResultsTableDelegate {
                                             "expanded-json-minify",
                                             row_ix * 1000 + col_ix,
                                         ))
-                                        .label("Minify")
+                                        .label(t!("results.cell_edit.minify_json"))
                                         .ghost()
                                         .xsmall()
                                         .on_click(
@@ -317,7 +327,7 @@ impl ResultsTableDelegate {
                 .text_color(cx.theme().danger)
                 .border_t_1()
                 .border_color(cx.theme().border)
-                .child(format!("Invalid WKT: {error}"))
+                .child(t!("results.cell_edit.invalid_wkt_preview", error = error))
                 .into_any_element(),
             GeometryPreview::GeoJson(geojson) => v_flex()
                 .flex_1()
@@ -429,7 +439,7 @@ impl ResultsTableDelegate {
                         ))
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
-                        .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
+                        .on_scroll(|_, _, cx| cx.stop_propagation())
                         .child(editor)
                         .child(self.render_expanded_resize_handle(row_ix, col_ix, cx)),
                 )
@@ -588,10 +598,10 @@ impl ResultsTableDelegate {
                 Button::new(("cell-date-time-picker-trigger", row_ix * 1000 + col_ix))
                     .icon(IconName::Calendar)
                     .label(match shape {
-                        TemporalShape::Date => "Pick Date",
-                        TemporalShape::Time => "Pick Time",
+                        TemporalShape::Date => t!("results.cell_edit.pick_date"),
+                        TemporalShape::Time => t!("results.cell_edit.pick_time"),
                         TemporalShape::Timestamp | TemporalShape::TimestampWithTimeZone => {
-                            "Pick Date and Time"
+                            t!("results.cell_edit.pick_date_and_time")
                         }
                     })
                     .ghost()
@@ -633,7 +643,7 @@ impl ResultsTableDelegate {
             .trigger(
                 Button::new(("cell-enum-picker-trigger", row_ix * 1000 + col_ix))
                     .icon(IconName::List)
-                    .label("Pick Value")
+                    .label(t!("results.cell_edit.pick_value"))
                     .ghost()
                     .xsmall()
                     .disabled(!self.is_editable()),
@@ -961,16 +971,16 @@ impl ResultsTableDelegate {
         let can_rearrange = self.can_rearrange_columns();
         let is_pinned = col < self.pinned_column_count();
         menu.menu_with_icon_and_disabled(
-            "Hide Column",
+            t!("results.grid.hide_column"),
             Icon::new(IconName::EyeOff),
             Box::new(HideResultColumn { col }),
             !can_rearrange || self.visible_column_count() <= 1,
         )
         .menu_with_icon_and_disabled(
             if is_pinned {
-                "Unpin Column"
+                t!("results.columns.unpin")
             } else {
-                "Pin Column"
+                t!("results.columns.pin")
             },
             Icon::new(if is_pinned {
                 IconName::PinOff
@@ -996,10 +1006,12 @@ impl TableDelegate for ResultsTableDelegate {
     }
 
     fn column(&self, col_ix: usize, _: &App) -> Column {
-        self.columns
-            .get(col_ix)
-            .cloned()
-            .unwrap_or_else(|| Column::new(format!("col_{}", col_ix), format!("Column {}", col_ix)))
+        self.columns.get(col_ix).cloned().unwrap_or_else(|| {
+            Column::new(
+                format!("col_{}", col_ix),
+                t!("results.grid.column_fallback", number = col_ix),
+            )
+        })
     }
 
     fn render_th(
@@ -1045,19 +1057,29 @@ impl TableDelegate for ResultsTableDelegate {
                                 .child(
                                     h_flex()
                                         .gap_2()
-                                        .child("Type:")
+                                        .child(t!("results.grid.tooltip_type"))
                                         .child(data_type.clone())
                                         .when_some(max_length, |this, len| {
                                             this.child(format!("({})", len))
                                         }),
                                 )
-                                .child(h_flex().gap_2().child("Nullable:").child(if is_nullable {
-                                    "Yes"
-                                } else {
-                                    "No"
-                                }))
+                                .child(
+                                    h_flex()
+                                        .gap_2()
+                                        .child(t!("results.grid.tooltip_nullable"))
+                                        .child(if is_nullable {
+                                            t!("results.grid.yes")
+                                        } else {
+                                            t!("results.grid.no")
+                                        }),
+                                )
                                 .when_some(default_value.clone(), |this, default| {
-                                    this.child(h_flex().gap_2().child("Default:").child(default))
+                                    this.child(
+                                        h_flex()
+                                            .gap_2()
+                                            .child(t!("results.grid.tooltip_default"))
+                                            .child(default),
+                                    )
                                 })
                                 .when_some(comment.clone(), |this, comment| {
                                     this.child(
@@ -1252,7 +1274,7 @@ impl TableDelegate for ResultsTableDelegate {
         let menu = menu
             .when(follows_foreign_key, |menu| {
                 menu.menu_with_icon(
-                    "Open Referenced Row",
+                    t!("results.foreign_key.open_referenced_row"),
                     Icon::new(IconName::ExternalLink),
                     Box::new(OpenReferencedRow),
                 )
@@ -1260,7 +1282,7 @@ impl TableDelegate for ResultsTableDelegate {
             })
             .item(
                 PopupMenuItem::submenu(
-                    "Copy as",
+                    t!("results.menu.copy_as"),
                     PopupMenu::build(window, cx, |menu, _, _| {
                         menu.menu_with_icon("CSV", Icon::new(IconName::Sheet), Box::new(CopyAsCSV))
                             .menu_with_icon("TSV", Icon::new(IconName::Sheet), Box::new(CopyAsTSV))
@@ -1291,7 +1313,7 @@ impl TableDelegate for ResultsTableDelegate {
             )
             .item(
                 PopupMenuItem::submenu(
-                    "Copy Column",
+                    t!("results.menu.copy_column"),
                     PopupMenu::build(window, cx, move |menu, _, _| {
                         column_copy_items(menu, cell.1, true, true)
                     }),
@@ -1303,7 +1325,7 @@ impl TableDelegate for ResultsTableDelegate {
         }
         menu.item(
             PopupMenuItem::submenu(
-                "Export as",
+                t!("results.menu.export_as"),
                 PopupMenu::build(window, cx, |menu, _, _| {
                     menu.menu_with_icon("CSV", Icon::new(IconName::Sheet), Box::new(ExportAsCSV))
                         .menu_with_icon("TSV", Icon::new(IconName::Sheet), Box::new(ExportAsTSV))
@@ -1322,24 +1344,24 @@ impl TableDelegate for ResultsTableDelegate {
         .separator()
         // Row operations
         .menu_with_icon_and_disabled(
-            "Add Row",
+            t!("results.menu.add_row"),
             Icon::new(IconName::Plus),
             Box::new(AddRow),
             !is_editable,
         )
         .menu_with_icon(
-            "Duplicate Row",
+            t!("results.menu.duplicate_row"),
             Icon::new(IconName::Copy),
             Box::new(DuplicateRow { row: cell.0 }),
         )
         .menu_with_icon(
-            "Delete Row",
+            t!("results.menu.delete_row"),
             Icon::new(IconName::Delete),
             Box::new(DeleteRow { row: cell.0 }),
         )
         .when(is_nullable, |this| {
             this.menu_with_icon(
-                "Set NULL",
+                t!("results.menu.set_null"),
                 Icon::new(IconName::CircleX),
                 Box::new(SetCellNull {
                     row: cell.0,
@@ -1349,7 +1371,7 @@ impl TableDelegate for ResultsTableDelegate {
         })
         .when(can_set_default, |this| {
             this.menu_with_icon(
-                "Set DEFAULT",
+                t!("results.menu.set_default"),
                 Icon::new(IconName::RotateCcw),
                 Box::new(SetCellDefault {
                     row: cell.0,
@@ -1359,7 +1381,7 @@ impl TableDelegate for ResultsTableDelegate {
         })
         .when(can_filter, |this| {
             this.separator().menu_with_icon(
-                "Filter by Value",
+                t!("results.menu.filter_by_value"),
                 Icon::new(IconName::Search),
                 Box::new(FilterByCellValue {
                     row: cell.0,
@@ -1371,7 +1393,7 @@ impl TableDelegate for ResultsTableDelegate {
         .map(|menu| self.column_layout_items(menu, cell.1))
         .separator()
         .menu_with_icon(
-            "Select Cell for Comparison",
+            t!("results.menu.select_cell_for_comparison"),
             Icon::new(IconName::GitCompare),
             Box::new(SelectCellForCompare {
                 row: cell.0,
@@ -1380,7 +1402,7 @@ impl TableDelegate for ResultsTableDelegate {
         )
         .when(compare_kind == Some(CompareKind::Cell), |this| {
             this.menu_with_icon(
-                "Compare Cell with Selected",
+                t!("results.menu.compare_cell_with_selected"),
                 Icon::new(IconName::GitCompare),
                 Box::new(CompareCellWithSelected {
                     row: cell.0,
@@ -1389,20 +1411,20 @@ impl TableDelegate for ResultsTableDelegate {
             )
         })
         .menu_with_icon(
-            "Select Row for Comparison",
+            t!("results.menu.select_row_for_comparison"),
             Icon::new(IconName::GitCompare),
             Box::new(SelectRowForCompare { row: cell.0 }),
         )
         .when(compare_kind == Some(CompareKind::Row), |this| {
             this.menu_with_icon(
-                "Compare Row with Selected",
+                t!("results.menu.compare_row_with_selected"),
                 Icon::new(IconName::GitCompare),
                 Box::new(CompareRowWithSelected { row: cell.0 }),
             )
         })
         .when(compare_kind.is_some(), |this| {
             this.menu_with_icon(
-                "Clear Comparison Selection",
+                t!("results.menu.clear_comparison_selection"),
                 Icon::new(IconName::CircleX),
                 Box::new(ClearCompareSelection),
             )
@@ -1420,7 +1442,9 @@ fn column_copy_items(
     selected_only: bool,
     in_submenu: bool,
 ) -> PopupMenu {
-    let label = |full: &'static str, short: &'static str| if in_submenu { short } else { full };
+    let label = |full: Cow<'static, str>, short: Cow<'static, str>| {
+        if in_submenu { short } else { full }
+    };
     let copy = |distinct: bool, as_in_list: bool| {
         Box::new(CopyColumnValues {
             column,
@@ -1430,22 +1454,34 @@ fn column_copy_items(
         })
     };
     menu.menu_with_icon(
-        label("Copy Column Values", "Values"),
+        label(
+            t!("results.menu.copy_column_values"),
+            t!("results.menu.column_values"),
+        ),
         Icon::new(IconName::List),
         copy(false, false),
     )
     .menu_with_icon(
-        label("Copy Distinct Column Values", "Distinct Values"),
+        label(
+            t!("results.menu.copy_column_distinct_values"),
+            t!("results.menu.column_distinct_values"),
+        ),
         Icon::new(IconName::List),
         copy(true, false),
     )
     .menu_with_icon(
-        label("Copy Column as IN List", "IN List"),
+        label(
+            t!("results.menu.copy_column_in_list"),
+            t!("results.menu.column_in_list"),
+        ),
         Icon::new(IconName::Parentheses),
         copy(false, true),
     )
     .menu_with_icon(
-        label("Copy Distinct Column as IN List", "Distinct IN List"),
+        label(
+            t!("results.menu.copy_column_distinct_in_list"),
+            t!("results.menu.column_distinct_in_list"),
+        ),
         Icon::new(IconName::Parentheses),
         copy(true, true),
     )

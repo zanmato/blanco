@@ -16,7 +16,7 @@ async fn copy_as_csv(harness: &TestHarness, cx: &mut VisualTestContext) -> Strin
             .clone()
     });
     table_state.update_in(cx, |state, window, cx| {
-        state.set_selected_cell(0, 0, cx);
+        state.set_selection(blanco_ui::table::TableSelection::Cell(0, 0), cx);
         state.focus_handle(cx).focus(window, cx);
     });
     cx.run_until_parked();

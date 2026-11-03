@@ -71,27 +71,27 @@ impl ConnectionsPanel {
             let input = input.clone();
             let panel = panel.clone();
             dialog
-                .title("Filter Keys")
+                .title(t!("sidebar.key_filter.title"))
                 .child(
                     v_flex()
                         .gap_2()
-                        .child(
-                            "Keys matching this pattern are listed. * matches any text, \
-                             ? one character, [abc] one of the characters.",
-                        )
+                        .child(t!("sidebar.key_filter.description"))
                         .child(Input::new(&input)),
                 )
                 .footer(
                     DialogFooter::new()
                         .child(
-                            DialogClose::new()
-                                .child(Button::new("key-filter-cancel").label("Cancel").outline()),
+                            DialogClose::new().child(
+                                Button::new("key-filter-cancel")
+                                    .label(t!("sidebar.cancel"))
+                                    .outline(),
+                            ),
                         )
                         .child(
                             DialogAction::new().child(
                                 Button::new("key-filter-apply")
                                     .primary()
-                                    .label("Filter")
+                                    .label(t!("sidebar.key_filter.apply"))
                                     .on_click(move |_, _, cx| {
                                         let pattern = input.read(cx).value().to_string();
                                         panel

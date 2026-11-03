@@ -1,0 +1,125 @@
+_version: 2
+# Each key holds every locale's text. Swedish UI uses sentence case, and the
+# terms below throughout:
+# connection anslutning, connect ansluta, disconnect koppla från,
+# query fråga, run kör, stop stoppa, cancel avbryt, explain förklara,
+# result resultat, table tabell, column kolumn, row rad, cell cell,
+# view vy, index index, trigger trigger, routine rutin, function funktion,
+# procedure procedur, sequence sekvens, type typ, schema schema,
+# database databas, server server, primary key primärnyckel,
+# foreign key främmande nyckel, constraint begränsning, default standardvärde,
+# tab flik, sidebar sidopanel, editor redigerare, snippet kodsnutt,
+# script skript, history historik, settings inställningar,
+# dashboard instrumentpanel, panel panel, chart diagram, stat nyckeltal,
+# time range tidsintervall, variable variabel, filter filter (verb filtrera),
+# commit changes spara ändringar, rollback changes ångra ändringar,
+# pending väntande, refresh uppdatera, reload läs in igen, copy kopiera,
+# paste klistra in, delete ta bort, drop (a table) ta bort, truncate töm,
+# rename byt namn, duplicate duplicera, export exportera, import importera,
+# backup säkerhetskopia (verb säkerhetskopiera), restore återställ,
+# process list processlista, structure struktur, notification avisering,
+# workspace arbetsyta, file fil, folder mapp, read only skrivskyddad,
+# environment miljö, timeout tidsgräns, font typsnitt, theme tema,
+# terminal terminal, update (the app) uppdatera, release version.
+# Keep NULL, SQL keywords, product and backend names as they are.
+language:
+  name:
+    en: English
+    sv: Svenska
+menu:
+  file:
+    en: File
+    sv: Arkiv
+  edit:
+    en: Edit
+    sv: Redigera
+  view:
+    en: View
+    sv: Visa
+  new_window:
+    en: New Window
+    sv: Nytt fönster
+  new:
+    en: New
+    sv: Ny
+  new_sqlite_database:
+    en: SQLite Database…
+    sv: SQLite-databas…
+  new_duckdb_database:
+    en: DuckDB Database…
+    sv: DuckDB-databas…
+  open:
+    en: Open
+    sv: Öppna
+  open_database_file:
+    en: Database File…
+    sv: Databasfil…
+  save:
+    en: Save
+    sv: Spara
+  save_as:
+    en: Save As…
+    sv: Spara som…
+  new_connection:
+    en: New Connection
+    sv: Ny anslutning
+  import_connections:
+    en: Import Connections…
+    sv: Importera anslutningar…
+  export_connections:
+    en: Export Connections…
+    sv: Exportera anslutningar…
+  toggle_terminal:
+    en: Toggle Terminal
+    sv: Visa eller dölj terminal
+  new_snippet:
+    en: New Snippet
+    sv: Ny kodsnutt
+  close_window:
+    en: Close Window
+    sv: Stäng fönster
+  settings_dialog:
+    en: Settings…
+    sv: Inställningar…
+  settings:
+    en: Settings
+    sv: Inställningar
+  quit_blanco:
+    en: Quit Blanco
+    sv: Avsluta Blanco
+  quit:
+    en: Quit
+    sv: Avsluta
+  undo:
+    en: Undo
+    sv: Ångra
+  redo:
+    en: Redo
+    sv: Gör om
+  cut:
+    en: Cut
+    sv: Klipp ut
+  copy:
+    en: Copy
+    sv: Kopiera
+  paste:
+    en: Paste
+    sv: Klistra in
+  select_all:
+    en: Select All
+    sv: Markera allt
+  render_whitespace:
+    en: Render Whitespace
+    sv: Visa blanksteg
+  word_wrap:
+    en: Word Wrap
+    sv: Radbrytning
+  increase_editor_font_size:
+    en: Increase Editor Font Size
+    sv: Större text i redigeraren
+  decrease_editor_font_size:
+    en: Decrease Editor Font Size
+    sv: Mindre text i redigeraren
+  reset_editor_font_size:
+    en: Reset Editor Font Size
+    sv: Återställ textstorleken i redigeraren

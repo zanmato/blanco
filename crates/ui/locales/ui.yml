@@ -1,0 +1,63 @@
+_version: 2
+# Strings of the blanco-ui components. Swedish uses sentence case and the
+# glossary at the top of crates/blanco/locales/app.yml.
+ui:
+  diff:
+    no_differences:
+      en: "No differences"
+      sv: "Inga skillnader"
+  sql_view:
+    copy:
+      en: "Copy"
+      sv: "Kopiera"
+    copied:
+      en: "Copied"
+      sv: "Kopierat"
+  table:
+    sort_by:
+      en: "Sort by %{column}"
+      sv: "Sortera efter %{column}"
+  tab_bar:
+    other_group:
+      en: "Other"
+      sv: "Övrigt"
+  graph:
+    search_placeholder:
+      en: "Find table or column"
+      sv: "Sök tabell eller kolumn"
+    no_matches:
+      en: "No matches"
+      sv: "Inga träffar"
+    match_position:
+      en: "%{current} of %{count}"
+      sv: "%{current} av %{count}"
+    matches_found:
+      en: "%{count} found"
+      sv: "%{count} hittade"
+    hint_select_table:
+      en: "Click a table to see its relationships"
+      sv: "Klicka på en tabell för att se dess relationer"
+    hint_selected_one:
+      en: "1 selected · cmd/ctrl-click to add more"
+      sv: "1 markerad · cmd/ctrl-klicka för att lägga till fler"
+    hint_selected_other:
+      en: "%{count} selected · cmd/ctrl-click to add more"
+      sv: "%{count} markerade · cmd/ctrl-klicka för att lägga till fler"
+    other_schemas_shown:
+      en: "Other schemas: shown"
+      sv: "Andra scheman: visas"
+    other_schemas_hidden:
+      en: "Other schemas: hidden"
+      sv: "Andra scheman: dolda"
+    export_svg:
+      en: "Export SVG…"
+      sv: "Exportera SVG…"
+    all_relationships:
+      en: "Showing all relationships"
+      sv: "Visar alla relationer"
+    selected_relationships:
+      en: "Relationships: selected only"
+      sv: "Relationer: endast markerade"
+    no_tables:
+      en: "No tables found"
+      sv: "Inga tabeller hittades"

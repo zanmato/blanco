@@ -153,7 +153,7 @@ impl TerminalView {
     }
 
     fn send_keystroke(&mut self, action: &SendKeystroke, _: &mut Window, cx: &mut Context<Self>) {
-        let keystroke = match Keystroke::parse(&action.0) {
+        let keystroke = match Keystroke::parse_with_os(&action.0, cx.platform_info().os) {
             Ok(keystroke) => keystroke,
             Err(error) => {
                 tracing::warn!("terminal::SendKeystroke {:?}: {error}", action.0);

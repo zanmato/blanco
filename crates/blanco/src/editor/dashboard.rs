@@ -11,6 +11,7 @@ mod parameters;
 mod thresholds;
 mod variables;
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -20,8 +21,9 @@ use database::DatabaseService;
 use futures::StreamExt as _;
 use gpui::{
     App, AppContext as _, Context, Entity, FocusHandle, Focusable, Global, InteractiveElement as _,
-    IntoElement, ParentElement, Render, ScrollHandle, StatefulInteractiveElement as _, Styled,
-    Subscription, Task, WeakEntity, Window, div, prelude::FluentBuilder as _, px, relative,
+    IntoElement, ParentElement, Render, ScrollHandle, SharedString,
+    StatefulInteractiveElement as _, Styled, Subscription, Task, WeakEntity, Window, div,
+    prelude::FluentBuilder as _, px, relative,
 };
 use gpui_component::{
     ActiveTheme as _, Disableable as _, IndexPath, Sizable as _, WindowExt as _,
@@ -54,28 +56,48 @@ const ROW_HEIGHT: f32 = 72.;
 
 /// The automatic refresh choices, `None` for only on request. Every refresh
 /// connects again, so none is shorter than half a minute.
-const REFRESH_INTERVALS: [(&str, Option<u32>); 5] = [
-    ("Manual refresh", None),
-    ("Every 30 s", Some(30)),
-    ("Every minute", Some(60)),
-    ("Every 5 min", Some(300)),
-    ("Every 15 min", Some(900)),
-];
+fn refresh_interval_labels() -> Vec<String> {
+    refresh_intervals()
+        .into_iter()
+        .map(|(label, _)| label.into_owned())
+        .collect()
+}
 
-const PANEL_WIDTHS: [(&str, u8); 5] = [
-    ("Quarter", 3),
-    ("Third", 4),
-    ("Half", 6),
-    ("Two Thirds", 8),
-    ("Full Width", DASHBOARD_COLUMNS),
-];
+fn time_range_labels() -> Vec<String> {
+    TimeRange::ALL
+        .iter()
+        .map(|range| range.label().into_owned())
+        .collect()
+}
 
-const PANEL_HEIGHTS: [(&str, u8); 4] = [
-    ("Small", 2),
-    ("Medium", 4),
-    ("Large", 6),
-    ("Extra Large", 8),
-];
+fn refresh_intervals() -> [(Cow<'static, str>, Option<u32>); 5] {
+    [
+        (t!("dashboard.refresh_interval.manual"), None),
+        (t!("dashboard.refresh_interval.every_30_seconds"), Some(30)),
+        (t!("dashboard.refresh_interval.every_minute"), Some(60)),
+        (t!("dashboard.refresh_interval.every_5_minutes"), Some(300)),
+        (t!("dashboard.refresh_interval.every_15_minutes"), Some(900)),
+    ]
+}
+
+fn panel_widths() -> [(Cow<'static, str>, u8); 5] {
+    [
+        (t!("dashboard.panel_width.quarter"), 3),
+        (t!("dashboard.panel_width.third"), 4),
+        (t!("dashboard.panel_width.half"), 6),
+        (t!("dashboard.panel_width.two_thirds"), 8),
+        (t!("dashboard.panel_width.full"), DASHBOARD_COLUMNS),
+    ]
+}
+
+fn panel_heights() -> [(Cow<'static, str>, u8); 4] {
+    [
+        (t!("dashboard.panel_height.small"), 2),
+        (t!("dashboard.panel_height.medium"), 4),
+        (t!("dashboard.panel_height.large"), 6),
+        (t!("dashboard.panel_height.extra_large"), 8),
+    ]
+}
 
 /// A query tab that came from a dashboard, or whose result went to one:
 /// its results offer to save the result back into that panel, and the view
@@ -176,8 +198,8 @@ async fn bounded_run<T>(
                 .await
                 .unwrap_or_else(|_| {
                     Err(anyhow::anyhow!(
-                        "The query exceeded the configured {}s timeout",
-                        timeout.as_secs()
+                        "{}",
+                        t!("dashboard.query_timed_out", seconds = timeout.as_secs())
                     ))
                 }),
             None => run.await,
@@ -186,7 +208,7 @@ async fn bounded_run<T>(
     futures::pin_mut!(timed);
     match futures::future::select(timed, closed).await {
         futures::future::Either::Left((result, _)) => result,
-        futures::future::Either::Right(_) => Err(anyhow::anyhow!("The dashboard was closed")),
+        futures::future::Either::Right(_) => Err(anyhow::anyhow!("{}", t!("dashboard.closed"))),
     }
 }
 
@@ -238,12 +260,14 @@ impl DashboardTab {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let labels: Vec<String> = REFRESH_INTERVALS
-            .iter()
-            .map(|(label, _)| label.to_string())
-            .collect();
-        let interval_select =
-            cx.new(|cx| SelectState::new(labels, Some(IndexPath::new(0)), window, cx));
+        let interval_select = cx.new(|cx| {
+            SelectState::new(
+                refresh_interval_labels(),
+                Some(IndexPath::new(0)),
+                window,
+                cx,
+            )
+        });
         let interval_subscription = cx.subscribe_in(
             &interval_select,
             window,
@@ -251,17 +275,14 @@ impl DashboardTab {
                 let SelectEvent::Confirm(Some(label)) = event else {
                     return;
                 };
-                let seconds = REFRESH_INTERVALS
-                    .iter()
-                    .find(|(choice, _)| choice == label)
-                    .and_then(|(_, seconds)| *seconds);
+                let seconds = refresh_intervals()
+                    .into_iter()
+                    .find(|(choice, _)| choice.as_ref() == label.as_str())
+                    .and_then(|(_, seconds)| seconds);
                 this.set_refresh_interval(seconds, true, window, cx);
             },
         );
-        let time_labels: Vec<String> = TimeRange::ALL
-            .iter()
-            .map(|range| range.label().to_string())
-            .collect();
+        let time_labels = time_range_labels();
         let default_range = TimeRange::ALL
             .iter()
             .position(|range| *range == TimeRange::default());
@@ -276,7 +297,7 @@ impl DashboardTab {
                 };
                 let Some(range) = TimeRange::ALL
                     .into_iter()
-                    .find(|range| range.label() == label)
+                    .find(|range| range.label().as_ref() == label.as_str())
                 else {
                     return;
                 };
@@ -292,7 +313,7 @@ impl DashboardTab {
         let mut this = Self {
             dashboard_id,
             editor,
-            title: "Dashboard".to_string(),
+            title: t!("dashboard.default_title").into_owned(),
             dashboard: None,
             panels: Vec::new(),
             interval_select,
@@ -317,6 +338,22 @@ impl DashboardTab {
             _subscriptions: vec![
                 interval_subscription,
                 time_subscription,
+                // The two selects are matched by label, which the language
+                // changes, so their choices are named again and carried over
+                // by position.
+                cx.observe_global_in::<crate::i18n::Locale>(window, |this, window, cx| {
+                    for (select, labels) in [
+                        (&this.interval_select, refresh_interval_labels()),
+                        (&this.time_select, time_range_labels()),
+                    ] {
+                        select.update(cx, |select, cx| {
+                            let selected = select.selected_index(cx);
+                            select.set_items(labels, window, cx);
+                            select.set_selected_index(selected, window, cx);
+                        });
+                    }
+                    cx.notify();
+                }),
                 // A rename made elsewhere, such as in the sidebar's list, or
                 // the dashboard deleted.
                 cx.observe_global_in::<DashboardDirectory>(window, |this, window, cx| {
@@ -385,10 +422,11 @@ impl DashboardTab {
                         this.resolve_variables(window, cx);
                     }
                     Ok((None, _)) => {
-                        this.load_error = Some("This dashboard was deleted.".to_string());
+                        this.load_error = Some(t!("dashboard.deleted").into_owned());
                     }
                     Err(error) => {
-                        this.load_error = Some(format!("The dashboard did not load: {error}"));
+                        this.load_error =
+                            Some(t!("dashboard.load_failed", error = error).into_owned());
                     }
                 }
                 cx.notify();
@@ -406,7 +444,7 @@ impl DashboardTab {
         cx: &mut Context<Self>,
     ) {
         self.title = dashboard.name.clone();
-        let interval_ix = REFRESH_INTERVALS
+        let interval_ix = refresh_intervals()
             .iter()
             .position(|(_, seconds)| *seconds == dashboard.refresh_seconds)
             .unwrap_or(0);
@@ -529,10 +567,18 @@ impl DashboardTab {
         let activity = ActivityReporter::global(cx);
         let dashboard_name = self.title.clone();
         let total = queries.len();
-        let refreshing = activity.begin(format!(
-            "{dashboard_name}: refreshing {}",
-            panels_text(total)
-        ));
+        let refreshing = activity.begin(if total == 1 {
+            t!(
+                "dashboard.status.refreshing_one",
+                dashboard = dashboard_name
+            )
+        } else {
+            t!(
+                "dashboard.status.refreshing_other",
+                dashboard = dashboard_name,
+                count = total
+            )
+        });
         let (sender, mut receiver) = futures::channel::mpsc::unbounded();
         let closed = self.closed.clone();
         // Detached: a refresh always runs to its end, bounded by the query
@@ -571,14 +617,33 @@ impl DashboardTab {
             }
             refreshing.finish(if failed == 0 {
                 ActivityResult::Ok(
-                    format!("{dashboard_name}: refreshed {}", panels_text(total)).into(),
+                    if total == 1 {
+                        t!("dashboard.status.refreshed_one", dashboard = dashboard_name)
+                    } else {
+                        t!(
+                            "dashboard.status.refreshed_other",
+                            dashboard = dashboard_name,
+                            count = total
+                        )
+                    }
+                    .into(),
                 )
             } else {
                 ActivityResult::Err(
-                    format!(
-                        "{dashboard_name}: {failed} of {} failed",
-                        panels_text(total)
-                    )
+                    if total == 1 {
+                        t!(
+                            "dashboard.status.failed_of_one",
+                            dashboard = dashboard_name,
+                            failed = failed
+                        )
+                    } else {
+                        t!(
+                            "dashboard.status.failed_of_other",
+                            dashboard = dashboard_name,
+                            failed = failed,
+                            count = total
+                        )
+                    }
                     .into(),
                 )
             });
@@ -710,8 +775,8 @@ impl DashboardTab {
         let current = self.panels[ix].read(cx).data.title.clone();
         let tab = cx.entity().downgrade();
         open_name_dialog(
-            "Rename Panel",
-            "Rename",
+            t!("dashboard.rename_panel_title").into(),
+            t!("dashboard.rename").into(),
             current,
             window,
             cx,
@@ -781,7 +846,7 @@ impl DashboardTab {
             window.push_notification(
                 (
                     NotificationType::Warning,
-                    "The panel's connection was deleted, so its query has nowhere to run.",
+                    t!("dashboard.panel_connection_deleted_edit"),
                 ),
                 cx,
             );
@@ -810,7 +875,7 @@ impl DashboardTab {
                 Err(error) => window.push_notification(
                     (
                         NotificationType::Error,
-                        format!("The connections did not load: {error}"),
+                        t!("dashboard.connections_load_failed", error = error),
                     ),
                     cx,
                 ),
@@ -865,7 +930,7 @@ impl DashboardTab {
             window.push_notification(
                 (
                     NotificationType::Warning,
-                    "Add a connection first: a panel runs its query on one.",
+                    t!("dashboard.add_connection_first"),
                 ),
                 cx,
             );
@@ -880,7 +945,7 @@ impl DashboardTab {
                     .and_then(|picker| picker.read(cx).selected())
                 else {
                     window.push_notification(
-                        (NotificationType::Warning, "Pick the connection to run on."),
+                        (NotificationType::Warning, t!("dashboard.pick_connection")),
                         cx,
                     );
                     return false;
@@ -902,18 +967,24 @@ impl DashboardTab {
         window.open_dialog(cx, move |dialog, _, _| {
             let take_pick = take_pick.clone();
             dialog
-                .title("Add Panel")
+                .title(t!("dashboard.add_panel_title"))
                 .w(px(420.))
                 .child(picker.clone())
                 .footer(
                     DialogFooter::new()
                         .child(
-                            DialogClose::new()
-                                .child(Button::new("cancel").label("Cancel").outline()),
+                            DialogClose::new().child(
+                                Button::new("cancel")
+                                    .label(t!("dashboard.cancel"))
+                                    .outline(),
+                            ),
                         )
                         .child(
-                            DialogAction::new()
-                                .child(Button::new("ok").primary().label("Write Query")),
+                            DialogAction::new().child(
+                                Button::new("ok")
+                                    .primary()
+                                    .label(t!("dashboard.write_query")),
+                            ),
                         ),
                 )
                 .on_ok(move |_, window, cx| take_pick(window, cx))
@@ -958,11 +1029,14 @@ impl DashboardTab {
     fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let status = if self.refreshing {
-            "Refreshing…".to_string()
+            t!("dashboard.refreshing")
         } else if let Some(at) = self.refreshed_at {
-            format!("Refreshed {}", at.format("%H:%M:%S"))
+            t!(
+                "dashboard.refreshed_at",
+                time = at.format("%H:%M:%S").to_string()
+            )
         } else {
-            String::new()
+            Cow::Borrowed("")
         };
         h_flex()
             .w_full()
@@ -986,7 +1060,7 @@ impl DashboardTab {
                     .text_xs()
                     .text_color(theme.muted_foreground)
                     .whitespace_nowrap()
-                    .child(status),
+                    .child(SharedString::from(status)),
             )
             .child(
                 div()
@@ -995,7 +1069,7 @@ impl DashboardTab {
                     .child(Select::new(&self.time_select).small())
                     .tooltip(|window, cx| {
                         gpui_component::tooltip::Tooltip::new(
-                            "Panels filter on it with $__timeFilter(column), in UTC",
+                            t!("dashboard.time_range_tooltip").into_owned(),
                         )
                         .build(window, cx)
                     }),
@@ -1010,7 +1084,7 @@ impl DashboardTab {
                     .small()
                     .ghost()
                     .icon(IconName::RotateCcw)
-                    .tooltip("Refresh")
+                    .tooltip(t!("dashboard.refresh"))
                     .disabled(self.refreshing)
                     .on_click(cx.listener(|this, _, window, cx| this.refresh(window, cx))),
             )
@@ -1019,7 +1093,7 @@ impl DashboardTab {
                     .small()
                     .primary()
                     .icon(IconName::Plus)
-                    .label("Add Panel")
+                    .label(t!("dashboard.add_panel"))
                     .on_click(cx.listener(|this, _, window, cx| this.add_panel(window, cx))),
             )
             .child({
@@ -1031,7 +1105,7 @@ impl DashboardTab {
                     .dropdown_menu(move |menu, _, _| {
                         let delete = tab.clone();
                         let add_variable = tab.clone();
-                        menu.item(PopupMenuItem::new("Add Variable…").on_click(
+                        menu.item(PopupMenuItem::new(t!("dashboard.add_variable")).on_click(
                             move |_, window, cx| {
                                 add_variable
                                     .update(cx, |tab, cx| {
@@ -1042,7 +1116,7 @@ impl DashboardTab {
                         ))
                         .separator()
                         .item(
-                            PopupMenuItem::new("Delete Dashboard…").on_click(
+                            PopupMenuItem::new(t!("dashboard.delete_dashboard")).on_click(
                                 move |_, window, cx| {
                                     if let Some(tab) = delete.upgrade() {
                                         let (id, name) = {
@@ -1074,13 +1148,13 @@ impl DashboardTab {
         let kind = read.view.kind();
         let failed = read.error().is_some();
         let status = if read.is_loading() {
-            Some("Running…".to_string())
+            Some(t!("dashboard.panel.running").into_owned())
         } else if kind == PanelKind::Stat {
             None
         } else {
             read.row_count(cx).map(|rows| match rows {
-                1 => "1 row".to_string(),
-                rows => format!("{rows} rows"),
+                1 => t!("dashboard.rows_one").into_owned(),
+                rows => t!("dashboard.rows_other", count = rows).into_owned(),
             })
         };
         let connection_name = read
@@ -1148,7 +1222,7 @@ impl DashboardTab {
                     .ghost()
                     .icon(IconName::EllipsisVertical)
                     .when_some(connection_name, |button, name| {
-                        button.tooltip(format!("Runs on {name}"))
+                        button.tooltip(t!("dashboard.runs_on", connection = name))
                     })
                     .dropdown_menu(move |menu, window, cx| {
                         panel_menu(
@@ -1263,16 +1337,23 @@ impl DashboardTab {
             .gap_2()
             .p_6()
             .text_color(theme.muted_foreground)
-            .child(div().text_base().child("This dashboard has no panels yet"))
-            .child(div().text_sm().text_center().max_w(px(460.)).child(
-                "Run a query and pick this dashboard under Add to Dashboard in its \
-                         results, or add a panel here.",
-            ))
+            .child(
+                div()
+                    .text_base()
+                    .child(SharedString::from(t!("dashboard.empty_title"))),
+            )
+            .child(
+                div()
+                    .text_sm()
+                    .text_center()
+                    .max_w(px(460.))
+                    .child(SharedString::from(t!("dashboard.empty_hint"))),
+            )
             .child(
                 Button::new("dashboard-empty-add")
                     .small()
                     .icon(IconName::Plus)
-                    .label("Add Panel")
+                    .label(t!("dashboard.add_panel"))
                     .on_click(cx.listener(|this, _, window, cx| this.add_panel(window, cx))),
             )
     }
@@ -1322,7 +1403,7 @@ fn panel_menu(
     let widths = PopupMenu::build(window, cx, {
         let tab = tab.clone();
         move |menu, _, _| {
-            PANEL_WIDTHS
+            panel_widths()
                 .into_iter()
                 .fold(menu, |menu, (label, choice)| {
                     let tab = tab.clone();
@@ -1340,7 +1421,7 @@ fn panel_menu(
     let heights = PopupMenu::build(window, cx, {
         let tab = tab.clone();
         move |menu, _, _| {
-            PANEL_HEIGHTS
+            panel_heights()
                 .into_iter()
                 .fold(menu, |menu, (label, choice)| {
                     let tab = tab.clone();
@@ -1359,31 +1440,43 @@ fn panel_menu(
     });
     let has_connection = panel.read(cx).data.connection.is_some();
     menu.item(
-        PopupMenuItem::new("Edit Query…")
+        PopupMenuItem::new(t!("dashboard.panel_menu.edit_query"))
             .disabled(!has_connection)
             .on_click(on(&tab, |tab, panel_id, window, cx| {
                 tab.edit_panel(panel_id, window, cx)
             })),
     )
-    .item(PopupMenuItem::new("Rename…").on_click(on(&tab, DashboardTab::rename_panel)))
-    .separator()
-    .item(PopupMenuItem::submenu("Show as", show_as))
     .item(
-        PopupMenuItem::new("Thresholds…")
+        PopupMenuItem::new(t!("dashboard.panel_menu.rename"))
+            .on_click(on(&tab, DashboardTab::rename_panel)),
+    )
+    .separator()
+    .item(PopupMenuItem::submenu(
+        t!("dashboard.panel_menu.show_as"),
+        show_as,
+    ))
+    .item(
+        PopupMenuItem::new(t!("dashboard.panel_menu.thresholds"))
             .disabled(matches!(kind, PanelKind::Chart(_)))
             .on_click(on(&tab, DashboardTab::open_threshold_dialog)),
     )
-    .item(PopupMenuItem::submenu("Width", widths))
-    .item(PopupMenuItem::submenu("Height", heights))
+    .item(PopupMenuItem::submenu(
+        t!("dashboard.panel_menu.width"),
+        widths,
+    ))
+    .item(PopupMenuItem::submenu(
+        t!("dashboard.panel_menu.height"),
+        heights,
+    ))
     .item(
-        PopupMenuItem::new("Move Earlier")
+        PopupMenuItem::new(t!("dashboard.panel_menu.move_earlier"))
             .disabled(ix == 0)
             .on_click(on(&tab, |tab, panel_id, _, cx| {
                 tab.move_panel(panel_id, -1, cx)
             })),
     )
     .item(
-        PopupMenuItem::new("Move Later")
+        PopupMenuItem::new(t!("dashboard.panel_menu.move_later"))
             .disabled(ix >= last)
             .on_click(on(&tab, |tab, panel_id, _, cx| {
                 tab.move_panel(panel_id, 1, cx)
@@ -1391,9 +1484,10 @@ fn panel_menu(
     )
     .separator()
     .item(
-        PopupMenuItem::new("Remove Panel").on_click(on(&tab, |tab, panel_id, _, cx| {
-            tab.remove_panel(panel_id, cx)
-        })),
+        PopupMenuItem::new(t!("dashboard.panel_menu.remove"))
+            .on_click(on(&tab, |tab, panel_id, _, cx| {
+                tab.remove_panel(panel_id, cx)
+            })),
     )
 }
 
@@ -1428,9 +1522,10 @@ async fn run_server_group(
     dashboard_name: String,
 ) {
     let database = (!group.database_name.is_empty()).then_some(group.database_name.as_str());
-    let connecting = activity.begin(format!(
-        "{dashboard_name}: connecting to {}",
-        group.connection_name
+    let connecting = activity.begin(t!(
+        "dashboard.status.connecting",
+        dashboard = dashboard_name,
+        connection = group.connection_name
     ));
     let send = |panel_id: i64, result: Result<QueryResult, String>| {
         // The tab was closed; the refresh still closes its connection.
@@ -1447,7 +1542,8 @@ async fn run_server_group(
     {
         Ok(connection) => connection,
         Err(error) => {
-            let message = format!("Could not connect: {error:#}");
+            let message =
+                t!("dashboard.could_not_connect", error = format!("{error:#}")).into_owned();
             for query in &group.queries {
                 send(query.panel_id, Err(message.clone()));
             }
@@ -1455,11 +1551,20 @@ async fn run_server_group(
         }
     };
     drop(connecting);
-    let _running = activity.begin(format!(
-        "{dashboard_name}: running {} on {}",
-        panels_text(group.queries.len()),
-        group.connection_name
-    ));
+    let _running = activity.begin(if group.queries.len() == 1 {
+        t!(
+            "dashboard.status.running_one",
+            dashboard = dashboard_name,
+            connection = group.connection_name
+        )
+    } else {
+        t!(
+            "dashboard.status.running_other",
+            dashboard = dashboard_name,
+            count = group.queries.len(),
+            connection = group.connection_name
+        )
+    });
     for query in &group.queries {
         let run = connection.connection.execute_script(&query.query, database);
         let results = bounded_run(run, timeout, closed.clone()).await;
@@ -1473,13 +1578,6 @@ async fn run_server_group(
     service.close_short_lived_connection(connection).await;
 }
 
-fn panels_text(count: usize) -> String {
-    match count {
-        1 => "1 panel".to_string(),
-        count => format!("{count} panels"),
-    }
-}
-
 /// The result a panel shows of its statements' results: the last one with
 /// columns, as a script's final query is what it is for.
 fn shown_result(results: Vec<QueryResult>) -> Result<QueryResult, String> {
@@ -1487,15 +1585,15 @@ fn shown_result(results: Vec<QueryResult>) -> Result<QueryResult, String> {
     let ix = results
         .iter()
         .rposition(|result| !result.columns.is_empty())
-        .ok_or_else(|| "The query returned no result to show.".to_string())?;
+        .ok_or_else(|| t!("dashboard.no_result_to_show").into_owned())?;
     Ok(results.swap_remove(ix))
 }
 
 /// Ask for a name, create an empty dashboard and show it in `editor`.
 pub(crate) fn new_dashboard(editor: WeakEntity<EditorPanel>, window: &mut Window, cx: &mut App) {
     open_name_dialog(
-        "New Dashboard",
-        "Create",
+        t!("dashboard.new_dashboard_title").into(),
+        t!("dashboard.create").into(),
         String::new(),
         window,
         cx,
@@ -1517,7 +1615,7 @@ pub(crate) fn new_dashboard(editor: WeakEntity<EditorPanel>, window: &mut Window
                         Err(error) => window.push_notification(
                             (
                                 NotificationType::Error,
-                                format!("The dashboard was not created: {error}"),
+                                t!("dashboard.create_failed", error = error),
                             ),
                             cx,
                         ),
@@ -1557,18 +1655,24 @@ pub(crate) fn confirm_delete_dashboard(
 ) {
     window.open_dialog(cx, move |dialog, _, _| {
         dialog
-            .title("Delete Dashboard")
+            .title(t!("dashboard.delete_title"))
             .w(px(380.))
-            .child(format!(
-                "Delete \"{name}\" and its panels? The queries they ran are not kept anywhere else."
-            ))
+            .child(SharedString::from(t!(
+                "dashboard.delete_confirm",
+                name = name
+            )))
             .footer(
                 DialogFooter::new()
                     .child(
-                        DialogClose::new().child(Button::new("cancel").label("Cancel").outline()),
+                        DialogClose::new().child(
+                            Button::new("cancel")
+                                .label(t!("dashboard.cancel"))
+                                .outline(),
+                        ),
                     )
                     .child(
-                        DialogAction::new().child(Button::new("delete").danger().label("Delete")),
+                        DialogAction::new()
+                            .child(Button::new("delete").danger().label(t!("dashboard.delete"))),
                     ),
             )
             .on_ok(move |_, _, cx| {
@@ -1589,8 +1693,8 @@ pub(crate) fn confirm_delete_dashboard(
 
 /// Ask for a name in a dialog and hand it to `on_name` unless it is blank.
 pub(crate) fn open_name_dialog(
-    title: &'static str,
-    ok_label: &'static str,
+    title: SharedString,
+    ok_label: SharedString,
     current: String,
     window: &mut Window,
     cx: &mut App,
@@ -1602,15 +1706,22 @@ pub(crate) fn open_name_dialog(
         let form = form.clone();
         let on_name = on_name.clone();
         dialog
-            .title(title)
+            .title(title.clone())
             .w(px(320.))
             .child(form.clone())
             .footer(
                 DialogFooter::new()
                     .child(
-                        DialogClose::new().child(Button::new("cancel").label("Cancel").outline()),
+                        DialogClose::new().child(
+                            Button::new("cancel")
+                                .label(t!("dashboard.cancel"))
+                                .outline(),
+                        ),
                     )
-                    .child(DialogAction::new().child(Button::new("ok").primary().label(ok_label))),
+                    .child(
+                        DialogAction::new()
+                            .child(Button::new("ok").primary().label(ok_label.clone())),
+                    ),
             )
             .on_ok(move |_, window, cx| {
                 let name = form.read(cx).get_value(cx).trim().to_string();
@@ -1768,23 +1879,30 @@ impl EditorPanel {
         let dashboard_id = link.dashboard_id;
         let (message, button) = match &link.panel {
             Some(panel) => (
-                format!("Editing \"{}\" on {}", panel.title, link.dashboard_name),
+                t!(
+                    "dashboard.link.editing",
+                    panel = panel.title,
+                    dashboard = link.dashboard_name
+                ),
                 Button::new("dashboard-link-save")
                     .small()
                     .primary()
-                    .label("Save to Panel")
-                    .tooltip("Save this query and how its result is shown into the panel")
+                    .label(t!("dashboard.link.save_to_panel"))
+                    .tooltip(t!("dashboard.link.save_to_panel_tooltip"))
                     .on_click(cx.listener(|editor, _, window, cx| {
                         editor.update_linked_dashboard_panel(window, cx)
                     })),
             ),
             None => (
-                format!("New panel for {}", link.dashboard_name),
+                t!(
+                    "dashboard.link.new_panel_for",
+                    dashboard = link.dashboard_name
+                ),
                 Button::new("dashboard-link-add")
                     .small()
                     .primary()
-                    .label("Add to Dashboard")
-                    .tooltip("Add this query and how its result is shown as a panel")
+                    .label(t!("dashboard.link.add_to_dashboard"))
+                    .tooltip(t!("dashboard.link.add_to_dashboard_tooltip"))
                     .on_click(cx.listener(move |editor, _, window, cx| {
                         editor.add_result_to_dashboard(Some(dashboard_id), window, cx)
                     })),
@@ -1806,7 +1924,12 @@ impl EditorPanel {
                         .small()
                         .text_color(theme.green),
                 )
-                .child(div().text_sm().truncate().child(message))
+                .child(
+                    div()
+                        .text_sm()
+                        .truncate()
+                        .child(SharedString::from(message)),
+                )
                 .child(
                     div()
                         .flex_1()
@@ -1814,14 +1937,14 @@ impl EditorPanel {
                         .text_color(theme.muted_foreground)
                         .truncate()
                         .when(!has_result, |this| {
-                            this.child("Saving runs the query first. Show its result as a table or a chart to save it so.")
+                            this.child(SharedString::from(t!("dashboard.link.saving_runs_first")))
                         }),
                 )
                 .child(
                     Button::new("dashboard-link-back")
                         .small()
                         .ghost()
-                        .label("Back to Dashboard")
+                        .label(t!("dashboard.link.back_to_dashboard"))
                         .on_click(cx.listener(move |editor, _, window, cx| {
                             editor.open_dashboard_tab(dashboard_id, window, cx);
                         })),
@@ -1891,7 +2014,7 @@ impl EditorPanel {
             .panel
             .as_ref()
             .map(|panel| panel.title.clone())
-            .unwrap_or_else(|| "Panel".to_string());
+            .unwrap_or_else(|| t!("dashboard.panel_tab_title").into_owned());
         self.create_and_add_tab_with_connection(
             window,
             TabCreationParams {
@@ -1923,7 +2046,11 @@ impl EditorPanel {
         self.create_and_add_tab_with_connection(
             window,
             TabCreationParams {
-                title: format!("New panel: {}", link.dashboard_name),
+                title: t!(
+                    "dashboard.new_panel_tab_title",
+                    dashboard = link.dashboard_name
+                )
+                .into_owned(),
                 content: Some(String::new()),
                 db_id: None,
                 last_run_at: None,
@@ -1966,10 +2093,7 @@ impl EditorPanel {
         let results = tab.results_panel.clone();
         let Some((query, view)) = results.read(cx).dashboard_panel_source(cx) else {
             window.push_notification(
-                (
-                    NotificationType::Warning,
-                    "Run a query first: a panel shows the result of the query it ran.",
-                ),
+                (NotificationType::Warning, t!("dashboard.run_query_first")),
                 cx,
             );
             return;
@@ -2061,9 +2185,10 @@ impl EditorPanel {
                                         window.push_notification(
                                             (
                                                 NotificationType::Success,
-                                                format!(
-                                                    "Added \"{}\" to {dashboard_name}",
-                                                    panel.title
+                                                t!(
+                                                    "dashboard.panel_added",
+                                                    panel = panel.title,
+                                                    dashboard = dashboard_name
                                                 ),
                                             ),
                                             cx,
@@ -2076,7 +2201,7 @@ impl EditorPanel {
                         Err(error) => window.push_notification(
                             (
                                 NotificationType::Error,
-                                format!("The panel was not added: {error}"),
+                                t!("dashboard.panel_add_failed", error = error),
                             ),
                             cx,
                         ),
@@ -2090,8 +2215,8 @@ impl EditorPanel {
             None => {
                 let connection_id = context.connection_id;
                 open_name_dialog(
-                    "New Dashboard",
-                    "Create",
+                    t!("dashboard.new_dashboard_title").into(),
+                    t!("dashboard.create").into(),
                     String::new(),
                     window,
                     cx,
@@ -2109,7 +2234,7 @@ impl EditorPanel {
                                     Err(error) => window.push_notification(
                                         (
                                             NotificationType::Error,
-                                            format!("The dashboard was not created: {error}"),
+                                            t!("dashboard.create_failed", error = error),
                                         ),
                                         cx,
                                     ),
@@ -2193,7 +2318,16 @@ impl EditorPanel {
             window.push_notification(
                 (
                     NotificationType::Warning,
-                    format!("Nothing was saved to the dashboard: {error}"),
+                    t!(
+                        "dashboard.nothing_saved",
+                        error = match error.as_str() {
+                            super::query_execution::RUN_CANCELLED => t!("dashboard.run_cancelled"),
+                            super::query_execution::WRITE_NOT_CONFIRMED => {
+                                t!("dashboard.write_not_confirmed")
+                            }
+                            error => error.into(),
+                        }
+                    ),
                 ),
                 cx,
             );
@@ -2263,7 +2397,11 @@ impl EditorPanel {
                         window.push_notification(
                             (
                                 NotificationType::Success,
-                                format!("Saved \"{}\" on {}", linked.title, link.dashboard_name),
+                                t!(
+                                    "dashboard.panel_saved",
+                                    panel = linked.title,
+                                    dashboard = link.dashboard_name
+                                ),
                             ),
                             cx,
                         );
@@ -2271,7 +2409,7 @@ impl EditorPanel {
                     Err(error) => window.push_notification(
                         (
                             NotificationType::Error,
-                            format!("The panel was not saved: {error}"),
+                            t!("dashboard.panel_save_failed", error = error),
                         ),
                         cx,
                     ),

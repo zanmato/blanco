@@ -1,7 +1,7 @@
 use blanco_core::ColumnType;
+use blanco_ui::table::TableState;
 use gpui::{AppContext, Context, Entity, Focusable, Window};
 use gpui_component::input::{EditorState, InputState};
-use gpui_component::table::TableState;
 
 use super::{ResultsTableDelegate, results_settings};
 use crate::results_panel::ResultsPanel;
@@ -259,8 +259,18 @@ impl ResultsTableDelegate {
                 .columns
                 .get(col)
                 .map(|column| column.name.to_string())
-                .unwrap_or_else(|| format!("column {}", col + 1));
-            Some(format!("Row {}, {column}: invalid WKT: {error}", row + 1))
+                .unwrap_or_else(|| {
+                    t!("results.common.unnamed_column", number = col + 1).into_owned()
+                });
+            Some(
+                t!(
+                    "results.cell_edit.invalid_wkt",
+                    row = row + 1,
+                    column = column,
+                    error = error
+                )
+                .into_owned(),
+            )
         })
     }
 
@@ -282,8 +292,18 @@ impl ResultsTableDelegate {
                 .columns
                 .get(col)
                 .map(|column| column.name.to_string())
-                .unwrap_or_else(|| format!("column {}", col + 1));
-            Some(format!("Row {}, {column}: invalid JSON: {error}", row + 1))
+                .unwrap_or_else(|| {
+                    t!("results.common.unnamed_column", number = col + 1).into_owned()
+                });
+            Some(
+                t!(
+                    "results.cell_edit.invalid_json",
+                    row = row + 1,
+                    column = column,
+                    error = error
+                )
+                .into_owned(),
+            )
         })
     }
 
@@ -309,11 +329,17 @@ impl ResultsTableDelegate {
                 .columns
                 .get(col)
                 .map(|column| column.name.to_string())
-                .unwrap_or_else(|| format!("column {}", col + 1));
-            Some(format!(
-                "Row {}, {column}: invalid hex: expected pairs of hex digits after 0x",
-                row + 1
-            ))
+                .unwrap_or_else(|| {
+                    t!("results.common.unnamed_column", number = col + 1).into_owned()
+                });
+            Some(
+                t!(
+                    "results.cell_edit.invalid_hex",
+                    row = row + 1,
+                    column = column
+                )
+                .into_owned(),
+            )
         })
     }
 

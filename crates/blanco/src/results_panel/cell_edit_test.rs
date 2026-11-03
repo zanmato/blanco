@@ -1,6 +1,6 @@
+use blanco_ui::table::{TableDelegate as _, TableSelection};
 use gpui::{TestAppContext, VisualTestContext};
 use gpui_component::menu::PopupMenu;
-use gpui_component::table::{TableDelegate as _, TableSelection};
 
 use crate::app::DeleteRow;
 use crate::results_panel::{CellInput, ResultsTableDelegate};
@@ -535,7 +535,7 @@ async fn test_read_only_cell_expands_without_editing(cx: &mut TestAppContext) {
 
     let table_state = results_panel.read_with(&cx, |panel, _| panel.table_state().clone());
     table_state.update_in(&mut cx, |state, window, cx| {
-        state.set_selected_cell(0, 0, cx);
+        state.set_selection(blanco_ui::table::TableSelection::Cell(0, 0), cx);
         state.focus_handle(cx).focus(window, cx);
     });
     cx.run_until_parked();
@@ -611,9 +611,10 @@ async fn test_delete_marks_every_selected_row(cx: &mut TestAppContext) {
 
     let table_state = results_panel.read_with(&cx, |panel, _| panel.table_state().clone());
     table_state.update(&mut cx, |state, cx| {
-        state.set_selected_row(0, cx);
-        state.add_selected_row(1, cx);
-        state.add_selected_row(2, cx);
+        state.set_selection(
+            TableSelection::from_rows(blanco_ui::table::RowSet::from_range(0..3)),
+            cx,
+        );
     });
     cx.run_until_parked();
 
@@ -741,14 +742,14 @@ async fn test_inline_edit_arrows_do_not_reach_the_table(cx: &mut TestAppContext)
     cx.run_until_parked();
 
     let before = table_state.read_with(&cx, |state, _| {
-        (state.selected_cell(), state.selected_col())
+        (state.selection().cell(), state.selection().column())
     });
 
     cx.simulate_keystrokes("left left right right right");
     cx.run_until_parked();
 
     let after = table_state.read_with(&cx, |state, _| {
-        (state.selected_cell(), state.selected_col())
+        (state.selection().cell(), state.selection().column())
     });
     let editing_cell =
         table_state.read_with(&cx, |state, _| state.delegate().edit_state.editing_cell);
@@ -1192,7 +1193,7 @@ async fn test_column_header_selects_and_has_a_menu(cx: &mut TestAppContext) {
         state.set_selection(TableSelection::Column(1), cx);
     });
     assert_eq!(
-        table_state.read_with(&cx, |state, _| state.selection()),
+        table_state.read_with(&cx, |state, _| state.selection().clone()),
         TableSelection::Column(1)
     );
 
@@ -1270,9 +1271,11 @@ async fn test_copy_shortcut_copies_the_selection(cx: &mut TestAppContext) {
     let harness = TestHarness::new(cx);
     let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
     cx.update(|_, cx| {
-        cx.bind_keys(crate::keybindings::customizable_key_bindings(
+        let bindings = crate::keybindings::customizable_key_bindings(
             &crate::settings::Settings::default(),
-        ));
+            cx,
+        );
+        cx.bind_keys(bindings);
     });
 
     set_editor_text(
@@ -1305,7 +1308,7 @@ async fn test_copy_shortcut_copies_the_selection(cx: &mut TestAppContext) {
     };
 
     assert_eq!(copy(TableSelection::Cell(0, 1), &mut cx), "first value");
-    let rows = copy(TableSelection::Row(1), &mut cx);
+    let rows = copy(TableSelection::row(1), &mut cx);
     assert!(rows.contains("2\tsecond"), "{rows:?}");
     assert_eq!(copy(TableSelection::Column(0), &mut cx), "1\n2");
 
@@ -1378,6 +1381,47 @@ async fn test_copy_as_html_and_cell_menu(cx: &mut TestAppContext) {
             && copied.contains("<tr><td>1</td><td>&lt;b&gt;</td><td>NULL</td></tr>"),
         "{copied}"
     );
+}
+
+/// A selected cell copies its own row, not the rows an earlier row
+/// selection left behind in the table.
+#[gpui::test]
+async fn test_copy_as_uses_the_selected_cell_after_a_row_selection(cx: &mut TestAppContext) {
+    let harness = TestHarness::new(cx);
+    let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+
+    set_editor_text(
+        &harness,
+        "SELECT 1 AS id, 'first' AS v UNION ALL SELECT 2, 'second'",
+        &mut cx,
+    );
+    run_query(&harness, &mut cx);
+    wait_for_query(&harness, &mut cx).await;
+    let results_panel = harness.editor_panel.read_with(&cx, |panel, _| {
+        panel
+            .active_query_tab()
+            .expect("query tab")
+            .results_panel
+            .clone()
+    });
+    let table_state = results_panel.read_with(&cx, |panel, _| panel.table_state().clone());
+    table_state.update(&mut cx, |state, cx| {
+        state.set_selection(TableSelection::row(0), cx);
+        state.set_selection(TableSelection::Cell(1, 1), cx);
+    });
+
+    results_panel.update_in(&mut cx, |panel, window, cx| {
+        panel.on_copy_as_tsv(&crate::app::CopyAsTSV, window, cx);
+    });
+    cx.run_until_parked();
+    let copied = cx
+        .read_from_clipboard()
+        .and_then(|item| item.text())
+        .unwrap_or_default();
+    assert!(
+        copied.contains("second") && !copied.contains("first"),
+        "{copied}"
+    );
 
     let menu = cx.update(|window, cx| {
         PopupMenu::build(window, cx, move |menu, window, cx| {
@@ -1444,7 +1488,7 @@ async fn test_date_display_format_and_picker_keep_values_raw(cx: &mut TestAppCon
 
     let copied = results_panel.read_with(&cx, |panel, cx| {
         let delegate = table_state.read(cx).delegate();
-        panel.get_selected_data_for_rows(&std::collections::HashSet::from([0]), delegate)
+        panel.get_selected_data_for_rows(&[0], delegate)
     });
     let copied_value = copied
         .selected_rows

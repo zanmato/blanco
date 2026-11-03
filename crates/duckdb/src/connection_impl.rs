@@ -244,7 +244,7 @@ impl Connection for DuckdbConnection {
         let row = rows
             .into_iter()
             .next()
-            .ok_or_else(|| anyhow::anyhow!("Table '{table_name}' not found"))?;
+            .ok_or_else(|| anyhow::anyhow!(t!("duckdb.table_not_found", table = table_name)))?;
         let get = |ix: usize| {
             row.get(ix)
                 .cloned()
@@ -277,7 +277,7 @@ impl Connection for DuckdbConnection {
             .map(|statement| statement.trim_end().trim_end_matches(';').to_string())
             .collect();
         if statements.is_empty() {
-            anyhow::bail!("Table '{table_name}' not found");
+            anyhow::bail!(t!("duckdb.table_not_found", table = table_name));
         }
         Ok(format!("{};", statements.join(";\n")))
     }

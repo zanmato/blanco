@@ -57,12 +57,8 @@ pub struct ThemeBrowserOptions {
 /// The browser as a group for a gpui-component settings page.
 pub fn setting_group(browser: Entity<ThemeBrowser>) -> SettingGroup {
     SettingGroup::new()
-        .title("VS Code Themes")
-        .description(
-            "Find VS Code color themes on Open VSX, the open extension registry. Try shows \
-             one across the app until you revert it or close Settings. Install adds it to the \
-             theme lists above.",
-        )
+        .title(t!("vsx_themes.group_title"))
+        .description(t!("vsx_themes.group_description").into_owned())
         .items(vec![SettingItem::render(move |_, _, _| browser.clone())])
 }
 
@@ -115,14 +111,15 @@ enum Kind {
 
 enum Status {
     Idle,
-    Working(&'static str),
+    Working(SharedString),
     Note(SharedString),
     Failed(SharedString),
 }
 
 impl ThemeBrowser {
     pub fn new(options: ThemeBrowserOptions, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("Search Open VSX"));
+        let search_input = cx
+            .new(|cx| InputState::new(window, cx).placeholder(t!("vsx_themes.search_placeholder")));
         let subscription = cx.subscribe(&search_input, |this, _, event: &InputEvent, cx| {
             if let InputEvent::Change = event {
                 this.schedule_search(cx);
@@ -291,7 +288,11 @@ impl ThemeBrowser {
         };
         let extension = entry.extension.clone();
         let converted = entry.converted.clone();
-        entry.status = Status::Working(if install { "Installing" } else { "Converting" });
+        entry.status = Status::Working(if install {
+            t!("vsx_themes.status.installing").into()
+        } else {
+            t!("vsx_themes.status.converting").into()
+        });
         cx.notify();
 
         let work = cx.background_spawn({
@@ -333,11 +334,9 @@ impl ThemeBrowser {
                         }
                         entry.status = match registered {
                             Some(Err(error)) => Status::Failed(format!("{error:#}").into()),
-                            Some(Ok(true)) if !watched => Status::Note(
-                                "Installed. A theme of the same name was already loaded, so \
-                                 the new one takes over after a restart."
-                                    .into(),
-                            ),
+                            Some(Ok(true)) if !watched => {
+                                Status::Note(t!("vsx_themes.status.installed_after_restart").into())
+                            }
                             _ => Status::Idle,
                         };
                         entry.converted = Some(converted);
@@ -408,9 +407,9 @@ impl ThemeBrowser {
                 // The registry has no way to drop a theme, so unless the app
                 // rebuilds it from the folder, it stays until the next start.
                 entry.status = if watched {
-                    Status::Note("Removed.".into())
+                    Status::Note(t!("vsx_themes.status.removed").into())
                 } else {
-                    Status::Note("Removed. Its themes leave the lists after a restart.".into())
+                    Status::Note(t!("vsx_themes.status.removed_after_restart").into())
                 };
             }
             Err(error) => entry.status = Status::Failed(format!("{error:#}").into()),
@@ -435,13 +434,21 @@ impl ThemeBrowser {
             _ => None,
         };
         let variants = match count {
-            Some(1) => "1 theme".to_string(),
-            Some(count) => format!("{count} themes"),
+            Some(1) => t!("vsx_themes.theme_count_one").into_owned(),
+            Some(count) => t!("vsx_themes.theme_count_other", count = count).into_owned(),
             None => String::new(),
         };
         let byline = [
-            format!("by {}", extension.publisher_display_name),
-            format!("{} installs", short_count(extension.installs)),
+            t!(
+                "vsx_themes.by_publisher",
+                publisher = extension.publisher_display_name
+            )
+            .into_owned(),
+            t!(
+                "vsx_themes.installs",
+                count = short_count(extension.installs)
+            )
+            .into_owned(),
             format!("v{}", extension.version),
             variants,
         ]
@@ -468,7 +475,7 @@ impl ThemeBrowser {
                     Button::new(("vscode-theme-preview", index))
                         .small()
                         .outline()
-                        .label("Preview")
+                        .label(t!("vsx_themes.buttons.preview"))
                         .disabled(busy)
                         .on_click(cx.listener({
                             let id = id.clone();
@@ -481,7 +488,11 @@ impl ThemeBrowser {
                     .small()
                     .when(!is_installed, |this| this.primary())
                     .when(is_installed, |this| this.outline())
-                    .label(if is_installed { "Reinstall" } else { "Install" })
+                    .label(if is_installed {
+                        t!("vsx_themes.buttons.reinstall")
+                    } else {
+                        t!("vsx_themes.buttons.install")
+                    })
                     .disabled(busy)
                     .on_click(cx.listener({
                         let id = id.clone();
@@ -493,7 +504,7 @@ impl ThemeBrowser {
                     Button::new(("vscode-theme-remove", index))
                         .small()
                         .ghost()
-                        .label("Remove")
+                        .label(t!("vsx_themes.buttons.remove"))
                         .disabled(busy)
                         .on_click(cx.listener({
                             let id = id.clone();
@@ -504,10 +515,7 @@ impl ThemeBrowser {
 
         let status = match &entry.status {
             Status::Idle => None,
-            Status::Working(what) => Some((
-                SharedString::from(format!("{what}…")),
-                theme.muted_foreground,
-            )),
+            Status::Working(what) => Some((what.clone(), theme.muted_foreground)),
             Status::Note(note) => Some((note.clone(), theme.muted_foreground)),
             Status::Failed(error) => Some((error.clone(), theme.danger)),
         };
@@ -602,17 +610,23 @@ impl ThemeBrowser {
                                         div().w(px(16.)).h(px(18.)).bg(gpui_color(*color))
                                     })),
                             )
-                            .child(div().flex_1().min_w_0().text_sm().truncate().child(format!(
-                                "{} ({})",
-                                summary.name,
-                                if summary.light { "light" } else { "dark" }
-                            )))
+                            .child(div().flex_1().min_w_0().text_sm().truncate().child(
+                                if summary.light {
+                                    t!("vsx_themes.variant_light", name = summary.name)
+                                } else {
+                                    t!("vsx_themes.variant_dark", name = summary.name)
+                                },
+                            ))
                             .child(
                                 Button::new(("vscode-theme-try", index * 100 + variant))
                                     .xsmall()
                                     .when(previewing, |this| this.primary())
                                     .when(!previewing, |this| this.outline())
-                                    .label(if previewing { "Revert" } else { "Try" })
+                                    .label(if previewing {
+                                        t!("vsx_themes.buttons.revert")
+                                    } else {
+                                        t!("vsx_themes.buttons.try")
+                                    })
                                     .on_click(cx.listener({
                                         let name = name.clone();
                                         let converted = converted.clone();
@@ -633,7 +647,7 @@ impl ThemeBrowser {
                                         Button::new(("vscode-theme-use", index * 100 + variant))
                                             .xsmall()
                                             .outline()
-                                            .label("Use")
+                                            .label(t!("vsx_themes.buttons.use"))
                                             .on_click(cx.listener(move |this, _, window, cx| {
                                                 // The chosen theme replaces the preview
                                                 // rather than ending it.
@@ -658,17 +672,24 @@ impl Render for ThemeBrowser {
             .filter(|entry| entry.kind == Kind::NoColorThemes)
             .count();
         let summary = if self.entries.is_empty() && !self.searching {
-            "No themes found".to_string()
+            t!("vsx_themes.no_themes_found")
         } else {
-            let mut summary = format!(
-                "{} of {} extensions",
-                self.entries.len(),
-                short_count(self.total)
-            );
-            if hidden > 0 {
-                summary.push_str(&format!(", {hidden} icon themes hidden"));
+            let shown = self.entries.len();
+            let total = short_count(self.total);
+            match hidden {
+                0 => t!("vsx_themes.extensions_listed", shown = shown, total = total),
+                1 => t!(
+                    "vsx_themes.extensions_listed_hidden_one",
+                    shown = shown,
+                    total = total
+                ),
+                _ => t!(
+                    "vsx_themes.extensions_listed_hidden_other",
+                    shown = shown,
+                    total = total,
+                    hidden = hidden
+                ),
             }
-            summary
         };
         let more = (self.entries.len() as u64) < self.total;
         let muted = theme.muted_foreground;
@@ -707,7 +728,7 @@ impl Render for ThemeBrowser {
                         Button::new("vscode-theme-more")
                             .small()
                             .outline()
-                            .label("Load more")
+                            .label(t!("vsx_themes.load_more"))
                             .disabled(self.searching)
                             .on_click(cx.listener(|this, _, _, cx| this.search(true, cx))),
                     ),

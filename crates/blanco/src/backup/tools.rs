@@ -250,39 +250,53 @@ pub fn compatibility(program: ToolProgram, tool: &Version, server: &Version) -> 
             if tool.release() >= server.release() {
                 return Compatibility::Compatible;
             }
-            let explanation = format!(
-                "{name} {} is older than the PostgreSQL {} server.",
-                tool.release_label(),
-                server.release_label(),
-            );
             if program == ToolProgram::PgDump {
-                Compatibility::Incompatible(format!(
-                    "{explanation} pg_dump refuses to dump a newer server; install the PostgreSQL {} client tools or set the path to a newer pg_dump in Settings.",
-                    server.release_label()
-                ))
+                Compatibility::Incompatible(
+                    t!(
+                        "backup.tools.pg_dump_too_old",
+                        program = name,
+                        tool_release = tool.release_label(),
+                        server_release = server.release_label()
+                    )
+                    .into_owned(),
+                )
             } else {
-                Compatibility::Warning(format!(
-                    "{explanation} It may not understand everything in a dump made by a newer pg_dump."
-                ))
+                Compatibility::Warning(
+                    t!(
+                        "backup.tools.restore_tool_older",
+                        program = name,
+                        tool_release = tool.release_label(),
+                        server_release = server.release_label()
+                    )
+                    .into_owned(),
+                )
             }
         }
         ClientTools::MySql => {
             if tool.product != server.product {
-                return Compatibility::Warning(format!(
-                    "{name} comes from {} {} but the server is {} {}. Most dumps work across the two, but server specific features may be left out.",
-                    tool.product.display_name(),
-                    tool.release_label(),
-                    server.product.display_name(),
-                    server.release_label(),
-                ));
+                return Compatibility::Warning(
+                    t!(
+                        "backup.tools.product_mismatch",
+                        program = name,
+                        tool_product = tool.product.display_name(),
+                        tool_release = tool.release_label(),
+                        server_product = server.product.display_name(),
+                        server_release = server.release_label()
+                    )
+                    .into_owned(),
+                );
             }
             match tool.release().cmp(&server.release()) {
-                Ordering::Less => Compatibility::Warning(format!(
-                    "{name} {} is older than the {} {} server. Install newer client tools if the dump misses newer features.",
-                    tool.release_label(),
-                    server.product.display_name(),
-                    server.release_label(),
-                )),
+                Ordering::Less => Compatibility::Warning(
+                    t!(
+                        "backup.tools.mysql_tool_older",
+                        program = name,
+                        tool_release = tool.release_label(),
+                        server_product = server.product.display_name(),
+                        server_release = server.release_label()
+                    )
+                    .into_owned(),
+                ),
                 Ordering::Equal | Ordering::Greater => Compatibility::Compatible,
             }
         }
@@ -311,11 +325,12 @@ pub async fn locate(
     if !configured.is_empty() {
         let path = PathBuf::from(configured);
         let version = query_version(program, &path).await.with_context(|| {
-            format!(
-                "The {} path in Settings, {}, does not work",
-                program.display_name(),
-                path.display()
+            t!(
+                "backup.tools.configured_path_broken",
+                program = program.display_name(),
+                path = path.display()
             )
+            .into_owned()
         })?;
         return Ok(LocatedTool {
             program,
@@ -349,14 +364,14 @@ pub async fn locate(
         }
     }
     best.ok_or_else(|| {
+        let program_family = program.family();
+        let program = program.display_name();
         anyhow!(
-            "{} was not found. Install the {} client tools or set the path to {} in Settings.",
-            program.display_name(),
-            match program.family() {
-                ClientTools::PostgreSql => "PostgreSQL",
-                ClientTools::MySql => "MySQL or MariaDB",
-            },
-            program.display_name()
+            "{}",
+            match program_family {
+                ClientTools::PostgreSql => t!("backup.tools.not_found_postgres", program = program),
+                ClientTools::MySql => t!("backup.tools.not_found_mysql", program = program),
+            }
         )
     })
 }
@@ -381,15 +396,21 @@ async fn query_version(program: ToolProgram, path: &Path) -> Result<Version> {
     let output = match output {
         futures::future::Either::Left((output, _)) => output?,
         futures::future::Either::Right(_) => {
-            return Err(anyhow!("{} --version did not answer", path.display()));
+            return Err(anyhow!(
+                "{}",
+                t!("backup.tools.version_no_answer", path = path.display())
+            ));
         }
     };
     let stdout = String::from_utf8_lossy(&output.stdout);
     Version::parse_tool(program.family(), &stdout).ok_or_else(|| {
         anyhow!(
-            "{} printed an unexpected version: {}",
-            path.display(),
-            stdout.trim()
+            "{}",
+            t!(
+                "backup.tools.unexpected_version",
+                path = path.display(),
+                output = stdout.trim()
+            )
         )
     })
 }

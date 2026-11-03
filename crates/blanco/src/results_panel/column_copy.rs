@@ -1,10 +1,10 @@
 //! Copying one column of a result: its values one per line, or as an IN list
 //! for the WHERE clause of the next query.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::HashSet;
 
 use blanco_core::Dialect;
-use gpui::{ClipboardItem, Context, Window};
+use gpui::{App, ClipboardItem, Context, Window};
 
 use super::ResultsPanel;
 use crate::app::CopyColumnValues;
@@ -56,23 +56,27 @@ fn is_plain_number(value: &str) -> bool {
 }
 
 impl ResultsPanel {
+    /// The rows a column copy takes: the selected ones when the action asks
+    /// for them and more than one is selected, otherwise every row.
+    fn column_copy_rows(&self, selected_only: bool, cx: &App) -> Vec<usize> {
+        let table_state = self.table_state.read(cx);
+        let selected_rows = table_state.selection().rows();
+        if selected_only && selected_rows.len() > 1 {
+            selected_rows
+        } else {
+            (0..table_state.delegate().rows.len()).collect()
+        }
+    }
+
     pub(super) fn on_copy_column_values(
         &mut self,
         action: &CopyColumnValues,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let copied_rows: Vec<usize> = {
-            let table_state = self.table_state.read(cx);
-            let selected_rows = table_state.selected_rows();
-            if action.selected_only && selected_rows.len() > 1 {
-                selected_rows.iter().copied().collect()
-            } else {
-                (0..table_state.delegate().rows.len()).collect()
-            }
-        };
+        let rows = self.column_copy_rows(action.selected_only, cx);
         if self.defer_action(
-            copied_rows,
+            rows.clone(),
             Some(action.column),
             action,
             window,
@@ -81,18 +85,7 @@ impl ResultsPanel {
         ) {
             return;
         }
-        let table_state = self.table_state.read(cx);
-        let delegate = table_state.delegate();
-        let selected_rows: BTreeSet<usize> = if action.selected_only {
-            table_state.selected_rows().iter().copied().collect()
-        } else {
-            BTreeSet::new()
-        };
-        let rows: Vec<usize> = if selected_rows.len() > 1 {
-            selected_rows.into_iter().collect()
-        } else {
-            (0..delegate.rows.len()).collect()
-        };
+        let delegate = self.table_state.read(cx).delegate();
         let values = rows.iter().map(|&row| {
             delegate
                 .rows

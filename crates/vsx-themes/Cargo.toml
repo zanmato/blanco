@@ -13,6 +13,7 @@ path = "src/vsx_themes.rs"
 # A gpui-kit app names `gpui-component` from the same source as its gpui-kit,
 # so Cargo builds the component library once.
 [dependencies]
+rust-i18n = "4.2"
 anyhow = { workspace = true }
 gpui = { workspace = true }
 gpui-component = { workspace = true }

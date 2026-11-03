@@ -1,0 +1,272 @@
+_version: 2
+# gpui-component's own strings (its locales/ui.yml), laid over the library's
+# by `rust_i18n::extend!`. English entries here replace the library's wording.
+gpui_component:
+  Attachment:
+    Remove:
+      sv: Ta bort
+    Retry:
+      sv: Försök igen
+  Calendar:
+    week.0:
+      sv: Sö
+    week.1:
+      sv: Må
+    week.2:
+      sv: Ti
+    week.3:
+      sv: "On"
+    week.4:
+      sv: To
+    week.5:
+      sv: Fr
+    week.6:
+      sv: Lö
+    month.January:
+      sv: januari
+    month.February:
+      sv: februari
+    month.March:
+      sv: mars
+    month.April:
+      sv: april
+    month.May:
+      sv: maj
+    month.June:
+      sv: juni
+    month.July:
+      sv: juli
+    month.August:
+      sv: augusti
+    month.September:
+      sv: september
+    month.October:
+      sv: oktober
+    month.November:
+      sv: november
+    month.December:
+      sv: december
+  DatePicker:
+    placeholder:
+      sv: Välj datum
+    time:
+      sv: Tid
+  Select:
+    placeholder:
+      sv: Välj
+  ComboBox:
+    placeholder:
+      sv: Välj
+    search_placeholder:
+      en: Search
+      sv: Sök
+    empty:
+      sv: Inga träffar
+  Dock:
+    Unnamed:
+      sv: Namnlös
+    Close:
+      sv: Stäng
+    Zoom In:
+      sv: Zooma in
+    Zoom Out:
+      sv: Zooma ut
+    Collapse:
+      sv: Fäll ihop
+    Expand:
+      sv: Fäll ut
+    Unavailable Panel:
+      sv: Den här panelen finns inte i den här versionen.
+  ColorPicker:
+    Palette:
+      sv: Palett
+    HSLA:
+      sv: HSLA
+    Hue:
+      sv: Nyans
+    Saturation:
+      sv: Mättnad
+    Lightness:
+      sv: Ljushet
+    Alpha:
+      sv: Alfa
+  Dialog:
+    ok:
+      sv: OK
+    cancel:
+      sv: Avbryt
+  DropdownButton:
+    more_options:
+      sv: Fler alternativ
+  Table:
+    SortBy:
+      sv: "Sortera efter %{column}"
+  Command:
+    placeholder:
+      en: Type a command or search
+      sv: Skriv ett kommando eller sök
+    empty:
+      sv: Inga träffar.
+  List:
+    search_placeholder:
+      en: Search
+      sv: Sök
+  Input:
+    Decrement:
+      sv: Minska
+    Increment:
+      sv: Öka
+    Replace:
+      sv: Ersätt
+    Replace All:
+      sv: Ersätt alla
+    Cut:
+      sv: Klipp ut
+    Copy:
+      sv: Kopiera
+    Paste:
+      sv: Klistra in
+    Select All:
+      sv: Markera allt
+    Go to Definition:
+      sv: Gå till definition
+    Show Code Actions:
+      sv: Visa kodåtgärder
+    Clear:
+      sv: Rensa
+    Hide Password:
+      sv: Dölj lösenord
+    Show Password:
+      sv: Visa lösenord
+  Settings:
+    search_placeholder:
+      en: Search
+      sv: Sök
+    Reset All:
+      sv: Återställ alla
+    no_results:
+      sv: Inga matchande inställningar
+    no_results_description:
+      sv: Prova ett annat sökord.
+  Pagination:
+    previous:
+      sv: Föregående
+    next:
+      sv: Nästa
+  Carousel:
+    label:
+      sv: Karusell
+    previous:
+      sv: Föregående bild
+    next:
+      sv: Nästa bild
+    slide:
+      sv: Bild %{current} av %{total}
+    pagination:
+      sv: Karusellens sidor
+    go_to_slide:
+      sv: Gå till bild %{current}
+  Chart:
+    open:
+      sv: Öppning
+    high:
+      sv: Högst
+    low:
+      sv: Lägst
+    close:
+      sv: Stängning
+  Questionnaire:
+    progress:
+      sv: Fråga %{current} av %{total}
+    previous:
+      sv: Föregående
+    next:
+      sv: Nästa
+    skip:
+      sv: Hoppa över
+    submit:
+      sv: Skicka
+    error.required:
+      sv: Välj ett svar för att fortsätta.
+    error.optional:
+      sv: Välj ett svar eller hoppa över frågan.
+  Speech:
+    Start:
+      sv: Diktera
+    Stop:
+      sv: Sluta diktera
+    Unavailable:
+      sv: Diktering är inte tillgänglig
+  Diff:
+    BinaryChanges:
+      sv: Binärfilen har ändrats
+    NoTextChanges:
+      sv: Inga textändringar i patchen
+    NoChanges:
+      sv: Inga ändringar
+    EmptyFile:
+      sv: Tom fil
+    AddedFile:
+      sv: Tillagd fil
+    DeletedFile:
+      sv: Borttagen fil
+    RenamedFile:
+      sv: Namnbytt
+    CopiedFile:
+      sv: Kopierad
+    HiddenLines:
+      sv: "%{count} rader som inte finns i patchen"
+    ExpandAbove:
+      sv: Visa %{count} rader ovanför
+    ExpandBelow:
+      sv: Visa %{count} rader nedanför
+    CollapseFile:
+      sv: Fäll ihop %{name}
+    ExpandFile:
+      sv: Fäll ut %{name}
+    AddAnnotation:
+      sv: Lägg till en anteckning på rad %{line}
+    ConflictedFile:
+      sv: Konflikter
+    CurrentChange:
+      sv: Nuvarande ändring
+    IncomingChange:
+      sv: Inkommande ändring
+    BaseChange:
+      sv: Gemensam förfader
+    AcceptCurrent:
+      sv: Behåll nuvarande
+    AcceptIncoming:
+      sv: Ta inkommande
+    AcceptBoth:
+      sv: Behåll båda
+    AcceptedCurrent:
+      sv: Behöll nuvarande ändring
+    AcceptedIncoming:
+      sv: Tog inkommande ändring
+    AcceptedBoth:
+      sv: Behöll båda ändringarna
+    UndoResolution:
+      sv: Ångra
+    Original:
+      sv: Original
+    Modified:
+      sv: Ändrad
+    ExpandLines:
+      sv: Visa %{count} oförändrade rader
+    SourceLine:
+      sv: "%{side} rad %{line}"
+    AddedLine:
+      sv: "%{side} rad %{line}, tillagd"
+    RemovedLine:
+      sv: "%{side} rad %{line}, borttagen"
+    UnchangedLines:
+      sv: "%{count} oförändrade rader"
+    SelectLine:
+      sv: Markera %{side} rad %{line}
+    NoNewline:
+      sv: Ingen radbrytning i slutet av filen
+    Viewer:
+      sv: Diff för %{name}
+    ViewerFiles:
+      sv: Diff för %{count} filer

@@ -1,3 +1,8 @@
+#[macro_use]
+extern crate rust_i18n;
+
+rust_i18n::i18n!("locales", fallback = "en");
+
 mod connection_impl;
 
 use anyhow::Result;
@@ -57,14 +62,14 @@ pub struct ClickhouseConnection {
 impl ClickhouseConnection {
     pub fn from_connection_string(connection_string: &str) -> Result<Self> {
         let parsed = url::Url::parse(connection_string)
-            .map_err(|e| anyhow::anyhow!("invalid ClickHouse connection URL: {}", e))?;
+            .map_err(|e| anyhow::anyhow!(t!("clickhouse.invalid_url", error = e)))?;
 
         let scheme = parsed.scheme();
         if scheme != "http" && scheme != "https" {
-            return Err(anyhow::anyhow!(
-                "ClickHouse connection URL must use http or https, got '{}'",
-                scheme
-            ));
+            return Err(anyhow::anyhow!(t!(
+                "clickhouse.invalid_scheme",
+                scheme = scheme
+            )));
         }
 
         let host = parsed.host_str().unwrap_or("localhost");
@@ -119,27 +124,37 @@ impl ClickhouseConnection {
             }
             if let Some(ca_path) = &ssl_root_cert {
                 let pem = std::fs::read(ca_path).map_err(|e| {
-                    anyhow::anyhow!("failed to read CA certificate {}: {}", ca_path, e)
+                    anyhow::anyhow!(t!("clickhouse.read_ca_failed", path = ca_path, error = e))
                 })?;
                 let cert = reqwest::Certificate::from_pem(&pem)
-                    .map_err(|e| anyhow::anyhow!("invalid CA certificate: {}", e))?;
+                    .map_err(|e| anyhow::anyhow!(t!("clickhouse.invalid_ca", error = e)))?;
                 builder = builder.add_root_certificate(cert);
             }
             if let (Some(cert_path), Some(key_path)) = (&ssl_client_cert, &ssl_client_key) {
                 let cert_pem = std::fs::read(cert_path).map_err(|e| {
-                    anyhow::anyhow!("failed to read client certificate {}: {}", cert_path, e)
+                    anyhow::anyhow!(t!(
+                        "clickhouse.read_client_certificate_failed",
+                        path = cert_path,
+                        error = e
+                    ))
                 })?;
                 let key_pem = std::fs::read(key_path).map_err(|e| {
-                    anyhow::anyhow!("failed to read client key {}: {}", key_path, e)
+                    anyhow::anyhow!(t!(
+                        "clickhouse.read_client_key_failed",
+                        path = key_path,
+                        error = e
+                    ))
                 })?;
-                let identity = reqwest::Identity::from_pkcs8_pem(&cert_pem, &key_pem)
-                    .map_err(|e| anyhow::anyhow!("invalid client identity: {}", e))?;
+                let identity =
+                    reqwest::Identity::from_pkcs8_pem(&cert_pem, &key_pem).map_err(|e| {
+                        anyhow::anyhow!(t!("clickhouse.invalid_client_identity", error = e))
+                    })?;
                 builder = builder.identity(identity);
             }
         }
         let http = builder
             .build()
-            .map_err(|e| anyhow::anyhow!("failed to build HTTP client: {}", e))?;
+            .map_err(|e| anyhow::anyhow!(t!("clickhouse.http_client_failed", error = e)))?;
 
         Ok(Self {
             http,
@@ -213,11 +228,11 @@ impl ClickhouseConnection {
         }
         let body = String::from_utf8_lossy(&bytes).into_owned();
         if !status.is_success() {
-            return Err(anyhow::anyhow!(
-                "ClickHouse query failed ({}): {}",
-                status,
-                body.trim()
-            ));
+            return Err(anyhow::anyhow!(t!(
+                "clickhouse.query_failed",
+                status = status,
+                error = body.trim()
+            )));
         }
         Ok((body, timer))
     }
@@ -902,5 +917,58 @@ mod tests {
             assert!(keys?.is_empty());
             Ok(())
         })
+    }
+}
+
+#[cfg(test)]
+mod locale_tests {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    fn messages(locale: &str) -> BTreeMap<String, String> {
+        crate::_rust_i18n_backend()
+            .messages_for_locale(locale)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(key, value)| (key.into_owned(), value.into_owned()))
+            .collect()
+    }
+
+    fn placeholders(text: &str) -> BTreeSet<&str> {
+        text.split("%{")
+            .skip(1)
+            .filter_map(|rest| rest.split_once('}').map(|(name, _)| name))
+            .collect()
+    }
+
+    /// Every string has every translation, with the same placeholders.
+    #[test]
+    fn every_locale_translates_every_string() {
+        let english = messages("en");
+        assert!(!english.is_empty(), "no English strings");
+        let locales = crate::_rust_i18n_backend().available_locales();
+        assert!(
+            locales.iter().any(|locale| locale == "sv"),
+            "no Swedish strings"
+        );
+        let mut failures = Vec::new();
+        for locale in locales {
+            if locale == "en" {
+                continue;
+            }
+            let translation = messages(&locale);
+            for (key, text) in &english {
+                match translation.get(key) {
+                    None => failures.push(format!("{locale}: missing {key}")),
+                    Some(translated) if placeholders(translated) != placeholders(text) => {
+                        failures.push(format!("{locale}: {key} has other %{{}} placeholders"))
+                    }
+                    Some(_) => {}
+                }
+            }
+            for key in translation.keys().filter(|key| !english.contains_key(*key)) {
+                failures.push(format!("en: missing {key}"));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 }

@@ -59,14 +59,14 @@ impl Connection for MysqlConnection {
         let connect = async {
             sqlx::mysql::MySqlConnection::connect(&connection_string)
                 .await
-                .map_err(|e| blanco_core::tag_sqlx(e).context("Failed to connect to MySQL"))
+                .map_err(|e| blanco_core::tag_sqlx(e).context(t!("mysql.connect_failed")))
         };
         let deadline = async {
             smol::Timer::after(timeout).await;
-            Err(anyhow::anyhow!(
-                "MySQL connection timed out after {}s",
-                timeout.as_secs()
-            ))
+            Err(anyhow::anyhow!(t!(
+                "mysql.connect_timed_out",
+                seconds = timeout.as_secs()
+            )))
         };
 
         let mut conn = smol::future::or(connect, deadline).await?;
@@ -74,7 +74,7 @@ impl Connection for MysqlConnection {
         let result = sqlx::query("SELECT 1")
             .execute(&mut conn)
             .await
-            .map_err(|e| blanco_core::tag_sqlx(e).context("MySQL connection check failed"));
+            .map_err(|e| blanco_core::tag_sqlx(e).context(t!("mysql.connection_check_failed")));
 
         // Close best-effort; the validation result is what matters.
         let _ = conn.close().await;
@@ -103,13 +103,13 @@ impl Connection for MysqlConnection {
         let database = self
             .initial_database
             .as_deref()
-            .ok_or_else(|| anyhow::anyhow!("No database specified"))?;
+            .ok_or_else(|| anyhow::anyhow!(t!("mysql.no_database")))?;
         let pool = self.get_or_create_pool(database).await?;
         let version: String = sqlx::query_scalar("SELECT VERSION()")
             .fetch_one(&pool)
             .await
             .map_err(|error| {
-                blanco_core::tag_sqlx(error).context("Failed to read the MySQL server version")
+                blanco_core::tag_sqlx(error).context(t!("mysql.server_version_failed"))
             })?;
         let variant = blanco_core::ServerVariant::from_mysql_version(&version);
         *self.server_variant.write().await = Some(variant);
@@ -124,7 +124,7 @@ impl Connection for MysqlConnection {
     ) -> Result<QueryResult, anyhow::Error> {
         let database = database_name
             .or(self.initial_database.as_deref())
-            .ok_or_else(|| anyhow::anyhow!("No database specified"))?;
+            .ok_or_else(|| anyhow::anyhow!(t!("mysql.no_database")))?;
 
         let pool = self.get_or_create_pool(database).await?;
         // Taken before the timer starts, so opening a connection does not
@@ -226,7 +226,7 @@ impl Connection for MysqlConnection {
 
         let database = database_name
             .or(self.initial_database.as_deref())
-            .ok_or_else(|| anyhow::anyhow!("No database specified"))?;
+            .ok_or_else(|| anyhow::anyhow!(t!("mysql.no_database")))?;
         let pool = self.get_or_create_pool(database).await?;
         // Taken before the timer starts, so opening a connection does not
         // count as execution.
@@ -266,7 +266,7 @@ impl Connection for MysqlConnection {
     ) -> Result<(Vec<String>, Vec<ColumnType>), anyhow::Error> {
         let database = database_name
             .or(self.initial_database.as_deref())
-            .ok_or_else(|| anyhow::anyhow!("No database specified"))?;
+            .ok_or_else(|| anyhow::anyhow!(t!("mysql.no_database")))?;
         let pool = self.get_or_create_pool(database).await?;
         let description = pool.describe(query).await.map_err(blanco_core::tag_sqlx)?;
         let (columns, column_types) = description
@@ -290,7 +290,7 @@ impl Connection for MysqlConnection {
     ) -> Result<u64, anyhow::Error> {
         let database = database_name
             .or(self.initial_database.as_deref())
-            .ok_or_else(|| anyhow::anyhow!("No database specified"))?;
+            .ok_or_else(|| anyhow::anyhow!(t!("mysql.no_database")))?;
         let pool = self.get_or_create_pool(database).await?;
 
         let mut q = sqlx::query(query);
@@ -312,7 +312,7 @@ impl Connection for MysqlConnection {
         let database = database_name
             .or(self.initial_database.as_deref())
             .ok_or_else(|| {
-                blanco_core::BatchFailure::atomic(anyhow::anyhow!("No database specified"))
+                blanco_core::BatchFailure::atomic(anyhow::anyhow!(t!("mysql.no_database")))
             })?;
         let pool = self
             .get_or_create_pool(database)
@@ -335,7 +335,7 @@ impl Connection for MysqlConnection {
     > {
         let database = database_name
             .or(self.initial_database.as_deref())
-            .ok_or_else(|| anyhow::anyhow!("No database specified"))?;
+            .ok_or_else(|| anyhow::anyhow!(t!("mysql.no_database")))?;
         let pool = self.get_or_create_pool(database).await?;
 
         // Use `sqlx::query().fetch()` to consume the result set row-by-row,
@@ -384,7 +384,7 @@ impl Connection for MysqlConnection {
         let pool = if let Some(database) = &self.initial_database {
             self.get_or_create_pool(database).await?
         } else {
-            return Err(anyhow::anyhow!("No initial database available"));
+            return Err(anyhow::anyhow!(t!("mysql.no_initial_database")));
         };
 
         let rows = sqlx::query("SHOW DATABASES").fetch_all(&pool).await?;
@@ -420,7 +420,7 @@ impl Connection for MysqlConnection {
         let database = self
             .initial_database
             .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("No database specified"))?;
+            .ok_or_else(|| anyhow::anyhow!(t!("mysql.no_database")))?;
 
         let pool = self.get_or_create_pool(database).await?;
 
@@ -440,7 +440,7 @@ impl Connection for MysqlConnection {
         let database = self
             .initial_database
             .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("No database specified"))?;
+            .ok_or_else(|| anyhow::anyhow!(t!("mysql.no_database")))?;
 
         let pool = self.get_or_create_pool(database).await?;
 
@@ -461,7 +461,7 @@ impl Connection for MysqlConnection {
         let database = self
             .initial_database
             .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("No database specified"))?;
+            .ok_or_else(|| anyhow::anyhow!(t!("mysql.no_database")))?;
         let pool = self.get_or_create_pool(database).await?;
         let rows = sqlx::query(
             "SELECT ROUTINE_NAME FROM information_schema.routines
@@ -481,7 +481,7 @@ impl Connection for MysqlConnection {
         let database = self
             .initial_database
             .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("No database specified"))?;
+            .ok_or_else(|| anyhow::anyhow!(t!("mysql.no_database")))?;
         let pool = self.get_or_create_pool(database).await?;
         let rows = sqlx::query(
             "SELECT ROUTINE_NAME FROM information_schema.routines
@@ -504,7 +504,7 @@ impl Connection for MysqlConnection {
         let database = self
             .initial_database
             .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("No database specified"))?;
+            .ok_or_else(|| anyhow::anyhow!(t!("mysql.no_database")))?;
         let pool = self.get_or_create_pool(database).await?;
         let rows = sqlx::query(
             "SELECT r.ROUTINE_NAME, r.DTD_IDENTIFIER, r.ROUTINE_COMMENT,
@@ -559,7 +559,7 @@ impl Connection for MysqlConnection {
         let database = self
             .initial_database
             .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("No database specified"))?;
+            .ok_or_else(|| anyhow::anyhow!(t!("mysql.no_database")))?;
         let pool = self.get_or_create_pool(database).await?;
         let rows = sqlx::query(
             "SELECT TRIGGER_NAME FROM information_schema.triggers
@@ -582,7 +582,7 @@ impl Connection for MysqlConnection {
         let initial_database = self
             .initial_database
             .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("No database specified"))?;
+            .ok_or_else(|| anyhow::anyhow!(t!("mysql.no_database")))?;
         let pool = self.get_or_create_pool(initial_database).await?;
         // A MySQL schema is a database, as in `get_columns_for_table`.
         let database = schema
@@ -622,7 +622,7 @@ impl Connection for MysqlConnection {
         let database = self
             .initial_database
             .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("No database specified"))?;
+            .ok_or_else(|| anyhow::anyhow!(t!("mysql.no_database")))?;
         let pool = self.get_or_create_pool(database).await?;
         // DATA_LENGTH/INDEX_LENGTH are BIGINT UNSIGNED in information_schema.
         // Their sum returns DECIMAL on older MySQL/MariaDB versions, which
@@ -672,7 +672,7 @@ impl Connection for MysqlConnection {
         let database = self
             .initial_database
             .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("No database specified"))?;
+            .ok_or_else(|| anyhow::anyhow!(t!("mysql.no_database")))?;
         let pool = self.get_or_create_pool(database).await?;
         // The sidebar lists only the connection's database, and reading
         // information_schema.TABLES for every schema opens every table on
@@ -702,7 +702,7 @@ impl Connection for MysqlConnection {
         let database = self
             .initial_database
             .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("No database specified"))?;
+            .ok_or_else(|| anyhow::anyhow!(t!("mysql.no_database")))?;
         let pool = self.get_or_create_pool(database).await?;
         // SHOW CREATE PROCEDURE/FUNCTION/TRIGGER returns a row whose second
         // column ('Create Procedure'/'Create Function'/'SQL Original Statement')
@@ -717,17 +717,15 @@ impl Connection for MysqlConnection {
                 2usize,
             ),
             ObjectKind::Trigger => (format!("SHOW CREATE TRIGGER `{}`.`{}`", database, name), 2),
-            ObjectKind::Enum
-            | ObjectKind::CompositeType
-            | ObjectKind::Domain
-            | ObjectKind::Sequence => {
-                anyhow::bail!("MySQL has no {}s", kind.display_name().to_lowercase())
-            }
+            ObjectKind::Enum => anyhow::bail!(t!("mysql.no_enums")),
+            ObjectKind::CompositeType => anyhow::bail!(t!("mysql.no_composite_types")),
+            ObjectKind::Domain => anyhow::bail!(t!("mysql.no_domains")),
+            ObjectKind::Sequence => anyhow::bail!(t!("mysql.no_sequences")),
         };
         let row = sqlx::query(&stmt)
             .fetch_one(&pool)
             .await
-            .map_err(|e| anyhow::anyhow!("SHOW CREATE failed: {}", e))?;
+            .map_err(|e| anyhow::anyhow!(t!("mysql.show_create_failed", error = e)))?;
         let ddl: String = row
             .try_get::<String, _>(ddl_col)
             .map_err(|e| anyhow::anyhow!("DDL column not found: {}", e))?;
@@ -742,7 +740,7 @@ impl Connection for MysqlConnection {
         let database = self
             .initial_database
             .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("No database specified"))?;
+            .ok_or_else(|| anyhow::anyhow!(t!("mysql.no_database")))?;
         let pool = self.get_or_create_pool(database).await?;
         let query = "
             SELECT NULLIF(TABLE_COMMENT, ''),
@@ -763,7 +761,12 @@ impl Connection for MysqlConnection {
             .bind(table_name)
             .fetch_optional(&pool)
             .await?
-            .ok_or_else(|| anyhow::anyhow!("Table '{database}.{table_name}' not found"))?;
+            .ok_or_else(|| {
+                anyhow::anyhow!(t!(
+                    "mysql.table_not_found",
+                    table = format!("{database}.{table_name}")
+                ))
+            })?;
         let get = |ix: usize| {
             row.try_get::<Option<String>, _>(ix)
                 .ok()
@@ -778,9 +781,9 @@ impl Connection for MysqlConnection {
             .as_deref()
             .is_some_and(|engine| engine.eq_ignore_ascii_case("InnoDB"))
         {
-            "since the server last started"
+            t!("mysql.modified_since_restart")
         } else {
-            "from the table's files"
+            t!("mysql.modified_from_files")
         };
         let mut info = blanco_core::TableInfo {
             comment: get(0),
@@ -790,18 +793,18 @@ impl Connection for MysqlConnection {
             created: get(4),
             last_modified: get(5).map(|at| blanco_core::LastModified {
                 at,
-                note: note.to_string(),
+                note: note.into_owned(),
             }),
             ..Default::default()
         };
         for (label, value) in [
-            ("Engine", engine),
-            ("Collation", get(7)),
-            ("Next auto increment", get(8)),
-            ("Row format", get(9)),
+            (t!("mysql.engine"), engine),
+            (t!("mysql.collation"), get(7)),
+            (t!("mysql.next_auto_increment"), get(8)),
+            (t!("mysql.row_format"), get(9)),
         ] {
             if let Some(value) = value {
-                info.options.push((label.to_string(), value));
+                info.options.push((label.into_owned(), value));
             }
         }
 
@@ -835,7 +838,7 @@ impl Connection for MysqlConnection {
         let database = self
             .initial_database
             .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("No database specified"))?;
+            .ok_or_else(|| anyhow::anyhow!(t!("mysql.no_database")))?;
         let pool = self.get_or_create_pool(database).await?;
         // SHOW CREATE TABLE returns ('Table', 'Create Table'); the full DDL
         // including indexes and constraints is in the second column (index 1).
@@ -843,7 +846,7 @@ impl Connection for MysqlConnection {
         let row = sqlx::query(&stmt)
             .fetch_one(&pool)
             .await
-            .map_err(|e| anyhow::anyhow!("SHOW CREATE TABLE failed: {}", e))?;
+            .map_err(|e| anyhow::anyhow!(t!("mysql.show_create_table_failed", error = e)))?;
         let ddl: String = row
             .try_get::<String, _>(1)
             .map_err(|e| anyhow::anyhow!("DDL column not found: {}", e))?;
@@ -878,7 +881,7 @@ impl Connection for MysqlConnection {
         let database = self
             .initial_database
             .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("No database specified"))?;
+            .ok_or_else(|| anyhow::anyhow!(t!("mysql.no_database")))?;
 
         let pool = self.get_or_create_pool(database).await?;
 
@@ -930,7 +933,7 @@ impl Connection for MysqlConnection {
         let database = self
             .initial_database
             .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("No database specified"))?;
+            .ok_or_else(|| anyhow::anyhow!(t!("mysql.no_database")))?;
 
         let pool = self.get_or_create_pool(database).await?;
         // A MySQL schema is a database: `other.t` is read from `other`.
@@ -1133,7 +1136,7 @@ impl Connection for MysqlConnection {
         let database = self
             .initial_database
             .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("No database specified"))?;
+            .ok_or_else(|| anyhow::anyhow!(t!("mysql.no_database")))?;
         let pool = self.get_or_create_pool(database).await?;
         let query = "
             SELECT
@@ -1173,7 +1176,7 @@ impl Connection for MysqlConnection {
         let database = self
             .initial_database
             .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("No database specified"))?;
+            .ok_or_else(|| anyhow::anyhow!(t!("mysql.no_database")))?;
         let pool = self.get_or_create_pool(database).await?;
         let query = "
             SELECT
@@ -1231,7 +1234,7 @@ impl Connection for MysqlConnection {
         let database = self
             .initial_database
             .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("No database specified"))?;
+            .ok_or_else(|| anyhow::anyhow!(t!("mysql.no_database")))?;
         let pool = self.get_or_create_pool(database).await?;
         // The tables are the initial database's, as `get_tables` lists them,
         // and their columns are read where `get_columns_for_table` reads them.
@@ -1352,7 +1355,7 @@ impl Connection for MysqlConnection {
         let database = self
             .initial_database
             .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("No database specified"))?;
+            .ok_or_else(|| anyhow::anyhow!(t!("mysql.no_database")))?;
 
         let pool = self.get_or_create_pool(database).await?;
 

@@ -1,5 +1,6 @@
+use blanco_ui::table::Column;
 use gpui::{App, SharedString, TextRun, Window, px};
-use gpui_component::{ActiveTheme, table::Column};
+use gpui_component::ActiveTheme;
 
 use blanco_core::{QueryResult, connection_trait::ColumnType};
 
@@ -656,7 +657,7 @@ mod tests {
 
     #[test]
     fn sort_rows_orders_by_each_key_in_turn() {
-        use gpui_component::table::ColumnSort::{Ascending, Descending};
+        use blanco_ui::table::ColumnSort::{Ascending, Descending};
 
         let row = |team: &str, score: &str| vec![Some(team.to_string()), Some(score.to_string())];
         let mut delegate = ResultsTableDelegate {

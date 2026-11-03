@@ -1,0 +1,204 @@
+_version: 2
+connection_dialog:
+  connection_name:
+    en: "Connection Name"
+    sv: "Anslutningsnamn"
+  type:
+    en: "Type"
+    sv: "Typ"
+  environment:
+    en: "Environment"
+    sv: "Miljö"
+  read_only:
+    en: "Read-only (reject statements that modify data)"
+    sv: "Skrivskyddad (avvisa satser som ändrar data)"
+  only_configured_database:
+    en: "Only show the database entered below"
+    sv: "Visa bara databasen som anges nedan"
+  open_default_schema:
+    en: "Open the default database and schema on connect"
+    sv: "Öppna standarddatabasen och standardschemat vid anslutning"
+  show_advanced:
+    en: "Show Advanced Options"
+    sv: "Visa avancerade alternativ"
+  hide_advanced:
+    en: "Hide Advanced Options"
+    sv: "Dölj avancerade alternativ"
+  idle_timeout:
+    en: "Disconnect When Idle (minutes)"
+    sv: "Koppla från vid inaktivitet (minuter)"
+  idle_timeout_help:
+    en: "Empty follows the Database setting. 0 keeps this connection open."
+    sv: "Tomt följer inställningen under Databas. 0 håller anslutningen öppen."
+  idle_default_never:
+    en: "Default (never)"
+    sv: "Standard (aldrig)"
+  idle_default_minutes:
+    en: "Default (%{minutes})"
+    sv: "Standard (%{minutes})"
+  testing:
+    en: "Testing connection…"
+    sv: "Testar anslutningen…"
+  test_succeeded:
+    en: "Connection successful"
+    sv: "Anslutningen lyckades"
+  test_failed:
+    en: "Connection failed: %{error}"
+    sv: "Anslutningen misslyckades: %{error}"
+  database_path:
+    en: "Database path"
+    sv: "Sökväg till databasen"
+  sqlite_path_placeholder:
+    en: "/path/to/database.db"
+    sv: "/sökväg/till/databas.db"
+  duckdb_path_placeholder:
+    en: "/path/to/database.duckdb, or :memory:"
+    sv: "/sökväg/till/databas.duckdb, eller :memory:"
+  select_file:
+    en: "Select file"
+    sv: "Välj fil"
+  host:
+    en: "Host"
+    sv: "Värd"
+  host_http:
+    en: "Host (http:// or https://)"
+    sv: "Värd (http:// eller https://)"
+  port:
+    en: "Port"
+    sv: "Port"
+  user:
+    en: "User"
+    sv: "Användare"
+  password:
+    en: "Password"
+    sv: "Lösenord"
+  password_optional:
+    en: "Password (optional)"
+    sv: "Lösenord (valfritt)"
+  database_name:
+    en: "Database name"
+    sv: "Databasnamn"
+  database_name_placeholder:
+    en: "Database Name"
+    sv: "Databasnamn"
+  ask_on_connect:
+    en: "Ask on connect"
+    sv: "Fråga vid anslutning"
+  ssl_mode:
+    en: "SSL Mode"
+    sv: "SSL-läge"
+  show_advanced_ssl:
+    en: "Show Advanced SSL"
+    sv: "Visa avancerade SSL-inställningar"
+  hide_advanced_ssl:
+    en: "Hide Advanced SSL"
+    sv: "Dölj avancerade SSL-inställningar"
+  ssl_key_path:
+    en: "SSL Key Path"
+    sv: "Sökväg till SSL-nyckel"
+  ssl_cert_path:
+    en: "SSL Cert Path"
+    sv: "Sökväg till SSL-certifikat"
+  ssl_ca_cert_path:
+    en: "SSL CA Cert Path"
+    sv: "Sökväg till SSL CA-certifikat"
+  ssl_key_path_optional:
+    en: "SSL Key Path (optional)"
+    sv: "Sökväg till SSL-nyckel (valfritt)"
+  ssl_cert_path_optional:
+    en: "SSL Cert Path (optional)"
+    sv: "Sökväg till SSL-certifikat (valfritt)"
+  ssl_ca_cert_path_optional:
+    en: "SSL CA Cert Path (optional)"
+    sv: "Sökväg till SSL CA-certifikat (valfritt)"
+  ssh_host_placeholder:
+    en: "SSH Host"
+    sv: "SSH-värd"
+  ssh_username_optional:
+    en: "SSH Username (optional)"
+    sv: "SSH-användarnamn (valfritt)"
+  ssh_password_optional:
+    en: "SSH Password (optional)"
+    sv: "SSH-lösenord (valfritt)"
+  private_key_path:
+    en: "Private key path"
+    sv: "Sökväg till privat nyckel"
+  private_key_password:
+    en: "Private key password"
+    sv: "Lösenord för privat nyckel"
+  private_key_path_optional:
+    en: "Private Key Path (optional)"
+    sv: "Sökväg till privat nyckel (valfritt)"
+  private_key_password_optional:
+    en: "Private Key Password (optional)"
+    sv: "Lösenord för privat nyckel (valfritt)"
+  jump_hosts:
+    en: "Jump hosts (optional)"
+    sv: "Hoppvärdar (valfritt)"
+  jump_hosts_placeholder:
+    en: "From ~/.ssh/config, or user@bastion:22, other"
+    sv: "Från ~/.ssh/config, eller user@bastion:22, annan"
+  ssh_help:
+    en: "The tunnel ends at the SSH host, which can be an alias from ~/.ssh/config. Jump hosts are the servers to go through before it, in order. A user, port, key or jump hosts left empty are taken from ~/.ssh/config. Without a key or password, the SSH agent and the default keys in ~/.ssh are tried."
+    sv: "Tunneln slutar vid SSH-värden, som kan vara ett alias från ~/.ssh/config. Hoppvärdar är servrarna att gå igenom innan dess, i ordning. Användare, port, nyckel eller hoppvärdar som lämnas tomma hämtas från ~/.ssh/config. Utan nyckel eller lösenord provas SSH-agenten och standardnycklarna i ~/.ssh."
+  encryption:
+    en: "Encryption"
+    sv: "Kryptering"
+  encryption_off:
+    en: "Off"
+    sv: "Av"
+  encryption_on:
+    en: "On"
+    sv: "På"
+  encryption_required:
+    en: "Required"
+    sv: "Krävs"
+  trust_server_certificate:
+    en: "Trust server certificate (insecure)"
+    sv: "Lita på servercertifikatet (osäkert)"
+  redis_username_placeholder:
+    en: "(optional, Redis 6+ ACL)"
+    sv: "(valfritt, ACL i Redis 6+)"
+  database_index:
+    en: "Database (index)"
+    sv: "Databas (index)"
+  client_name:
+    en: "Client Name"
+    sv: "Klientnamn"
+  errors:
+    idle_timeout_not_number:
+      en: "Disconnect when idle must be a whole number of minutes."
+      sv: "Koppla från vid inaktivitet måste vara ett helt antal minuter."
+    required_fields:
+      en: "Please fill in all required fields"
+      sv: "Fyll i alla obligatoriska fält"
+    config_failed:
+      en: "Failed to build connection configuration"
+      sv: "Det gick inte att skapa anslutningens konfiguration"
+    file_path_required:
+      en: "Please enter a file path"
+      sv: "Ange en sökväg till filen"
+    host_required:
+      en: "Host is required"
+      sv: "Värd måste anges"
+    port_required:
+      en: "Port is required"
+      sv: "Port måste anges"
+    port_invalid:
+      en: "Port must be a valid number (1-65535)"
+      sv: "Porten måste vara ett giltigt nummer (1-65535)"
+    database_name_required:
+      en: "Database name is required"
+      sv: "Databasnamn måste anges"
+    username_required:
+      en: "Username is required"
+      sv: "Användarnamn måste anges"
+    redis_database_index:
+      en: "Database must be a numeric index (e.g. 0)"
+      sv: "Databasen måste vara ett numeriskt index (t.ex. 0)"
+    ssh_host_required:
+      en: "SSH host is required"
+      sv: "SSH-värd måste anges"
+    ssh_host_required_with_jump_hosts:
+      en: "SSH host is required. Jump hosts are only the servers on the way to it, so a single server goes in SSH host"
+      sv: "SSH-värd måste anges. Hoppvärdar är bara servrarna på vägen dit, så en enda server anges som SSH-värd"

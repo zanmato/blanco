@@ -9,3 +9,7 @@ pub struct Confirm {
 }
 
 actions!(bui, [Cancel, SelectUp, SelectDown, SelectLeft, SelectRight]);
+
+// The table selects every row with this. gpui-component's actions have no
+// select all, the table's other keys use them.
+actions!(bui, [SelectAll]);

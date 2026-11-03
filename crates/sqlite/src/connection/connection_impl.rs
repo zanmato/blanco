@@ -84,7 +84,7 @@ impl Connection for SqliteConnection {
         let pool = self
             .pool
             .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("Not connected to database"))?;
+            .ok_or_else(|| anyhow::anyhow!(t!("sqlite.not_connected")))?;
         let description = pool.describe(query).await?;
         let (columns, column_types) = description
             .columns()
@@ -108,7 +108,7 @@ impl Connection for SqliteConnection {
         let pool = self
             .pool
             .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("Not connected to database"))?;
+            .ok_or_else(|| anyhow::anyhow!(t!("sqlite.not_connected")))?;
 
         let mut q = sqlx::query(query);
         for param in parameters {
@@ -127,7 +127,7 @@ impl Connection for SqliteConnection {
         _database_name: Option<&str>,
     ) -> Result<blanco_core::BatchOutcome, blanco_core::BatchFailure> {
         let pool = self.pool.as_ref().ok_or_else(|| {
-            blanco_core::BatchFailure::atomic(anyhow::anyhow!("Not connected to database"))
+            blanco_core::BatchFailure::atomic(anyhow::anyhow!(t!("sqlite.not_connected")))
         })?;
         blanco_core::run_sqlx_transaction!(pool, operations)
     }
@@ -388,7 +388,10 @@ impl Connection for SqliteConnection {
             .collect();
 
         if statements.is_empty() {
-            return Err(anyhow::anyhow!("Table '{}' not found", table_name));
+            return Err(anyhow::anyhow!(t!(
+                "sqlite.table_not_found",
+                table = table_name
+            )));
         }
 
         Ok(statements.join(";\n"))
@@ -411,7 +414,7 @@ impl Connection for SqliteConnection {
         let pool = self
             .pool
             .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("SQLite connection not established"))?;
+            .ok_or_else(|| anyhow::anyhow!(t!("sqlite.not_established")))?;
 
         // Use sqlx::query().fetch() for true streaming
         let rows_stream = sqlx::query(query).fetch(pool);
@@ -427,7 +430,8 @@ impl Connection for SqliteConnection {
         // Process the first row to get column information
         let mut first_row_data = None;
         while let Some(row_result) = stream.next().await {
-            let row = row_result.map_err(|e| anyhow::anyhow!("Failed to fetch row: {}", e))?;
+            let row = row_result
+                .map_err(|e| anyhow::anyhow!(t!("sqlite.fetch_row_failed", error = e)))?;
 
             if first_row_data.is_none() {
                 // Extract column names and types from the first row

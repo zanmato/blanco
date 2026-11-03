@@ -186,6 +186,9 @@ impl Settings {
                 "general.follow_active_tab" => {
                     settings.general.follow_active_tab = value.parse().unwrap_or(true);
                 }
+                "general.language" => {
+                    settings.general.language = (!value.is_empty()).then(|| value.clone());
+                }
                 "editor.font_family" => {
                     // Legacy: migrate to appearance.mono_font_family
                     if settings.appearance.mono_font_family.is_empty() {
@@ -493,6 +496,10 @@ pub struct GeneralSettings {
     pub check_for_updates: bool,
     /// Select the active tab's table in the sidebar, opening its parents.
     pub follow_active_tab: bool,
+    /// The interface language's locale, or `None` to follow the system.
+    /// Read once at startup.
+    #[serde(default)]
+    pub language: Option<String>,
 }
 
 impl Default for GeneralSettings {
@@ -500,6 +507,7 @@ impl Default for GeneralSettings {
         Self {
             check_for_updates: true,
             follow_active_tab: true,
+            language: None,
         }
     }
 }
@@ -641,12 +649,12 @@ impl DateDisplayFormat {
         Self::ALL.into_iter().find(|format| format.key() == key)
     }
 
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> SharedString {
         match self {
-            Self::Iso8601 => "ISO 8601 (2024-01-31T14:05:09)",
-            Self::Sql => "SQL (2024-01-31 14:05:09)",
-            Self::DayMonthYear => "Day first (31/01/2024 14:05:09)",
-            Self::MonthDayYear => "Month first (01/31/2024 2:05:09 PM)",
+            Self::Iso8601 => "ISO 8601 (2024-01-31T14:05:09)".into(),
+            Self::Sql => "SQL (2024-01-31 14:05:09)".into(),
+            Self::DayMonthYear => t!("settings.date_format.day_month_year").into(),
+            Self::MonthDayYear => t!("settings.date_format.month_day_year").into(),
         }
     }
 }
@@ -672,10 +680,10 @@ impl TimeZoneDisplay {
         Self::ALL.into_iter().find(|zone| zone.key() == key)
     }
 
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> SharedString {
         match self {
-            Self::Local => "Local time",
-            Self::Utc => "UTC",
+            Self::Local => t!("settings.time_zone.local").into(),
+            Self::Utc => "UTC".into(),
         }
     }
 }
@@ -801,13 +809,13 @@ impl CsvDelimiter {
         }
     }
 
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> SharedString {
         match self {
-            CsvDelimiter::Comma => "Comma",
-            CsvDelimiter::Semicolon => "Semicolon",
-            CsvDelimiter::Tab => "Tab",
-            CsvDelimiter::Pipe => "Pipe",
-            CsvDelimiter::Custom => "Custom",
+            CsvDelimiter::Comma => t!("settings.csv_delimiter.comma").into(),
+            CsvDelimiter::Semicolon => t!("settings.csv_delimiter.semicolon").into(),
+            CsvDelimiter::Tab => t!("settings.csv_delimiter.tab").into(),
+            CsvDelimiter::Pipe => t!("settings.csv_delimiter.pipe").into(),
+            CsvDelimiter::Custom => t!("settings.csv_delimiter.custom").into(),
         }
     }
 

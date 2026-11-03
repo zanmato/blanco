@@ -1,0 +1,70 @@
+_version: 2
+# Messages the database crate writes for the user: connecting, SSH tunnels
+# and secrets. See the glossary at the top of crates/blanco/locales/app.yml.
+database:
+  configuration_not_found:
+    en: "Connection configuration not found for ID: %{id}"
+    sv: "Ingen anslutningskonfiguration hittades för id: %{id}"
+  connect_timed_out:
+    en: "Database connection timed out after %{seconds}s"
+    sv: "Anslutningen till databasen överskred tidsgränsen efter %{seconds} s"
+  ssh_tunnel_closed:
+    en: "The SSH tunnel for this connection is closed"
+    sv: "SSH-tunneln för den här anslutningen är stängd"
+  ssh_tunnel_timed_out:
+    en: "SSH tunnel connection timed out after %{seconds}s"
+    sv: "Anslutningen till SSH-tunneln överskred tidsgränsen efter %{seconds} s"
+  invalid_jump_host:
+    en: "Invalid jump host \"%{hop}\""
+    sv: "Ogiltig hoppvärd \"%{hop}\""
+  invalid_jump_host_port:
+    en: "Invalid port in jump host \"%{hop}\""
+    sv: "Ogiltig port i hoppvärden \"%{hop}\""
+  read_only_refused:
+    en: "This connection is read-only. Only statements recognised as reads are allowed; edit the connection to allow writes."
+    sv: "Den här anslutningen är skrivskyddad. Bara satser som känns igen som läsningar tillåts. Redigera anslutningen för att tillåta skrivningar."
+  ssh_host_required:
+    en: "SSH host is required"
+    sv: "SSH-värd krävs"
+  cancelled_at_password:
+    en: "Connecting was cancelled at the password prompt"
+    sv: "Anslutningen avbröts när lösenordet efterfrågades"
+  cancelled_at_ssh_password:
+    en: "Connecting was cancelled at the SSH password prompt"
+    sv: "Anslutningen avbröts när SSH-lösenordet efterfrågades"
+  cancelled_at_key_passphrase:
+    en: "Connecting was cancelled at the SSH key passphrase prompt"
+    sv: "Anslutningen avbröts när lösenfrasen för SSH-nyckeln efterfrågades"
+  ssh_key_not_loaded:
+    en: "Failed to load private key %{path}: %{error}"
+    sv: "Det gick inte att läsa in den privata nyckeln %{path}: %{error}"
+  ssh_nothing_to_try:
+    en: "No way to authenticate %{hop}: no key file, SSH agent, default key or password"
+    sv: "Det går inte att autentisera %{hop}: ingen nyckelfil, SSH-agent, standardnyckel eller lösenord"
+  ssh_refused:
+    en: "SSH authentication failed for %{hop}; tried %{tried}"
+    sv: "SSH-autentiseringen misslyckades för %{hop}. Provade %{tried}"
+  ssh_closed:
+    en: "SSH authentication failed for %{hop}: the host closed the connection (%{error}), most likely after too many attempts. Choose a private key for the connection or name one with IdentityFile in ~/.ssh/config; tried %{tried}"
+    sv: "SSH-autentiseringen misslyckades för %{hop}: värden stängde anslutningen (%{error}), troligen efter för många försök. Välj en privat nyckel för anslutningen eller ange en med IdentityFile i ~/.ssh/config. Provade %{tried}"
+  ssh_key_skipped:
+    en: "%{path} (not loaded: %{error})"
+    sv: "%{path} (inte inläst: %{error})"
+  ssh_tried_password:
+    en: "password"
+    sv: "lösenord"
+  ssh_agent_keys:
+    en: "%{count} key(s) from the SSH agent"
+    sv: "%{count} nyckel/nycklar från SSH-agenten"
+  jump_host_unreachable:
+    en: "Jump host could not reach %{hop}: %{error}"
+    sv: "Hoppvärden kunde inte nå %{hop}: %{error}"
+  ssh_unknown_host_key:
+    en: "The host key of %{host}:%{port} is not in ~/.ssh/known_hosts; connect once with ssh to add it"
+    sv: "Värdnyckeln för %{host}:%{port} finns inte i ~/.ssh/known_hosts. Anslut en gång med ssh för att lägga till den."
+  ssh_connect_failed:
+    en: "Failed to connect to SSH server %{hop}: %{error}"
+    sv: "Det gick inte att ansluta till SSH-servern %{hop}: %{error}"
+  ssh_bind_failed:
+    en: "Failed to bind local port: %{error}"
+    sv: "Det gick inte att binda den lokala porten: %{error}"

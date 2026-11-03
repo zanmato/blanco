@@ -7,7 +7,7 @@ use std::time::Duration;
 use gpui::{
     App, AppContext as _, Bounds, Context, Entity, FocusHandle, Focusable, Hsla,
     InteractiveElement, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    ParentElement, PathBuilder, Pixels, Point, Render, ScrollDelta, ScrollWheelEvent, SharedString,
+    ParentElement, PathBuilder, Pixels, Point, Render, ScrollDelta, ScrollEvent, SharedString,
     Size, StatefulInteractiveElement, Styled, Subscription, Task, Window, canvas, div, point,
     prelude::FluentBuilder, px,
 };
@@ -400,8 +400,17 @@ pub struct GraphView {
 }
 
 impl GraphView {
+    /// Sets the search box's placeholder again, after the interface language
+    /// changed. It is set once, when the view is made.
+    pub fn retranslate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.search.input.update(cx, |input, cx| {
+            input.set_placeholder(t!("ui.graph.search_placeholder"), window, cx)
+        });
+    }
+
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let input = cx.new(|cx| InputState::new(window, cx).placeholder("Find table or column"));
+        let input =
+            cx.new(|cx| InputState::new(window, cx).placeholder(t!("ui.graph.search_placeholder")));
         let subscription = cx.subscribe(&input, |this, _, event: &InputEvent, cx| match event {
             InputEvent::Change => this.search_after_pause(cx),
             InputEvent::PressEnter { shift, .. } => this.step_search(!shift, cx),
@@ -603,9 +612,14 @@ impl GraphView {
         }
         let count = self.search.matches.len();
         Some(match self.search.current {
-            _ if count == 0 => "No matches".into(),
-            Some(current) => format!("{} of {count}", current + 1).into(),
-            None => format!("{count} found").into(),
+            _ if count == 0 => t!("ui.graph.no_matches").into(),
+            Some(current) => t!(
+                "ui.graph.match_position",
+                current = current + 1,
+                count = count
+            )
+            .into(),
+            None => t!("ui.graph.matches_found", count = count).into(),
         })
     }
 
@@ -1101,7 +1115,7 @@ impl GraphView {
             let graph_pos = self.screen_to_graph(element_pos);
             // Cmd (macOS) / Ctrl adds or removes from the current selection;
             // a plain click selects a single table (or clears the selection).
-            let additive = event.modifiers.secondary();
+            let additive = event.modifiers.secondary(cx);
 
             if let Some(node_ix) = self.hit_test_node(graph_pos) {
                 if additive {
@@ -1133,12 +1147,7 @@ impl GraphView {
         cx.notify();
     }
 
-    fn on_scroll(
-        &mut self,
-        event: &ScrollWheelEvent,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn on_scroll(&mut self, event: &ScrollEvent, _window: &mut Window, cx: &mut Context<Self>) {
         let element_pos =
             event.position - self.element_bounds.map_or(Point::default(), |b| b.origin);
         let old_zoom = self.viewport.zoom_level;
@@ -1291,7 +1300,7 @@ impl Render for GraphView {
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_up(MouseButton::Right, cx.listener(Self::on_mouse_up))
             .on_mouse_up(MouseButton::Middle, cx.listener(Self::on_mouse_up))
-            .on_scroll_wheel(cx.listener(Self::on_scroll))
+            .on_scroll(cx.listener(Self::on_scroll))
             .child(edges_canvas)
             .children(
                 nodes_data
@@ -1302,11 +1311,11 @@ impl Render for GraphView {
                 let hint: Option<SharedString> = if show_all_edges {
                     None
                 } else if selected_count == 0 {
-                    Some("Click a table to see its relationships".into())
+                    Some(t!("ui.graph.hint_select_table").into())
                 } else if selected_count == 1 {
-                    Some("1 selected · cmd/ctrl-click to add more".into())
+                    Some(t!("ui.graph.hint_selected_one").into())
                 } else {
-                    Some(format!("{selected_count} selected · cmd/ctrl-click to add more").into())
+                    Some(t!("ui.graph.hint_selected_other", count = selected_count).into())
                 };
 
                 // A press here is not one on the canvas, which would start a
@@ -1391,9 +1400,9 @@ impl Render for GraphView {
                                     .text_color(foreground)
                                     .cursor_pointer()
                                     .child(if show_referenced {
-                                        "Other schemas: shown"
+                                        t!("ui.graph.other_schemas_shown")
                                     } else {
-                                        "Other schemas: hidden"
+                                        t!("ui.graph.other_schemas_hidden")
                                     })
                                     .on_mouse_down(
                                         MouseButton::Left,
@@ -1415,7 +1424,7 @@ impl Render for GraphView {
                                 .text_size(px(12.0))
                                 .text_color(foreground)
                                 .cursor_pointer()
-                                .child("Export SVG…")
+                                .child(t!("ui.graph.export_svg"))
                                 .on_mouse_down(
                                     MouseButton::Left,
                                     cx.listener(|_, _, _, cx| cx.emit(GraphViewEvent::ExportSvg)),
@@ -1434,9 +1443,9 @@ impl Render for GraphView {
                                 .text_color(foreground)
                                 .cursor_pointer()
                                 .child(if show_all_edges {
-                                    "Showing all relationships"
+                                    t!("ui.graph.all_relationships")
                                 } else {
-                                    "Relationships: selected only"
+                                    t!("ui.graph.selected_relationships")
                                 })
                                 .on_mouse_down(
                                     MouseButton::Left,
@@ -1470,7 +1479,7 @@ impl Render for GraphView {
                         .items_center()
                         .justify_center()
                         .text_color(muted)
-                        .child("No tables found"),
+                        .child(t!("ui.graph.no_tables")),
                 )
             })
             .when_some(loading, |el, (step, percent)| {

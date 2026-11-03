@@ -311,19 +311,22 @@ impl std::fmt::Display for DdlError {
 
 impl std::error::Error for DdlError {}
 
-fn require_name(name: &str, what: &str) -> Result<(), DdlError> {
+fn require_name(
+    name: &str,
+    message: impl FnOnce() -> std::borrow::Cow<'static, str>,
+) -> Result<(), DdlError> {
     if name.trim().is_empty() {
-        Err(DdlError::Invalid(format!("{what} name must not be empty")))
+        Err(DdlError::Invalid(message().into_owned()))
     } else {
         Ok(())
     }
 }
 
 fn validate_spec(spec: &ColumnSpec) -> Result<(), DdlError> {
-    require_name(&spec.name, "column")?;
+    require_name(&spec.name, || t!("blanco_core.ddl.column_name_empty"))?;
     if spec.data_type.trim().is_empty() {
         return Err(DdlError::Invalid(
-            "column type must not be empty".to_string(),
+            t!("blanco_core.ddl.column_type_empty").into_owned(),
         ));
     }
     Ok(())
@@ -384,14 +387,19 @@ fn clickhouse_type(spec: &ColumnSpec) -> String {
 }
 
 fn unsupported_positions(db_type: DatabaseType) -> DdlError {
-    DdlError::Unsupported(format!(
-        "{} adds columns only after the others and cannot move them",
-        db_type.as_str()
-    ))
+    DdlError::Unsupported(
+        t!(
+            "blanco_core.ddl.cannot_move_columns",
+            backend = db_type.as_str()
+        )
+        .into_owned(),
+    )
 }
 
 fn unsupported_comments(db_type: DatabaseType) -> DdlError {
-    DdlError::Unsupported(format!("{} has no comments", db_type.as_str()))
+    DdlError::Unsupported(
+        t!("blanco_core.ddl.no_comments", backend = db_type.as_str()).into_owned(),
+    )
 }
 
 /// `N'text'`, T-SQL's Unicode string literal.
@@ -530,10 +538,9 @@ pub fn column_operation_sql(
 ) -> Result<Vec<String>, DdlError> {
     let dialect = db_type.dialect();
     if !dialect.supports_column_ddl() {
-        return Err(DdlError::Unsupported(format!(
-            "{} has no column DDL",
-            db_type.as_str()
-        )));
+        return Err(DdlError::Unsupported(
+            t!("blanco_core.ddl.no_column_ddl", backend = db_type.as_str()).into_owned(),
+        ));
     }
     let target = dialect.quote_qualified(schema, table);
     let quoted = |name: &str| dialect.quote_identifier(name.trim());
@@ -594,10 +601,10 @@ pub fn column_operation_sql(
         } => {
             validate_spec(spec)?;
             if let ColumnPosition::After(name) = position {
-                require_name(name, "preceding column")?;
+                require_name(name, || t!("blanco_core.ddl.preceding_column_name_empty"))?;
                 if name.trim() == spec.name.trim() {
                     return Err(DdlError::Invalid(
-                        "a column cannot follow itself".to_string(),
+                        t!("blanco_core.ddl.column_follows_itself").into_owned(),
                     ));
                 }
             }
@@ -606,7 +613,7 @@ pub fn column_operation_sql(
                 DatabaseType::MySQL => {
                     if spec.generated {
                         return Err(DdlError::Unsupported(
-                            "MySQL moves a generated column only with its expression; move it in a query".to_string(),
+                            t!("blanco_core.ddl.mysql_move_generated").into_owned(),
                         ));
                     }
                     Ok(vec![format!(
@@ -625,12 +632,12 @@ pub fn column_operation_sql(
             }
         }
         ColumnOperation::Rename { from, to } => {
-            require_name(from, "column")?;
-            require_name(to, "new column")?;
+            require_name(from, || t!("blanco_core.ddl.column_name_empty"))?;
+            require_name(to, || t!("blanco_core.ddl.new_column_name_empty"))?;
             Ok(vec![rename_column_sql(db_type, schema, table, from, to)])
         }
         ColumnOperation::Drop { name } => {
-            require_name(name, "column")?;
+            require_name(name, || t!("blanco_core.ddl.column_name_empty"))?;
             Ok(vec![format!(
                 "ALTER TABLE {target} DROP COLUMN {}",
                 quoted(name)
@@ -646,7 +653,9 @@ pub fn column_operation_sql(
             let comment_changed = from.trimmed_comment() != to.trimmed_comment();
             let definition_changed = type_changed || null_changed || default_changed;
             if !(renamed || definition_changed || comment_changed) {
-                return Err(DdlError::Invalid("the column is unchanged".to_string()));
+                return Err(DdlError::Invalid(
+                    t!("blanco_core.ddl.column_unchanged").into_owned(),
+                ));
             }
             if comment_changed && !dialect.supports_comments() {
                 return Err(unsupported_comments(db_type));
@@ -729,7 +738,7 @@ pub fn column_operation_sql(
                 DatabaseType::MySQL => {
                     if from.generated && (definition_changed || comment_changed) {
                         return Err(DdlError::Unsupported(
-                            "MySQL changes a generated column only with its expression; change it in a query".to_string(),
+                            t!("blanco_core.ddl.mysql_alter_generated").into_owned(),
                         ));
                     }
                     if definition_changed || comment_changed {
@@ -747,7 +756,7 @@ pub fn column_operation_sql(
                 DatabaseType::MsSql => {
                     if default_changed {
                         return Err(DdlError::Unsupported(
-                            "SQL Server stores defaults as named constraints; change the default in a query instead".to_string(),
+                            t!("blanco_core.ddl.mssql_default_constraint").into_owned(),
                         ));
                     }
                     if renamed {
@@ -784,13 +793,15 @@ pub fn column_operation_sql(
                     // only safe in-place change is the rename.
                     if definition_changed {
                         return Err(DdlError::Unsupported(
-                            "SQLite cannot change a column's type, nullability or default in place; recreate the table in a query".to_string(),
+                            t!("blanco_core.ddl.sqlite_alter_column").into_owned(),
                         ));
                     }
                     statements.push(rename());
                 }
                 DatabaseType::Redis => {
-                    return Err(DdlError::Unsupported("Redis has no columns".to_string()));
+                    return Err(DdlError::Unsupported(
+                        t!("blanco_core.ddl.redis_no_columns").into_owned(),
+                    ));
                 }
             }
             Ok(statements)
@@ -840,18 +851,17 @@ pub fn index_operation_sql(
 ) -> Result<Vec<String>, DdlError> {
     let dialect = db_type.dialect();
     if !dialect.supports_column_ddl() {
-        return Err(DdlError::Unsupported(format!(
-            "{} has no indexes",
-            db_type.as_str()
-        )));
+        return Err(DdlError::Unsupported(
+            t!("blanco_core.ddl.no_indexes", backend = db_type.as_str()).into_owned(),
+        ));
     }
     let target = dialect.quote_qualified(schema, table);
     match operation {
         IndexOperation::Create(spec) => {
-            require_name(&spec.name, "index")?;
+            require_name(&spec.name, || t!("blanco_core.ddl.index_name_empty"))?;
             if spec.columns.is_empty() {
                 return Err(DdlError::Invalid(
-                    "an index needs at least one column".to_string(),
+                    t!("blanco_core.ddl.index_needs_column").into_owned(),
                 ));
             }
             let method = spec
@@ -866,28 +876,37 @@ pub fn index_operation_sql(
                 .filter(|condition| !condition.is_empty());
             if spec.nulls_not_distinct {
                 if !dialect.has_nulls_not_distinct() {
-                    return Err(DdlError::Unsupported(format!(
-                        "{} has no NULLS NOT DISTINCT",
-                        db_type.as_str()
-                    )));
+                    return Err(DdlError::Unsupported(
+                        t!(
+                            "blanco_core.ddl.no_nulls_not_distinct",
+                            backend = db_type.as_str()
+                        )
+                        .into_owned(),
+                    ));
                 }
                 if !spec.unique {
                     return Err(DdlError::Invalid(
-                        "NULLS NOT DISTINCT applies to unique indexes only".to_string(),
+                        t!("blanco_core.ddl.nulls_not_distinct_unique_only").into_owned(),
                     ));
                 }
             }
             if condition.is_some() && !dialect.supports_partial_indexes() {
-                return Err(DdlError::Unsupported(format!(
-                    "{} has no partial indexes",
-                    db_type.as_str()
-                )));
+                return Err(DdlError::Unsupported(
+                    t!(
+                        "blanco_core.ddl.no_partial_indexes",
+                        backend = db_type.as_str()
+                    )
+                    .into_owned(),
+                ));
             }
             if method.is_some() && dialect.index_methods().is_empty() {
-                return Err(DdlError::Unsupported(format!(
-                    "{} takes no index method",
-                    db_type.as_str()
-                )));
+                return Err(DdlError::Unsupported(
+                    t!(
+                        "blanco_core.ddl.no_index_method",
+                        backend = db_type.as_str()
+                    )
+                    .into_owned(),
+                ));
             }
             let column_list = spec
                 .columns
@@ -900,7 +919,7 @@ pub fn index_operation_sql(
                 DatabaseType::ClickHouse => {
                     if spec.unique {
                         return Err(DdlError::Unsupported(
-                            "ClickHouse has no unique indexes".to_string(),
+                            t!("blanco_core.ddl.clickhouse_no_unique_indexes").into_owned(),
                         ));
                     }
                     // Only data-skipping indexes can be added after the fact;
@@ -930,7 +949,7 @@ pub fn index_operation_sql(
             }])
         }
         IndexOperation::Drop { name } => {
-            require_name(name, "index")?;
+            require_name(name, || t!("blanco_core.ddl.index_name_empty"))?;
             let index_name = dialect.quote_identifier(name.trim());
             Ok(vec![match db_type {
                 // Indexes are schema-scoped objects here, not table-scoped.
@@ -948,7 +967,9 @@ pub fn index_operation_sql(
                 }
                 DatabaseType::ClickHouse => format!("ALTER TABLE {target} DROP INDEX {index_name}"),
                 DatabaseType::Redis => {
-                    return Err(DdlError::Unsupported("Redis has no indexes".to_string()));
+                    return Err(DdlError::Unsupported(
+                        t!("blanco_core.ddl.redis_no_indexes").into_owned(),
+                    ));
                 }
             }])
         }
@@ -973,7 +994,9 @@ fn foreign_key_clause(
         on_delete,
     } = operation
     else {
-        return Err(DdlError::Invalid("not a new foreign key".to_string()));
+        return Err(DdlError::Invalid(
+            t!("blanco_core.ddl.not_a_new_foreign_key").into_owned(),
+        ));
     };
     let dialect = db_type.dialect();
     let column_list = |columns: &[String]| {
@@ -983,15 +1006,17 @@ fn foreign_key_clause(
             .collect::<Vec<_>>()
             .join(", ")
     };
-    require_name(referenced_table, "referenced table")?;
+    require_name(referenced_table, || {
+        t!("blanco_core.ddl.referenced_table_name_empty")
+    })?;
     if columns.is_empty() {
         return Err(DdlError::Invalid(
-            "a foreign key needs at least one column".to_string(),
+            t!("blanco_core.ddl.foreign_key_needs_column").into_owned(),
         ));
     }
     if columns.len() != referenced_columns.len() {
         return Err(DdlError::Invalid(
-            "each column needs one referenced column".to_string(),
+            t!("blanco_core.ddl.foreign_key_column_count").into_owned(),
         ));
     }
     if columns
@@ -1000,14 +1025,14 @@ fn foreign_key_clause(
         .any(|column| column.trim().is_empty())
     {
         return Err(DdlError::Invalid(
-            "column name must not be empty".to_string(),
+            t!("blanco_core.ddl.column_name_empty").into_owned(),
         ));
     }
     if db_type == DatabaseType::MsSql
         && (*on_update == ReferentialAction::Restrict || *on_delete == ReferentialAction::Restrict)
     {
         return Err(DdlError::Unsupported(
-            "SQL Server has no RESTRICT; NO ACTION refuses the change the same way".to_string(),
+            t!("blanco_core.ddl.mssql_no_restrict").into_owned(),
         ));
     }
     let mut sql = String::new();
@@ -1057,35 +1082,40 @@ pub fn create_table_sql(
 ) -> Result<Vec<String>, DdlError> {
     let dialect = db_type.dialect();
     if !dialect.supports_column_ddl() {
-        return Err(DdlError::Unsupported(format!(
-            "{} has no tables to create",
-            db_type.as_str()
-        )));
+        return Err(DdlError::Unsupported(
+            t!("blanco_core.ddl.no_tables", backend = db_type.as_str()).into_owned(),
+        ));
     }
-    require_name(table, "table")?;
+    require_name(table, || t!("blanco_core.ddl.table_name_empty"))?;
     if new_table.columns.is_empty() {
         return Err(DdlError::Invalid(
-            "a table needs at least one column".to_string(),
+            t!("blanco_core.ddl.table_needs_column").into_owned(),
         ));
     }
     let mut names = std::collections::HashSet::new();
     for spec in &new_table.columns {
         validate_spec(spec)?;
         if !names.insert(spec.name.trim().to_lowercase()) {
-            return Err(DdlError::Invalid(format!(
-                "column \"{}\" is listed twice",
-                spec.name.trim()
-            )));
+            return Err(DdlError::Invalid(
+                t!(
+                    "blanco_core.ddl.column_listed_twice",
+                    column = spec.name.trim()
+                )
+                .into_owned(),
+            ));
         }
         if spec.trimmed_comment().is_some() && !dialect.supports_comments() {
             return Err(unsupported_comments(db_type));
         }
     }
     if !new_table.foreign_keys.is_empty() && !dialect.supports_foreign_keys() {
-        return Err(DdlError::Unsupported(format!(
-            "{} has no foreign keys",
-            db_type.as_str()
-        )));
+        return Err(DdlError::Unsupported(
+            t!(
+                "blanco_core.ddl.no_foreign_keys",
+                backend = db_type.as_str()
+            )
+            .into_owned(),
+        ));
     }
 
     let target = dialect.quote_qualified(schema, table);
@@ -1150,13 +1180,19 @@ pub fn foreign_key_operation_sql(
 ) -> Result<Vec<String>, DdlError> {
     let dialect = db_type.dialect();
     if !dialect.supports_foreign_key_ddl() {
-        return Err(DdlError::Unsupported(match db_type {
-            DatabaseType::SQLite | DatabaseType::DuckDb => format!(
-                "{} cannot add or drop a foreign key in place; recreate the table in a query",
-                db_type.as_str()
-            ),
-            _ => format!("{} has no foreign keys", db_type.as_str()),
-        }));
+        return Err(DdlError::Unsupported(
+            match db_type {
+                DatabaseType::SQLite | DatabaseType::DuckDb => t!(
+                    "blanco_core.ddl.foreign_keys_need_rebuild",
+                    backend = db_type.as_str()
+                ),
+                _ => t!(
+                    "blanco_core.ddl.no_foreign_keys",
+                    backend = db_type.as_str()
+                ),
+            }
+            .into_owned(),
+        ));
     }
     let target = dialect.quote_qualified(schema, table);
     match operation {
@@ -1165,7 +1201,7 @@ pub fn foreign_key_operation_sql(
             foreign_key_clause(db_type, schema, operation)?
         )]),
         ForeignKeyOperation::Drop { name } => {
-            require_name(name, "foreign key")?;
+            require_name(name, || t!("blanco_core.ddl.foreign_key_name_empty"))?;
             let name = dialect.quote_identifier(name.trim());
             Ok(vec![match db_type {
                 DatabaseType::MySQL => format!("ALTER TABLE {target} DROP FOREIGN KEY {name}"),

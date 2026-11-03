@@ -262,7 +262,7 @@ impl StatusBarState {
 
         StatusLine {
             kind: StatusKind::Idle,
-            text: "Ready".into(),
+            text: t!("shell.status.ready").into(),
         }
     }
 }

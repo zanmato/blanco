@@ -1,0 +1,433 @@
+_version: 2
+sidebar:
+  filter:
+    en: "Filter"
+    sv: "Filtrera"
+  cancel:
+    en: "Cancel"
+    sv: "Avbryt"
+  copy_name:
+    en: "%{name} copy"
+    sv: "%{name} kopia"
+  copy_name_numbered:
+    en: "%{name} copy %{number}"
+    sv: "%{name} kopia %{number}"
+  connections_menu:
+    tooltip:
+      en: "Connections"
+      sv: "Anslutningar"
+    new_connection:
+      en: "New Connection…"
+      sv: "Ny anslutning…"
+    import:
+      en: "Import Connections…"
+      sv: "Importera anslutningar…"
+    export:
+      en: "Export Connections…"
+      sv: "Exportera anslutningar…"
+  environment_filter:
+    showing:
+      en: "Showing %{environment} connections"
+      sv: "Visar anslutningar märkta %{environment}"
+    tooltip:
+      en: "Filter by environment"
+      sv: "Filtrera efter miljö"
+    all:
+      en: "All environments"
+      sv: "Alla miljöer"
+  tree:
+    unsaved_connection:
+      en: "%{name} (unsaved)"
+      sv: "%{name} (osparad)"
+    connection_fallback:
+      en: "connection %{id}"
+      sv: "anslutning %{id}"
+    size_bytes:
+      en: "%{size} bytes"
+      sv: "%{size} byte"
+    unknown_size:
+      en: "unknown size"
+      sv: "okänd storlek"
+    partitions_one:
+      en: "%{count} partition"
+      sv: "%{count} partition"
+    partitions_other:
+      en: "%{count} partitions"
+      sv: "%{count} partitioner"
+    child_tables_one:
+      en: "%{count} child table"
+      sv: "%{count} undertabell"
+    child_tables_other:
+      en: "%{count} child tables"
+      sv: "%{count} undertabeller"
+  category:
+    tables:
+      en: "Tables"
+      sv: "Tabeller"
+    keys:
+      en: "Keys"
+      sv: "Nycklar"
+    views:
+      en: "Views"
+      sv: "Vyer"
+    materialized_views:
+      en: "Materialized Views"
+      sv: "Materialiserade vyer"
+    functions:
+      en: "Functions"
+      sv: "Funktioner"
+    procedures:
+      en: "Procedures"
+      sv: "Procedurer"
+    triggers:
+      en: "Triggers"
+      sv: "Triggrar"
+    enums:
+      en: "Enums"
+      sv: "Uppräkningstyper"
+    composite_types:
+      en: "Composite Types"
+      sv: "Sammansatta typer"
+    domains:
+      en: "Domains"
+      sv: "Domäner"
+    sequences:
+      en: "Sequences"
+      sv: "Sekvenser"
+  activity:
+    listing_schema:
+      en: "%{connection}: listing schema"
+      sv: "%{connection}: hämtar schema"
+  errors:
+    list_databases:
+      en: "Failed to list databases"
+      sv: "Det gick inte att hämta databaserna"
+    list_schemas:
+      en: "Failed to list schemas"
+      sv: "Det gick inte att hämta scheman"
+  menu:
+    new_script:
+      en: "New Script"
+      sv: "Nytt skript"
+    new_table:
+      en: "New Table…"
+      sv: "Ny tabell…"
+    new_query:
+      en: "New Query"
+      sv: "Ny fråga"
+    open_sql_file:
+      en: "Open SQL File…"
+      sv: "Öppna SQL-fil…"
+    run_sql_file:
+      en: "Run SQL File…"
+      sv: "Kör SQL-fil…"
+    back_up:
+      en: "Back Up…"
+      sv: "Säkerhetskopiera…"
+    restore:
+      en: "Restore…"
+      sv: "Återställ…"
+    refresh:
+      en: "Refresh"
+      sv: "Uppdatera"
+    save_connection:
+      en: "Save Connection…"
+      sv: "Spara anslutning…"
+    close:
+      en: "Close"
+      sv: "Stäng"
+    filter_keys:
+      en: "Filter Keys…"
+      sv: "Filtrera nycklar…"
+    filter_keys_pattern:
+      en: "Filter Keys (%{pattern})…"
+      sv: "Filtrera nycklar (%{pattern})…"
+    show_all_keys:
+      en: "Show All Keys"
+      sv: "Visa alla nycklar"
+    load_more_keys:
+      en: "Load More Keys"
+      sv: "Läs in fler nycklar"
+    edit:
+      en: "Edit"
+      sv: "Redigera"
+    duplicate:
+      en: "Duplicate"
+      sv: "Duplicera"
+    export:
+      en: "Export…"
+      sv: "Exportera…"
+    disconnect:
+      en: "Disconnect"
+      sv: "Koppla från"
+    process_list:
+      en: "Process List"
+      sv: "Processlista"
+    remove:
+      en: "Remove"
+      sv: "Ta bort"
+    view_schema_graph:
+      en: "View Schema Graph"
+      sv: "Visa schemagraf"
+    inspect_key:
+      en: "Inspect Key"
+      sv: "Granska nyckel"
+    export_data:
+      en: "Export Data"
+      sv: "Exportera data"
+    import_data:
+      en: "Import Data"
+      sv: "Importera data"
+    open_structure:
+      en: "Open Structure"
+      sv: "Öppna struktur"
+    rename:
+      en: "Rename…"
+      sv: "Byt namn…"
+    truncate:
+      en: "Truncate…"
+      sv: "Töm…"
+    drop:
+      en: "Drop…"
+      sv: "Ta bort…"
+  table_operation:
+    new_name:
+      en: "New name"
+      sv: "Nytt namn"
+    drop:
+      en: "Drop"
+      sv: "Ta bort"
+    truncate:
+      en: "Truncate"
+      sv: "Töm"
+    rename:
+      en: "Rename"
+      sv: "Byt namn"
+    drop_table_title:
+      en: "Drop table?"
+      sv: "Ta bort tabellen?"
+    drop_view_title:
+      en: "Drop view?"
+      sv: "Ta bort vyn?"
+    drop_materialized_view_title:
+      en: "Drop materialized view?"
+      sv: "Ta bort den materialiserade vyn?"
+    truncate_table_title:
+      en: "Truncate table?"
+      sv: "Töm tabellen?"
+    truncate_view_title:
+      en: "Truncate view?"
+      sv: "Töm vyn?"
+    truncate_materialized_view_title:
+      en: "Truncate materialized view?"
+      sv: "Töm den materialiserade vyn?"
+    rename_table_title:
+      en: "Rename table?"
+      sv: "Byt namn på tabellen?"
+    rename_view_title:
+      en: "Rename view?"
+      sv: "Byt namn på vyn?"
+    rename_materialized_view_title:
+      en: "Rename materialized view?"
+      sv: "Byt namn på den materialiserade vyn?"
+    drop_description:
+      en: "\"%{table}\" and all of its data will be permanently deleted."
+      sv: "\"%{table}\" och alla dess data tas bort permanent."
+    drop_description_environment:
+      en: "\"%{table}\" and all of its data will be permanently deleted on a %{environment} connection."
+      sv: "\"%{table}\" och alla dess data tas bort permanent på en %{environment}-anslutning."
+    truncate_description:
+      en: "All rows in \"%{table}\" will be permanently deleted."
+      sv: "Alla rader i \"%{table}\" tas bort permanent."
+    truncate_description_environment:
+      en: "All rows in \"%{table}\" will be permanently deleted on a %{environment} connection."
+      sv: "Alla rader i \"%{table}\" tas bort permanent på en %{environment}-anslutning."
+    rename_description:
+      en: "Enter the new name for \"%{table}\"."
+      sv: "Ange det nya namnet på \"%{table}\"."
+    rename_description_environment:
+      en: "Enter the new name for \"%{table}\" on a %{environment} connection."
+      sv: "Ange det nya namnet på \"%{table}\" på en %{environment}-anslutning."
+    drop_unsupported:
+      en: "Drop is not supported for this object"
+      sv: "Det här objektet kan inte tas bort"
+    truncate_unsupported:
+      en: "Truncate is not supported for this object"
+      sv: "Det här objektet kan inte tömmas"
+    rename_unsupported:
+      en: "Rename is not supported for this object"
+      sv: "Det här objektet kan inte byta namn"
+    drop_succeeded:
+      en: "Drop %{table} succeeded"
+      sv: "%{table} togs bort"
+    truncate_succeeded:
+      en: "Truncate %{table} succeeded"
+      sv: "%{table} tömdes"
+    rename_succeeded:
+      en: "Rename %{table} succeeded"
+      sv: "%{table} bytte namn"
+    drop_failed:
+      en: "Drop %{table} failed: %{error}"
+      sv: "Det gick inte att ta bort %{table}: %{error}"
+    truncate_failed:
+      en: "Truncate %{table} failed: %{error}"
+      sv: "Det gick inte att tömma %{table}: %{error}"
+    rename_failed:
+      en: "Rename %{table} failed: %{error}"
+      sv: "Det gick inte att byta namn på %{table}: %{error}"
+  transfer:
+    exported_one:
+      en: "Exported 1 connection to %{path}."
+      sv: "1 anslutning exporterades till %{path}."
+    exported_other:
+      en: "Exported %{count} connections to %{path}."
+      sv: "%{count} anslutningar exporterades till %{path}."
+    export_failed:
+      en: "Export failed: %{error}"
+      sv: "Exporten misslyckades: %{error}"
+    import_prompt:
+      en: "Import connections"
+      sv: "Importera anslutningar"
+    import_failed:
+      en: "Import failed: %{error}"
+      sv: "Importen misslyckades: %{error}"
+    file_empty:
+      en: "The file holds no connections."
+      sv: "Filen innehåller inga anslutningar."
+    nothing_to_import:
+      en: "Nothing to import: %{names} already saved."
+      sv: "Inget att importera. %{names} finns redan sparade."
+    renamed_from:
+      en: "%{name} (renamed from %{original})"
+      sv: "%{name} (bytte namn från %{original})"
+    import_title:
+      en: "Import Connections"
+      sv: "Importera anslutningar"
+    add_one:
+      en: "Add 1 connection:"
+      sv: "Lägg till 1 anslutning:"
+    add_other:
+      en: "Add %{count} connections:"
+      sv: "Lägg till %{count} anslutningar:"
+    skipped:
+      en: "Skip, already saved: %{names}"
+      sv: "Hoppas över, redan sparade: %{names}"
+    passwords_note:
+      en: "Passwords are not part of the file. Add them by editing each connection."
+      sv: "Lösenord ingår inte i filen. Lägg till dem genom att redigera varje anslutning."
+    import:
+      en: "Import"
+      sv: "Importera"
+    imported_one:
+      en: "Imported 1 connection"
+      sv: "1 anslutning importerades"
+    imported_other:
+      en: "Imported %{count} connections"
+      sv: "%{count} anslutningar importerades"
+    imported_with_failures:
+      en: "Imported %{count}, failed: %{failures}"
+      sv: "%{count} importerades, misslyckades: %{failures}"
+  remove_connection:
+    title:
+      en: "Confirm Remove Connection"
+      sv: "Ta bort anslutning"
+    question:
+      en: "Are you sure you want to remove the connection \"%{name}\"?"
+      sv: "Vill du ta bort anslutningen \"%{name}\"?"
+    decline:
+      en: "No"
+      sv: "Nej"
+    confirm:
+      en: "Yes"
+      sv: "Ja"
+  key_filter:
+    title:
+      en: "Filter Keys"
+      sv: "Filtrera nycklar"
+    description:
+      en: "Keys matching this pattern are listed. * matches any text, ? one character, [abc] one of the characters."
+      sv: "Nycklar som matchar mönstret listas. * matchar valfri text, ? ett tecken, [abc] ett av tecknen."
+    apply:
+      en: "Filter"
+      sv: "Filtrera"
+  history:
+    search:
+      en: "Search history"
+      sv: "Sök i historiken"
+    rows_one:
+      en: "%{count} row"
+      sv: "%{count} rad"
+    rows_other:
+      en: "%{count} rows"
+      sv: "%{count} rader"
+    copy:
+      en: "Copy"
+      sv: "Kopiera"
+    delete:
+      en: "Delete"
+      sv: "Ta bort"
+    clear_all:
+      en: "Clear all history"
+      sv: "Rensa all historik"
+    empty:
+      en: "No query history yet"
+      sv: "Ingen frågehistorik än"
+  snippets:
+    new_snippet:
+      en: "New Snippet"
+      sv: "Ny kodsnutt"
+    new_group:
+      en: "New Group"
+      sv: "Ny grupp"
+    new_snippet_name:
+      en: "New Snippet"
+      sv: "Ny kodsnutt"
+    new_group_name:
+      en: "New Group"
+      sv: "Ny grupp"
+    rename:
+      en: "Rename"
+      sv: "Byt namn"
+    delete_group:
+      en: "Delete Group"
+      sv: "Ta bort grupp"
+    duplicate:
+      en: "Duplicate"
+      sv: "Duplicera"
+    copy_snippet:
+      en: "Copy Snippet"
+      sv: "Kopiera kodsnutt"
+    delete:
+      en: "Delete"
+      sv: "Ta bort"
+    empty:
+      en: "No snippets yet"
+      sv: "Inga kodsnuttar än"
+    empty_hint:
+      en: "Right-click to add a snippet or group"
+      sv: "Högerklicka för att lägga till en kodsnutt eller grupp"
+  dashboards:
+    new_dashboard:
+      en: "New Dashboard"
+      sv: "Ny instrumentpanel"
+    new_dashboard_name:
+      en: "New Dashboard"
+      sv: "Ny instrumentpanel"
+    create_failed:
+      en: "The dashboard was not created: %{error}"
+      sv: "Instrumentpanelen skapades inte: %{error}"
+    open:
+      en: "Open"
+      sv: "Öppna"
+    rename:
+      en: "Rename"
+      sv: "Byt namn"
+    delete:
+      en: "Delete…"
+      sv: "Ta bort…"
+    empty:
+      en: "No dashboards yet."
+      sv: "Inga instrumentpaneler än."
+    empty_hint:
+      en: "Create one here, or run a query and pick New Dashboard under the dashboard button in its results."
+      sv: "Skapa en här, eller kör en fråga och välj Ny instrumentpanel under instrumentpanelknappen i dess resultat."

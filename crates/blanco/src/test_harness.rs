@@ -1,8 +1,8 @@
 use blanco_core::{ConnectionContext, DatabaseService as _};
+use blanco_ui::table::TableState;
 use database::{ConnectionConfig, DatabaseService, DatabaseType};
 use gpui::{AppContext, Entity, TestAppContext, VisualTestContext};
 use gpui_component::Root;
-use gpui_component::table::TableState;
 
 use crate::app_settings::AppSettings;
 use crate::editor::{EditorPanel, TabCreationParams};
@@ -69,6 +69,7 @@ impl TestHarness {
         let mut harness_window_id: Option<i64> = None;
         let window_handle = cx.update(|cx| {
             gpui_component::init(cx);
+            blanco_ui::table::init(cx);
             gpui_tokio::init(cx);
 
             status_bar = Some(StatusBarState::shared(cx));
@@ -190,6 +191,7 @@ impl FullAppHarness {
 
         let (window_handle, app) = cx.update(|cx| {
             gpui_component::init(cx);
+            blanco_ui::table::init(cx);
             gpui_tokio::init(cx);
 
             let runtime_handle = gpui_tokio::Tokio::handle(cx);

@@ -1,5 +1,6 @@
 use gpui::{
-    App, AppContext, Context, ElementId, Entity, IntoElement, ParentElement, Styled, Window, div,
+    App, AppContext, Context, ElementId, Entity, IntoElement, ParentElement, SharedString, Styled,
+    Window, div,
 };
 use gpui_component::{
     ActiveTheme as _, IconName, Sizable,
@@ -46,7 +47,7 @@ pub(super) fn pick_file_for_input(
         files: true,
         directories: false,
         multiple: false,
-        prompt: Some("Select file".into()),
+        prompt: Some(t!("connection_dialog.select_file").into()),
     });
 
     cx.spawn_in(window, async move |_, window| {
@@ -103,19 +104,19 @@ pub(super) fn render_ssl_advanced_fields(
         .gap_3()
         .child(file_picker_input(
             &format!("{prefix}-ssl-key-picker"),
-            "SSL Key Path",
+            &t!("connection_dialog.ssl_key_path"),
             ssl_key_input,
             cx,
         ))
         .child(file_picker_input(
             &format!("{prefix}-ssl-cert-picker"),
-            "SSL Cert Path",
+            &t!("connection_dialog.ssl_cert_path"),
             ssl_cert_input,
             cx,
         ))
         .child(file_picker_input(
             &format!("{prefix}-ssl-ca-cert-picker"),
-            "SSL CA Cert Path",
+            &t!("connection_dialog.ssl_ca_cert_path"),
             ssl_ca_cert_input,
             cx,
         ))
@@ -126,7 +127,7 @@ pub(super) fn render_ssl_advanced_fields(
 /// and is asked for each time the connection opens.
 pub(super) fn secret_field(
     id: impl Into<ElementId>,
-    label: &'static str,
+    label: impl Into<SharedString>,
     input: &Entity<InputState>,
     kind: SecretKind,
     ask_secrets: &[SecretKind],
@@ -140,11 +141,11 @@ pub(super) fn secret_field(
             h_flex()
                 .gap_2()
                 .justify_between()
-                .child(div().text_sm().child(label))
+                .child(div().text_sm().child(label.into()))
                 .child(
                     Checkbox::new(id)
                         .small()
-                        .label("Ask on connect")
+                        .label(t!("connection_dialog.ask_on_connect").into_owned())
                         .checked(asked)
                         .on_click(cx.listener(move |modal, checked: &bool, window, cx| {
                             modal.set_ask_secret(kind, *checked, window, cx);
@@ -176,14 +177,14 @@ pub(super) fn render_ssh_section(
                     v_flex()
                         .flex_1()
                         .gap_2()
-                        .child(div().text_sm().child("Host"))
+                        .child(div().text_sm().child(t!("connection_dialog.host")))
                         .child(Input::new(ssh_host_input)),
                 )
                 .child(
                     v_flex()
                         .flex_1()
                         .gap_2()
-                        .child(div().text_sm().child("Port"))
+                        .child(div().text_sm().child(t!("connection_dialog.port")))
                         .child(Input::new(ssh_port_input)),
                 ),
         )
@@ -194,12 +195,12 @@ pub(super) fn render_ssh_section(
                     v_flex()
                         .flex_1()
                         .gap_2()
-                        .child(div().text_sm().child("User"))
+                        .child(div().text_sm().child(t!("connection_dialog.user")))
                         .child(Input::new(ssh_user_input)),
                 )
                 .child(secret_field(
                     format!("{prefix}-ssh-password-ask"),
-                    "Password",
+                    t!("connection_dialog.password"),
                     ssh_password_input,
                     SecretKind::SshPassword,
                     ask_secrets,
@@ -211,13 +212,13 @@ pub(super) fn render_ssh_section(
                 .gap_3()
                 .child(v_flex().flex_1().child(file_picker_input(
                     &format!("{prefix}-ssh-key-picker"),
-                    "Private key path",
+                    &t!("connection_dialog.private_key_path"),
                     ssh_private_key_input,
                     cx,
                 )))
                 .child(secret_field(
                     format!("{prefix}-ssh-key-password-ask"),
-                    "Private key password",
+                    t!("connection_dialog.private_key_password"),
                     ssh_private_key_password_input,
                     SecretKind::SshPrivateKeyPassword,
                     ask_secrets,
@@ -227,20 +228,14 @@ pub(super) fn render_ssh_section(
         .child(
             v_flex()
                 .gap_2()
-                .child(div().text_sm().child("Jump hosts (optional)"))
+                .child(div().text_sm().child(t!("connection_dialog.jump_hosts")))
                 .child(Input::new(ssh_jump_hosts_input)),
         )
         .child(
             div()
                 .text_xs()
                 .text_color(cx.theme().muted_foreground)
-                .child(
-                    "The tunnel ends at the SSH host, which can be an alias from \
-                     ~/.ssh/config. Jump hosts are the servers to go through before it, \
-                     in order. A user, port, key or jump hosts left empty are taken from \
-                     ~/.ssh/config. Without a key or password, the SSH agent and the \
-                     default keys in ~/.ssh are tried.",
-                ),
+                .child(t!("connection_dialog.ssh_help")),
         )
 }
 
@@ -255,11 +250,9 @@ pub(super) fn validate_ssh_section(
     let jump_hosts = ssh_jump_hosts_input.read(cx).value();
     if ssh_host_input.read(cx).value().trim().is_empty() {
         return Some(if jump_hosts.trim().is_empty() {
-            "SSH host is required".to_string()
+            t!("connection_dialog.errors.ssh_host_required").into_owned()
         } else {
-            "SSH host is required. Jump hosts are only the servers on the way to it, \
-             so a single server goes in SSH host"
-                .to_string()
+            t!("connection_dialog.errors.ssh_host_required_with_jump_hosts").into_owned()
         });
     }
     database::ssh_config::parse_jump_hosts(&jump_hosts).err()

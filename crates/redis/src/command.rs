@@ -44,7 +44,7 @@ pub fn tokenize(line: &str) -> Result<Vec<String>> {
     }
 
     if in_single || in_double {
-        return Err(anyhow!("unbalanced quotes in command"));
+        return Err(anyhow!(t!("redis.unbalanced_quotes")));
     }
     if has_token {
         args.push(current);

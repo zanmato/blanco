@@ -128,10 +128,12 @@ pub(crate) struct WriteConfirmation {
 impl WriteConfirmation {
     pub(crate) fn title(&self) -> String {
         match self.environment {
-            Some(environment) if environment.confirms_writes() => {
-                format!("An agent wants to write to {environment}")
-            }
-            _ => "An agent wants to run a write statement".to_string(),
+            Some(environment) if environment.confirms_writes() => t!(
+                "shell.mcp_write.title_environment",
+                environment = environment
+            )
+            .into_owned(),
+            _ => t!("shell.mcp_write.title").into_owned(),
         }
     }
 

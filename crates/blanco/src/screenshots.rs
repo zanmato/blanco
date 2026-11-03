@@ -863,7 +863,7 @@ async fn stage_scene(
             let (row, col) = MOTION_EDIT_CELL;
             results_panel.update_in(cx, |panel, window, cx| {
                 panel.table_state().update(cx, |state, cx| {
-                    state.set_selected_cell(row, col, cx);
+                    state.set_selection(blanco_ui::table::TableSelection::Cell(row, col), cx);
                 });
                 panel.table_state().focus_handle(cx).focus(window, cx);
             })?;
@@ -897,7 +897,7 @@ async fn stage_scene(
             let (row, col) = MOTION_JSON_CELL;
             results_panel.update_in(cx, |panel, _, cx| {
                 panel.table_state().update(cx, |state, cx| {
-                    state.set_selected_cell(row, col, cx);
+                    state.set_selection(blanco_ui::table::TableSelection::Cell(row, col), cx);
                 });
             })?;
             settle(cx, 200).await;

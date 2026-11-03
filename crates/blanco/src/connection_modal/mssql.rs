@@ -1,11 +1,11 @@
 use gpui::{
-    AnyElement, App, AppContext, Context, Entity, IntoElement, ParentElement, Styled, Window, div,
-    prelude::FluentBuilder,
+    AnyElement, App, AppContext, Context, Entity, IntoElement, ParentElement, SharedString, Styled,
+    Window, div, prelude::FluentBuilder,
 };
 use gpui_component::{
     IndexPath, h_flex,
     input::{Input, InputState},
-    select::{Select, SelectState},
+    select::{Select, SelectItem, SelectState},
     switch::Switch,
     v_flex,
 };
@@ -16,13 +16,49 @@ use super::NewConnectionModal;
 use super::shared::{make_input, render_ssh_section, secret_field, validate_ssh_section};
 use database::SecretKind;
 
+/// An encryption level as stored in the connection (`Off`, `On`, `Required`)
+/// with its label in the interface language.
+#[derive(Clone, Debug)]
+pub(super) struct EncryptionOption {
+    value: String,
+    label: SharedString,
+}
+
+impl EncryptionOption {
+    fn all() -> Vec<Self> {
+        [
+            ("Off", t!("connection_dialog.encryption_off")),
+            ("On", t!("connection_dialog.encryption_on")),
+            ("Required", t!("connection_dialog.encryption_required")),
+        ]
+        .into_iter()
+        .map(|(value, label)| Self {
+            value: value.to_string(),
+            label: label.into(),
+        })
+        .collect()
+    }
+}
+
+impl SelectItem for EncryptionOption {
+    type Value = String;
+
+    fn title(&self) -> SharedString {
+        self.label.clone()
+    }
+
+    fn value(&self) -> &String {
+        &self.value
+    }
+}
+
 pub(super) struct MssqlForm {
     pub host_input: Entity<InputState>,
     pub port_input: Entity<InputState>,
     pub database_input: Entity<InputState>,
     pub username_input: Entity<InputState>,
     pub password_input: Entity<InputState>,
-    pub encrypt_select: Entity<SelectState<Vec<String>>>,
+    pub encrypt_select: Entity<SelectState<Vec<EncryptionOption>>>,
     pub trust_server_certificate: bool,
     pub ssh_enabled: bool,
     pub ssh_host_input: Entity<InputState>,
@@ -59,7 +95,7 @@ impl MssqlForm {
         let database_input = make_input(
             window,
             cx,
-            "Database Name",
+            &t!("connection_dialog.database_name_placeholder"),
             false,
             conn.and_then(|c| c.database_name.as_deref()),
         );
@@ -73,15 +109,15 @@ impl MssqlForm {
         let password_input = make_input(
             window,
             cx,
-            "Password",
+            &t!("connection_dialog.password"),
             true,
             conn.and_then(|c| c.password.as_deref()),
         );
 
-        let encrypt_modes = vec!["Off".to_string(), "On".to_string(), "Required".to_string()];
+        let encrypt_modes = EncryptionOption::all();
         let encrypt_initial = conn
             .and_then(|c| c.ssl_mode.as_ref())
-            .and_then(|mode| encrypt_modes.iter().position(|m| m == mode))
+            .and_then(|mode| encrypt_modes.iter().position(|m| &m.value == mode))
             .unwrap_or(0);
         let encrypt_select = cx.new(|cx| {
             SelectState::new(
@@ -98,7 +134,7 @@ impl MssqlForm {
         let ssh_host_input = make_input(
             window,
             cx,
-            "SSH Host",
+            &t!("connection_dialog.ssh_host_placeholder"),
             false,
             conn.and_then(|c| c.ssh_host.as_deref()),
         );
@@ -106,35 +142,35 @@ impl MssqlForm {
         let ssh_user_input = make_input(
             window,
             cx,
-            "SSH Username (optional)",
+            &t!("connection_dialog.ssh_username_optional"),
             false,
             conn.and_then(|c| c.ssh_user.as_deref()),
         );
         let ssh_password_input = make_input(
             window,
             cx,
-            "SSH Password (optional)",
+            &t!("connection_dialog.ssh_password_optional"),
             true,
             conn.and_then(|c| c.ssh_password.as_deref()),
         );
         let ssh_private_key_input = make_input(
             window,
             cx,
-            "Private Key Path (optional)",
+            &t!("connection_dialog.private_key_path_optional"),
             false,
             conn.and_then(|c| c.ssh_private_key_path.as_deref()),
         );
         let ssh_private_key_password_input = make_input(
             window,
             cx,
-            "Private Key Password (optional)",
+            &t!("connection_dialog.private_key_password_optional"),
             true,
             conn.and_then(|c| c.ssh_private_key_password.as_deref()),
         );
         let ssh_jump_hosts_input = make_input(
             window,
             cx,
-            "From ~/.ssh/config, or user@bastion:22, other",
+            &t!("connection_dialog.jump_hosts_placeholder"),
             false,
             conn.and_then(|c| c.ssh_jump_hosts.as_deref()),
         );
@@ -181,19 +217,19 @@ impl MssqlForm {
         let username = self.username_input.read(cx).value();
 
         if host.is_empty() {
-            return Some("Host is required".to_string());
+            return Some(t!("connection_dialog.errors.host_required").into_owned());
         }
         if port_str.is_empty() {
-            return Some("Port is required".to_string());
+            return Some(t!("connection_dialog.errors.port_required").into_owned());
         }
         if port_str.parse::<u16>().is_err() {
-            return Some("Port must be a valid number (1-65535)".to_string());
+            return Some(t!("connection_dialog.errors.port_invalid").into_owned());
         }
         if database.is_empty() {
-            return Some("Database name is required".to_string());
+            return Some(t!("connection_dialog.errors.database_name_required").into_owned());
         }
         if username.is_empty() {
-            return Some("Username is required".to_string());
+            return Some(t!("connection_dialog.errors.username_required").into_owned());
         }
         None
     }
@@ -285,14 +321,14 @@ fn render_base_fields(
                     v_flex()
                         .flex_1()
                         .gap_2()
-                        .child(div().text_sm().child("Host"))
+                        .child(div().text_sm().child(t!("connection_dialog.host")))
                         .child(Input::new(&form.host_input)),
                 )
                 .child(
                     v_flex()
                         .flex_1()
                         .gap_2()
-                        .child(div().text_sm().child("Port"))
+                        .child(div().text_sm().child(t!("connection_dialog.port")))
                         .child(Input::new(&form.port_input)),
                 ),
         )
@@ -303,12 +339,12 @@ fn render_base_fields(
                     v_flex()
                         .flex_1()
                         .gap_2()
-                        .child(div().text_sm().child("User"))
+                        .child(div().text_sm().child(t!("connection_dialog.user")))
                         .child(Input::new(&form.username_input)),
                 )
                 .child(secret_field(
                     "mssql-password-ask",
-                    "Password",
+                    t!("connection_dialog.password"),
                     &form.password_input,
                     SecretKind::Password,
                     ask_secrets,
@@ -318,7 +354,7 @@ fn render_base_fields(
         .child(
             v_flex()
                 .gap_2()
-                .child(div().text_sm().child("Database name"))
+                .child(div().text_sm().child(t!("connection_dialog.database_name")))
                 .child(Input::new(&form.database_input)),
         )
         .into_any_element()
@@ -338,13 +374,13 @@ pub(super) fn render(
             v_flex()
                 .flex_1()
                 .gap_2()
-                .child(div().text_sm().child("Encryption"))
+                .child(div().text_sm().child(t!("connection_dialog.encryption")))
                 .child(Select::new(&form.encrypt_select)),
         )
         .child(
             Switch::new("mssql-trust-server-certificate-switch")
                 .checked(trust_server_certificate)
-                .label("Trust server certificate (insecure)")
+                .label(t!("connection_dialog.trust_server_certificate").into_owned())
                 .on_click(cx.listener(|modal, checked, _window, cx| {
                     modal.mssql_form.set_trust_server_certificate(*checked);
                     cx.notify();

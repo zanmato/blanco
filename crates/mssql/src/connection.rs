@@ -134,13 +134,11 @@ pub struct MssqlConnection {
 impl MssqlConnection {
     pub fn from_connection_string(connection_string: &str) -> Result<Self> {
         let parsed = url::Url::parse(connection_string)
-            .map_err(|e| anyhow::anyhow!("invalid MSSQL connection URL: {e}"))?;
+            .map_err(|e| anyhow::anyhow!(t!("mssql.invalid_url", error = e)))?;
 
         let scheme = parsed.scheme();
         if scheme != "mssql" && scheme != "sqlserver" {
-            return Err(anyhow::anyhow!(
-                "MSSQL connection URL must use mssql:// or sqlserver://, got '{scheme}'"
-            ));
+            return Err(anyhow::anyhow!(t!("mssql.invalid_scheme", scheme = scheme)));
         }
 
         let host = parsed.host_str().unwrap_or("localhost").to_string();
@@ -149,9 +147,7 @@ impl MssqlConnection {
         let password = parsed.password().unwrap_or("").to_string();
 
         if username.is_empty() {
-            return Err(anyhow::anyhow!(
-                "username is required in MSSQL connection string"
-            ));
+            return Err(anyhow::anyhow!(t!("mssql.username_required")));
         }
 
         let database = parsed.path().trim_start_matches('/').to_string();
@@ -230,9 +226,13 @@ impl MssqlConnection {
             }
             let addr = config.get_addr();
 
-            let tcp = TcpStream::connect(&addr)
-                .await
-                .map_err(|e| anyhow::anyhow!("Failed to connect to SQL Server at {addr}: {e}"))?;
+            let tcp = TcpStream::connect(&addr).await.map_err(|e| {
+                anyhow::anyhow!(t!(
+                    "mssql.connect_address_failed",
+                    address = addr,
+                    error = e
+                ))
+            })?;
             tcp.set_nodelay(true).ok();
 
             match Client::connect(config, tcp.compat_write()).await {
@@ -240,12 +240,13 @@ impl MssqlConnection {
                 Err(tiberius::error::Error::Routing { host, port }) => {
                     redirect = Some((host, port));
                 }
-                Err(e) => return Err(anyhow::anyhow!("Failed to connect to SQL Server: {e}")),
+                Err(e) => return Err(anyhow::anyhow!(t!("mssql.connect_failed", error = e))),
             }
         }
-        Err(anyhow::anyhow!(
-            "SQL Server kept redirecting after {MAX_ROUTING_REDIRECTS} attempts"
-        ))
+        Err(anyhow::anyhow!(t!(
+            "mssql.too_many_redirects",
+            attempts = MAX_ROUTING_REDIRECTS
+        )))
     }
 
     /// Get (creating if needed) the per-database client slot. The returned slot
@@ -495,11 +496,11 @@ impl Connection for MssqlConnection {
         let mut client = self
             .establish(None)
             .await
-            .map_err(|e| anyhow::anyhow!("MSSQL connection test failed: {e}"))?;
+            .map_err(|e| anyhow::anyhow!(t!("mssql.connection_test_failed", error = e)))?;
         client
             .simple_query("SELECT 1")
             .await
-            .map_err(|e| anyhow::anyhow!("MSSQL connection test failed: {e}"))?;
+            .map_err(|e| anyhow::anyhow!(t!("mssql.connection_test_failed", error = e)))?;
         tracing::info!(
             "Connected to SQL Server at {}:{}",
             self.server_key.host,
@@ -516,16 +517,13 @@ impl Connection for MssqlConnection {
         let mut client = tokio::time::timeout(timeout, self.establish(None))
             .await
             .map_err(|_| {
-                anyhow::anyhow!(
-                    "SQL Server connection timed out after {}s",
-                    timeout.as_secs()
-                )
+                anyhow::anyhow!(t!("mssql.connect_timed_out", seconds = timeout.as_secs()))
             })??;
 
         client
             .simple_query("SELECT 1")
             .await
-            .map_err(|e| anyhow::anyhow!("SQL Server connection check failed: {e}"))?;
+            .map_err(|e| anyhow::anyhow!(t!("mssql.connection_check_failed", error = e)))?;
 
         Ok(())
     }
@@ -571,7 +569,7 @@ impl Connection for MssqlConnection {
                 if is_connection_lost(&error) {
                     *guard = None;
                 }
-                return Err(anyhow::anyhow!("MSSQL query error: {error}"));
+                return Err(anyhow::anyhow!(t!("mssql.query_error", error = error)));
             }
         };
         drop(guard);
@@ -648,7 +646,7 @@ impl Connection for MssqlConnection {
                 if is_connection_lost(&error) {
                     *guard = None;
                 }
-                return Err(anyhow::anyhow!("MSSQL describe error: {error}"));
+                return Err(anyhow::anyhow!(t!("mssql.describe_error", error = error)));
             }
         };
         drop(guard);
@@ -687,7 +685,7 @@ impl Connection for MssqlConnection {
                 if is_connection_lost(&error) {
                     *guard = None;
                 }
-                return Err(anyhow::anyhow!("MSSQL query error: {error}"));
+                return Err(anyhow::anyhow!(t!("mssql.query_error", error = error)));
             }
         };
         drop(guard);
@@ -755,7 +753,7 @@ impl Connection for MssqlConnection {
                 if is_connection_lost(&error) {
                     *guard = None;
                 }
-                Err(anyhow::anyhow!("MSSQL write error: {error}"))
+                Err(anyhow::anyhow!(t!("mssql.write_error", error = error)))
             }
         }
     }
@@ -779,7 +777,8 @@ impl Connection for MssqlConnection {
 
         if let Err(error) = control_statement(client, "BEGIN TRANSACTION").await {
             let lost = is_connection_lost(&error);
-            let failure = BatchFailure::atomic(anyhow::anyhow!("MSSQL begin error: {error}"));
+            let failure =
+                BatchFailure::atomic(anyhow::anyhow!(t!("mssql.begin_error", error = error)));
             if lost {
                 *guard = None;
             }
@@ -804,7 +803,10 @@ impl Connection for MssqlConnection {
                 }
                 Err(error) => {
                     let lost = is_connection_lost(&error);
-                    failed = Some((anyhow::anyhow!("MSSQL operation error: {error}"), lost));
+                    failed = Some((
+                        anyhow::anyhow!(t!("mssql.operation_error", error = error)),
+                        lost,
+                    ));
                     break;
                 }
             }
@@ -828,7 +830,8 @@ impl Connection for MssqlConnection {
         let client = guard.as_mut().expect("client established above");
         if let Err(error) = control_statement(client, "COMMIT TRANSACTION").await {
             let lost = is_connection_lost(&error);
-            let failure = BatchFailure::atomic(anyhow::anyhow!("MSSQL commit error: {error}"));
+            let failure =
+                BatchFailure::atomic(anyhow::anyhow!(t!("mssql.commit_error", error = error)));
             if lost {
                 *guard = None;
             }
@@ -997,7 +1000,7 @@ impl Connection for MssqlConnection {
             .rows
             .into_iter()
             .next()
-            .ok_or_else(|| anyhow::anyhow!("Table '{table_name}' not found"))?;
+            .ok_or_else(|| anyhow::anyhow!(t!("mssql.table_not_found", table = table_name)))?;
         let get = |ix: usize| {
             row.get(ix)
                 .cloned()
@@ -1031,7 +1034,7 @@ impl Connection for MssqlConnection {
                     .and_then(|row| row.into_iter().next().flatten())
                     .map(|at| blanco_core::LastModified {
                         at,
-                        note: "since the server last started".to_string(),
+                        note: t!("mssql.modified_since_restart").into_owned(),
                     });
             }
             Err(error) => {

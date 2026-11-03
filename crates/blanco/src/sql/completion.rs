@@ -83,6 +83,22 @@ struct ColumnCandidate {
     comment: Option<String>,
 }
 
+fn entity_type_label(entity_type: blanco_core::EntityType) -> std::borrow::Cow<'static, str> {
+    match entity_type {
+        blanco_core::EntityType::Table => t!("completion.entity.table"),
+        blanco_core::EntityType::View => t!("completion.entity.view"),
+        blanco_core::EntityType::MaterializedView => t!("completion.entity.materialized_view"),
+    }
+}
+
+fn more_overloads(count: usize) -> String {
+    if count == 1 {
+        t!("completion.more_overloads_one").into_owned()
+    } else {
+        t!("completion.more_overloads_other", count = count).into_owned()
+    }
+}
+
 /// A stored comment as the documentation shown beside a completion item.
 fn comment_documentation(comment: Option<&str>) -> Option<lsp_types::Documentation> {
     comment.filter(|c| !c.is_empty()).map(|comment| {
@@ -795,6 +811,7 @@ fn build_column_items(
             .collect()
     };
     filtered.sort_by_key(|column| column.name.len());
+    let source_detail = t!("completion.column_from", table = table);
 
     filtered
         .into_iter()
@@ -805,7 +822,7 @@ fn build_column_items(
             let detail = column
                 .data_type
                 .clone()
-                .unwrap_or_else(|| format!("Column from {table}"));
+                .unwrap_or_else(|| source_detail.to_string());
             CompletionItem {
                 label: column_name.clone(),
                 kind: Some(CompletionItemKind::FIELD),
@@ -852,7 +869,7 @@ fn build_table_items(
                     range,
                     insert_text.clone(),
                 ))),
-                detail: Some(entity.entity_type.display_name().to_string()),
+                detail: Some(entity_type_label(entity.entity_type).into_owned()),
                 documentation: comment_documentation(entity.comment.as_deref()),
                 insert_text: Some(insert_text),
                 ..Default::default()
@@ -864,6 +881,7 @@ fn build_table_items(
 /// Build completion items for the CTEs the statement defines. Like tables,
 /// each inserts `name <abbrev>`.
 fn build_cte_items(cte_names: &[String], current_word: &str, range: Range) -> Vec<CompletionItem> {
+    let detail = t!("completion.cte");
     filter_and_sort(cte_names, current_word)
         .into_iter()
         .map(|name| {
@@ -875,7 +893,7 @@ fn build_cte_items(cte_names: &[String], current_word: &str, range: Range) -> Ve
                     range,
                     insert_text.clone(),
                 ))),
-                detail: Some("CTE".to_string()),
+                detail: Some(detail.to_string()),
                 insert_text: Some(insert_text),
                 ..Default::default()
             }
@@ -886,6 +904,7 @@ fn build_cte_items(cte_names: &[String], current_word: &str, range: Range) -> Ve
 /// Build schema-namespace completion items. Inserting one yields the bare
 /// schema name; the user then types `.` to drill into it.
 fn build_schema_items(schemas: &[String], current_word: &str, range: Range) -> Vec<CompletionItem> {
+    let detail = t!("completion.schema");
     filter_and_sort(schemas, current_word)
         .into_iter()
         .map(|schema| CompletionItem {
@@ -895,7 +914,7 @@ fn build_schema_items(schemas: &[String], current_word: &str, range: Range) -> V
                 range,
                 schema.clone(),
             ))),
-            detail: Some("Schema".to_string()),
+            detail: Some(detail.to_string()),
             insert_text: Some(schema),
             ..Default::default()
         })
@@ -958,7 +977,8 @@ fn build_function_items(
             detail.push_str(return_type);
         }
         if overloads > 1 {
-            detail.push_str(&format!(" (+{} overloads)", overloads - 1));
+            detail.push(' ');
+            detail.push_str(&more_overloads(overloads - 1));
         }
         let documentation = comment_documentation(function.comment.as_deref());
         items.push(make_item(&function.name, detail, documentation));
@@ -978,7 +998,8 @@ fn build_function_items(
         };
         let mut detail = first.label();
         if group.overloads.len() > 1 {
-            detail.push_str(&format!(" (+{} overloads)", group.overloads.len() - 1));
+            detail.push(' ');
+            detail.push_str(&more_overloads(group.overloads.len() - 1));
         }
         items.push(make_item(group.name, detail, first.lsp_documentation()));
     }
@@ -1046,6 +1067,7 @@ fn build_join_condition_items(
         .collect();
 
     let needle = current_word.to_lowercase();
+    let detail = t!("completion.join_condition");
     build_join_conditions(&tables)
         .into_iter()
         .filter(|condition| condition.to_lowercase().starts_with(&needle))
@@ -1056,7 +1078,7 @@ fn build_join_condition_items(
                 range,
                 condition.clone(),
             ))),
-            detail: Some("Join condition".to_string()),
+            detail: Some(detail.to_string()),
             insert_text: Some(condition),
             ..Default::default()
         })
@@ -1089,6 +1111,7 @@ fn build_enum_label_items(
         rope.offset_to_position(target.value_start),
         rope.offset_to_position(offset),
     );
+    let detail = t!("completion.enum_label");
     labels
         .iter()
         .filter(|label| label.to_lowercase().starts_with(&typed))
@@ -1102,7 +1125,7 @@ fn build_enum_label_items(
             CompletionItem {
                 label: label.clone(),
                 kind: Some(CompletionItemKind::ENUM_MEMBER),
-                detail: Some("enum label".to_string()),
+                detail: Some(detail.to_string()),
                 filter_text: Some(label.clone()),
                 text_edit: Some(CompletionTextEdit::Edit(TextEdit::new(range, new_text))),
                 ..Default::default()
@@ -1112,6 +1135,7 @@ fn build_enum_label_items(
 }
 
 fn build_keyword_items(keywords: &[&str], range: Range) -> Vec<CompletionItem> {
+    let detail = t!("completion.sql_keyword");
     keywords
         .iter()
         .map(|keyword| {
@@ -1123,7 +1147,7 @@ fn build_keyword_items(keywords: &[&str], range: Range) -> Vec<CompletionItem> {
                     range,
                     label.clone(),
                 ))),
-                detail: Some("SQL Keyword".to_string()),
+                detail: Some(detail.to_string()),
                 insert_text: Some(label),
                 ..Default::default()
             }
@@ -1383,7 +1407,7 @@ impl CompletionProvider for SqlCompletionProvider {
                         }
                         let detail = match sources.as_slice() {
                             [ColumnSource::Table(single)] => single.table.clone(),
-                            _ => "query columns".to_string(),
+                            _ => t!("completion.query_columns").into_owned(),
                         };
 
                         let mut groups = vec![(

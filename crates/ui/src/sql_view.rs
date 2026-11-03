@@ -259,7 +259,11 @@ impl Render for SqlView {
                             } else {
                                 IconName::Copy
                             })
-                            .tooltip(if copied { "Copied" } else { "Copy" })
+                            .tooltip(if copied {
+                                t!("ui.sql_view.copied")
+                            } else {
+                                t!("ui.sql_view.copy")
+                            })
                             .on_click(cx.listener(|this, _, _window, cx| {
                                 this.copy_to_clipboard(cx);
                             })),

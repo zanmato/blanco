@@ -8,6 +8,8 @@ publish.workspace = true
 path = "src/transformers.rs"
 
 [dependencies]
+# The interface language, a process global the app sets at startup.
+rust-i18n = "4.2"
 blanco-core = { path = "../blanco-core" }
 serde = { workspace = true }
 serde_json = { workspace = true }

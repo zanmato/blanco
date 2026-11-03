@@ -459,11 +459,12 @@ impl Connection for ClickhouseConnection {
              FROM system.tables WHERE database = '{db}' AND name = '{table}'"
         );
         let tsv = self.raw_query_tsv(&sql, None).await?;
-        let row = tsv
-            .rows
-            .into_iter()
-            .next()
-            .ok_or_else(|| anyhow::anyhow!("Table '{db}.{table}' not found"))?;
+        let row = tsv.rows.into_iter().next().ok_or_else(|| {
+            anyhow::anyhow!(t!(
+                "clickhouse.table_not_found",
+                table = format!("{db}.{table}")
+            ))
+        })?;
         let get = |ix: usize| {
             row.get(ix)
                 .cloned()
@@ -478,13 +479,13 @@ impl Connection for ClickhouseConnection {
             ..Default::default()
         };
         for (label, value) in [
-            ("Engine", get(3)),
-            ("Sorting key", get(5)),
-            ("Partition key", get(6)),
-            ("Definition changed", get(4)),
+            (t!("clickhouse.engine"), get(3)),
+            (t!("clickhouse.sorting_key"), get(5)),
+            (t!("clickhouse.partition_key"), get(6)),
+            (t!("clickhouse.definition_changed"), get(4)),
         ] {
             if let Some(value) = value {
-                info.options.push((label.to_string(), value));
+                info.options.push((label.into_owned(), value));
             }
         }
         // Every insert, merge and mutation writes a new part, so the newest
@@ -506,7 +507,7 @@ impl Connection for ClickhouseConnection {
             .filter(|at| !at.is_empty())
             .map(|at| blanco_core::LastModified {
                 at,
-                note: "when the newest data part was written".to_string(),
+                note: t!("clickhouse.modified_newest_part").into_owned(),
             });
         Ok(info)
     }
@@ -525,7 +526,12 @@ impl Connection for ClickhouseConnection {
             .into_iter()
             .next()
             .and_then(|mut row| row.pop().flatten())
-            .ok_or_else(|| anyhow::anyhow!("Table '{}.{}' not found", db, table_name))?;
+            .ok_or_else(|| {
+                anyhow::anyhow!(t!(
+                    "clickhouse.table_not_found",
+                    table = format!("{db}.{table_name}")
+                ))
+            })?;
 
         let dialect = blanco_core::DatabaseType::ClickHouse.dialect();
         let object = format!(

@@ -129,7 +129,7 @@ where
                     return FileRunOutcome::Failed {
                         statement_number: 0,
                         statement: None,
-                        error: format!("Could not read the file: {error}"),
+                        error: t!("editor.file_run.read_failed", error = error).into_owned(),
                     };
                 }
             };
@@ -139,7 +139,7 @@ where
                     return FileRunOutcome::Failed {
                         statement_number: 0,
                         statement: None,
-                        error: "The file is not UTF-8 text".to_string(),
+                        error: t!("editor.file_run.not_utf8").into_owned(),
                     };
                 }
                 continue;
@@ -154,7 +154,7 @@ where
                     return FileRunOutcome::Failed {
                         statement_number: 0,
                         statement: None,
-                        error: "The file is not UTF-8 text".to_string(),
+                        error: t!("editor.file_run.not_utf8").into_owned(),
                     };
                 }
             };
@@ -197,11 +197,11 @@ impl EditorPanel {
         cx: &mut Context<Self>,
     ) {
         if !context.db_type.supports_sql() {
-            Self::push_error("Run SQL File needs a SQL connection", window, cx);
+            Self::push_error(&t!("editor.file_run.needs_sql_connection"), window, cx);
             return;
         }
         if self.file_run.is_some() {
-            Self::push_error("A file is already running", window, cx);
+            Self::push_error(&t!("editor.file_run.already_running"), window, cx);
             return;
         }
         // Set for a connection whose tag confirms writes, as PROD does.
@@ -213,7 +213,7 @@ impl EditorPanel {
             files: true,
             directories: false,
             multiple: false,
-            prompt: Some("Run".into()),
+            prompt: Some(t!("editor.file_run.prompt_run").into()),
         });
         cx.spawn_in(window, async move |this, cx| {
             let Some(path) = paths
@@ -244,11 +244,20 @@ impl EditorPanel {
                     let name = file_name(&path);
                     this.confirm_prod_write(
                         ProdWritePrompt {
-                            title: format!("Run SQL file on {environment}?"),
-                            message: format!(
-                                "Every statement in {name} runs on \"{connection_name}\", which is tagged {environment}."
-                            ),
-                            confirm_label: format!("Run on {environment}"),
+                            title: t!("editor.prod_write.file_title", environment = environment)
+                                .into_owned(),
+                            message: t!(
+                                "editor.prod_write.file_message",
+                                file = name,
+                                connection = connection_name,
+                                environment = environment
+                            )
+                            .into_owned(),
+                            confirm_label: t!(
+                                "editor.prod_write.run_confirm",
+                                environment = environment
+                            )
+                            .into_owned(),
                             tab_index: ix,
                         },
                         move |this, window, cx| this.start_file_run(ix, path.clone(), window, cx),
@@ -297,15 +306,22 @@ impl EditorPanel {
 
         sql_view.update(cx, |log, cx| {
             log.append_text(
-                &blanco_ui::SqlViewMessage::Comment(format!(
-                    "Running {name} ({}) statement by statement",
-                    format_bytes(total_bytes)
-                )),
+                &blanco_ui::SqlViewMessage::Comment(
+                    t!(
+                        "editor.file_run.started",
+                        file = name,
+                        size = format_bytes(total_bytes)
+                    )
+                    .into_owned(),
+                ),
                 cx,
             );
         });
-        let activity = ActivityReporter::global(cx)
-            .begin(format!("{}: running {name}", context.connection_name));
+        let activity = ActivityReporter::global(cx).begin(t!(
+            "editor.activity.running_file",
+            connection = context.connection_name,
+            file = name
+        ));
 
         let db_service = DatabaseService::global(cx).clone();
         let started = Instant::now();
@@ -322,7 +338,12 @@ impl EditorPanel {
                         return FileRunOutcome::Failed {
                             statement_number: 0,
                             statement: None,
-                            error: format!("Could not open {}: {error}", path.display()),
+                            error: t!(
+                                "editor.file_run.open_failed",
+                                path = path.display(),
+                                error = error
+                            )
+                            .into_owned(),
                         };
                     }
                 };
@@ -429,20 +450,29 @@ impl EditorPanel {
                     div()
                         .text_xs()
                         .text_color(cx.theme().muted_foreground)
-                        .child(format!(
-                            "{} {} · {} · {percent}%",
-                            if stopping { "Stopping" } else { "Running" },
-                            run.file_name,
-                            statement_count(statements),
-                        )),
+                        .child(if stopping {
+                            t!(
+                                "editor.file_run.status_stopping",
+                                file = run.file_name,
+                                statements = statement_count(statements),
+                                percent = percent
+                            )
+                        } else {
+                            t!(
+                                "editor.file_run.status_running",
+                                file = run.file_name,
+                                statements = statement_count(statements),
+                                percent = percent
+                            )
+                        }),
                 )
                 .child(
                     Button::new("stop-file-run")
                         .danger()
                         .small()
                         .icon(blanco_ui::IconName::SquareStop)
-                        .label("Stop")
-                        .tooltip("Stop after the statement in flight")
+                        .label(t!("editor.stop"))
+                        .tooltip(t!("editor.file_run.stop_tooltip"))
                         .on_click(cx.listener(|panel, _, _, cx| panel.cancel_file_run(cx))),
                 )
                 .into_any_element(),
@@ -452,8 +482,8 @@ impl EditorPanel {
 
 fn statement_count(count: usize) -> String {
     match count {
-        1 => "1 statement".to_string(),
-        count => format!("{count} statements"),
+        1 => t!("editor.file_run.statements_one").into_owned(),
+        count => t!("editor.file_run.statements_other", count = count).into_owned(),
     }
 }
 
@@ -461,7 +491,7 @@ fn format_bytes(bytes: u64) -> String {
     match bytes {
         bytes if bytes >= 1024 * 1024 => format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0)),
         bytes if bytes >= 1024 => format!("{:.1} KB", bytes as f64 / 1024.0),
-        bytes => format!("{bytes} bytes"),
+        bytes => t!("editor.file_run.bytes", count = bytes).into_owned(),
     }
 }
 
@@ -474,17 +504,23 @@ fn describe_outcome(
     let seconds = elapsed.as_secs_f64();
     match outcome {
         FileRunOutcome::Completed { statements } => {
-            let text = format!(
-                "✓ Ran {} from {name} in {seconds:.1}s",
-                statement_count(*statements)
-            );
+            let text = t!(
+                "editor.file_run.completed",
+                statements = statement_count(*statements),
+                file = name,
+                seconds = format!("{seconds:.1}")
+            )
+            .into_owned();
             (text.clone(), ActivityResult::Ok(text.into()))
         }
         FileRunOutcome::Cancelled { statements } => {
-            let text = format!(
-                "Stopped {name} after {} in {seconds:.1}s",
-                statement_count(*statements)
-            );
+            let text = t!(
+                "editor.file_run.stopped",
+                file = name,
+                statements = statement_count(*statements),
+                seconds = format!("{seconds:.1}")
+            )
+            .into_owned();
             (text.clone(), ActivityResult::Ok(text.into()))
         }
         FileRunOutcome::Failed {
@@ -498,10 +534,15 @@ fn describe_outcome(
                     if shown.len() < statement.len() {
                         shown.push('…');
                     }
-                    format!(
-                        "✗ {name}: statement {statement_number} failed after {} ran: {error}\n{shown}",
-                        statement_count(statement_number.saturating_sub(1))
+                    t!(
+                        "editor.file_run.statement_failed",
+                        file = name,
+                        number = statement_number,
+                        statements = statement_count(statement_number.saturating_sub(1)),
+                        error = error,
+                        statement = shown
                     )
+                    .into_owned()
                 }
                 None => format!("✗ {name}: {error}"),
             };

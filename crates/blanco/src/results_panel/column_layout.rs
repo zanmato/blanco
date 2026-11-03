@@ -6,9 +6,11 @@
 
 use std::collections::HashMap;
 
+use blanco_ui::table::TableState;
 use gpui::{
     App, Context, Entity, Global, InteractiveElement as _, IntoElement, ParentElement as _,
-    StatefulInteractiveElement as _, Styled as _, Window, div, prelude::FluentBuilder as _, px,
+    SharedString, StatefulInteractiveElement as _, Styled as _, Window, div,
+    prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
     ActiveTheme as _, Disableable as _, Sizable as _, WindowExt as _,
@@ -18,7 +20,6 @@ use gpui_component::{
     input::Input,
     notification::NotificationType,
     popover::Popover,
-    table::TableState,
     v_flex,
 };
 
@@ -153,7 +154,7 @@ impl ResultsPanel {
             window.push_notification(
                 (
                     NotificationType::Info,
-                    "Apply or discard the pending edits to change the columns",
+                    t!("results.columns.pending_edits_notice"),
                 ),
                 cx,
             );
@@ -261,7 +262,7 @@ impl ResultsPanel {
                     .ghost()
                     .xsmall()
                     .icon(IconName::Eye)
-                    .tooltip("Columns"),
+                    .tooltip(t!("results.columns.tooltip")),
             )
             .content(move |_, _window, cx| {
                 let needle = search.read(cx).value().to_lowercase();
@@ -277,6 +278,8 @@ impl ResultsPanel {
                     .filter(|(_, name)| needle.is_empty() || name.to_lowercase().contains(&needle))
                     .collect();
                 let muted = cx.theme().muted_foreground;
+                let pin_tooltip: SharedString = t!("results.columns.pin").into();
+                let unpin_tooltip: SharedString = t!("results.columns.unpin").into();
                 v_flex()
                     .p_2()
                     .gap_2()
@@ -287,7 +290,7 @@ impl ResultsPanel {
                             div()
                                 .text_xs()
                                 .text_color(muted)
-                                .child("Apply or discard the pending edits to change the columns."),
+                                .child(t!("results.columns.pending_edits_hint")),
                         )
                     })
                     .child(
@@ -332,9 +335,9 @@ impl ResultsPanel {
                                                     IconName::Pin
                                                 })
                                                 .tooltip(if is_pinned {
-                                                    "Unpin Column"
+                                                    unpin_tooltip.clone()
                                                 } else {
-                                                    "Pin Column"
+                                                    pin_tooltip.clone()
                                                 })
                                                 .disabled(!can_rearrange)
                                                 .on_click({

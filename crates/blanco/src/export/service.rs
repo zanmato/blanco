@@ -62,10 +62,10 @@ impl ExportService {
     {
         // Check if transformer supports streaming
         if !transformer.supports_streaming() {
-            return Err(anyhow::anyhow!(
-                "Transformer '{}' does not support streaming",
-                transformer.format_name()
-            ));
+            return Err(anyhow::anyhow!(t!(
+                "export.errors.no_streaming",
+                format = transformer.format_name()
+            )));
         }
 
         // Create channels for producer-consumer pattern
@@ -80,7 +80,7 @@ impl ExportService {
         // Initialize transformer output (headers, etc.)
         let initial_output = transformer
             .initialize_stream(&columns, &column_types)
-            .map_err(|e| anyhow::anyhow!("Failed to initialize transformer: {}", e))?;
+            .map_err(|e| anyhow::anyhow!(t!("export.errors.initialize_failed", error = e)))?;
 
         // Clone needed data for the background task
         let is_cancelled_clone = is_cancelled.clone();
@@ -106,7 +106,9 @@ impl ExportService {
                         column_types: column_types_clone.clone(),
                         row_data,
                     })
-                    .map_err(|error| anyhow::anyhow!("Failed to read a row: {error}"));
+                    .map_err(|error| {
+                        anyhow::anyhow!(t!("export.errors.read_row_failed", error = error))
+                    });
 
                 // Send row through channel
                 if (sender.send(stream_data).await).is_err() {
@@ -126,7 +128,7 @@ impl ExportService {
         // Consumer task: write transformed rows to file
         let file = File::create(file_path)
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to create file: {}", e))?;
+            .map_err(|e| anyhow::anyhow!(t!("export.errors.create_file_failed", error = e)))?;
 
         let mut writer = BufWriter::new(file);
         let mut rows_written = 0;
@@ -136,14 +138,16 @@ impl ExportService {
         writer
             .write_all(encoding.preamble())
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to write byte order mark: {}", e))?;
+            .map_err(|e| anyhow::anyhow!(t!("export.errors.write_bom_failed", error = e)))?;
 
         // Write initial output (headers, etc.)
         if !initial_output.is_empty() {
             writer
                 .write_all(&encoding.encode(&initial_output))
                 .await
-                .map_err(|e| anyhow::anyhow!("Failed to write initial output: {}", e))?;
+                .map_err(|e| {
+                    anyhow::anyhow!(t!("export.errors.write_initial_failed", error = e))
+                })?;
             bytes_written += initial_output.len();
         }
 
@@ -162,13 +166,15 @@ impl ExportService {
                     &stream_data.columns,
                     &stream_data.column_types,
                 )
-                .map_err(|e| anyhow::anyhow!("Failed to transform row: {}", e))?;
+                .map_err(|e| {
+                    anyhow::anyhow!(t!("export.errors.transform_row_failed", error = e))
+                })?;
 
             // Write transformed row
             writer
                 .write_all(&encoding.encode(&row_output))
                 .await
-                .map_err(|e| anyhow::anyhow!("Failed to write transformed row: {}", e))?;
+                .map_err(|e| anyhow::anyhow!(t!("export.errors.write_row_failed", error = e)))?;
 
             bytes_written += row_output.len();
             rows_written += 1;
@@ -192,20 +198,20 @@ impl ExportService {
         // Finalize transformer output
         let final_output = transformer
             .finalize_stream()
-            .map_err(|e| anyhow::anyhow!("Failed to finalize transformer: {}", e))?;
+            .map_err(|e| anyhow::anyhow!(t!("export.errors.finalize_failed", error = e)))?;
 
         if !final_output.is_empty() {
             writer
                 .write_all(&encoding.encode(&final_output))
                 .await
-                .map_err(|e| anyhow::anyhow!("Failed to write final output: {}", e))?;
+                .map_err(|e| anyhow::anyhow!(t!("export.errors.write_final_failed", error = e)))?;
         }
 
         // Flush the writer
         writer
             .flush()
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to flush file: {}", e))?;
+            .map_err(|e| anyhow::anyhow!(t!("export.errors.flush_failed", error = e)))?;
 
         // Get final file size
         let file_size = std::fs::metadata(file_path).map(|m| m.len()).unwrap_or(0);
@@ -237,24 +243,24 @@ impl ExportService {
         // Transform the data
         let transformed = transformer
             .transform_selected_data(data)
-            .map_err(|e| anyhow::anyhow!("Failed to transform data: {}", e))?;
+            .map_err(|e| anyhow::anyhow!(t!("export.errors.transform_data_failed", error = e)))?;
 
         // Write to file
         let file = File::create(file_path)
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to create file: {}", e))?;
+            .map_err(|e| anyhow::anyhow!(t!("export.errors.create_file_failed", error = e)))?;
 
         let mut writer = BufWriter::new(file);
 
         writer
             .write_all(transformed.as_bytes())
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to write to file: {}", e))?;
+            .map_err(|e| anyhow::anyhow!(t!("export.errors.write_failed", error = e)))?;
 
         writer
             .flush()
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to flush file: {}", e))?;
+            .map_err(|e| anyhow::anyhow!(t!("export.errors.flush_failed", error = e)))?;
 
         // Get file size
         let file_size = std::fs::metadata(file_path).map(|m| m.len()).unwrap_or(0);

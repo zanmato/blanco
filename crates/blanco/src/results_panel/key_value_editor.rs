@@ -7,7 +7,7 @@ use blanco_core::hstore::{self, Pair};
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
-    IntoElement, ParentElement, Render, Styled, Subscription, Window, div, px,
+    IntoElement, ParentElement, Render, SharedString, Styled, Subscription, Window, div, px,
 };
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::checkbox::Checkbox;
@@ -66,12 +66,12 @@ impl KeyValueEditor {
     ) {
         let key = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("Key")
+                .placeholder(t!("results.key_value.key_placeholder"))
                 .default_value(key)
         });
         let value_input = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("Value")
+                .placeholder(t!("results.key_value.value_placeholder"))
                 .default_value(value.unwrap_or_default())
         });
         for input in [&key, &value_input] {
@@ -158,9 +158,10 @@ impl Render for KeyValueEditor {
         let editable = self.editable;
         let duplicates = self.duplicate_keys(cx);
         let summary = match self.rows.len() {
-            1 => "1 pair".to_string(),
-            count => format!("{count} pairs"),
+            1 => t!("results.key_value.pairs_one"),
+            count => t!("results.key_value.pairs_other", count = count),
         };
+        let remove_tooltip: SharedString = t!("results.key_value.remove_pair").into();
         v_flex()
             .size_full()
             .track_focus(&self.focus_handle)
@@ -186,7 +187,7 @@ impl Render for KeyValueEditor {
                                 .ghost()
                                 .xsmall()
                                 .icon(IconName::Plus)
-                                .label("Add Pair")
+                                .label(t!("results.key_value.add_pair"))
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.add_pair(window, cx);
                                 })),
@@ -197,7 +198,7 @@ impl Render for KeyValueEditor {
                             .ghost()
                             .xsmall()
                             .icon(IconName::Minimize)
-                            .tooltip("Close")
+                            .tooltip(t!("results.key_value.close"))
                             .on_click(cx.listener(|_, _, _, cx| {
                                 cx.emit(KeyValueEditorEvent::Close);
                             })),
@@ -210,9 +211,9 @@ impl Render for KeyValueEditor {
                         .py_1()
                         .text_xs()
                         .text_color(cx.theme().warning)
-                        .child(format!(
-                            "Repeated keys, of which the server keeps one: {}",
-                            duplicates
+                        .child(t!(
+                            "results.key_value.repeated_keys",
+                            keys = duplicates
                                 .iter()
                                 .map(|key| format!("\"{key}\""))
                                 .collect::<Vec<_>>()
@@ -232,7 +233,7 @@ impl Render for KeyValueEditor {
                             div()
                                 .text_xs()
                                 .text_color(cx.theme().muted_foreground)
-                                .child("No pairs"),
+                                .child(t!("results.key_value.no_pairs")),
                         )
                     })
                     .children(self.rows.iter().enumerate().map(|(ix, row)| {
@@ -265,7 +266,7 @@ impl Render for KeyValueEditor {
                                         .ghost()
                                         .xsmall()
                                         .icon(IconName::Close)
-                                        .tooltip("Remove Pair")
+                                        .tooltip(remove_tooltip.clone())
                                         .on_click(cx.listener(move |this, _, _, cx| {
                                             this.remove_pair(ix, cx);
                                         })),

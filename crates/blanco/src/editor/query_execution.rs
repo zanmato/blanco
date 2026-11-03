@@ -20,6 +20,11 @@ use blanco_core::{ExplainMode, QueryTiming, ServerVariant, StatementAccess};
 use database::{DatabaseService, DatabaseServiceTrait};
 use sql_parser::statement_parser::QueryParameter;
 
+/// Run outcomes reported in English to agents through `QueryRunEnded`.
+/// Panels compare against them to tell the user in their own language.
+pub(crate) const WRITE_NOT_CONFIRMED: &str = "The user did not confirm the write on PROD.";
+pub(crate) const RUN_CANCELLED: &str = "Query cancelled by the user.";
+
 use super::parameter_form::ParameterForm;
 use super::{EditorPanel, ProdWritePrompt, SQL_QUERY_LOG_MAX_LENGTH, TabType};
 
@@ -28,6 +33,30 @@ use super::{EditorPanel, ProdWritePrompt, SQL_QUERY_LOG_MAX_LENGTH, TabType};
 pub(crate) struct StatementToRun {
     pub query: String,
     pub parameters: Vec<QueryParameter>,
+}
+
+/// Why Run found nothing to execute.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NothingToRun {
+    Command,
+    Query,
+}
+
+impl NothingToRun {
+    /// In English, for the MCP caller the run outcome goes to.
+    pub(crate) fn agent_message(self) -> String {
+        match self {
+            NothingToRun::Command => "No command to run".to_string(),
+            NothingToRun::Query => "No query to execute".to_string(),
+        }
+    }
+
+    fn user_message(self) -> SharedString {
+        match self {
+            NothingToRun::Command => t!("editor.run.no_command").into(),
+            NothingToRun::Query => t!("editor.run.no_query").into(),
+        }
+    }
 }
 
 /// Thresholds above which a loaded result gets a size warning.
@@ -69,11 +98,19 @@ impl EditorPanel {
                 let connection_name = script_tab.context.connection_name.clone();
                 self.confirm_prod_write(
                     ProdWritePrompt {
-                        title: format!("Run script on {environment}?"),
-                        message: format!(
-                            "\"{connection_name}\" is tagged {environment}. Scripts can modify data through `db.execute` and `db.transaction`."
-                        ),
-                        confirm_label: format!("Run on {environment}"),
+                        title: t!("editor.prod_write.script_title", environment = environment)
+                            .into_owned(),
+                        message: t!(
+                            "editor.prod_write.script_message",
+                            connection = connection_name,
+                            environment = environment
+                        )
+                        .into_owned(),
+                        confirm_label: t!(
+                            "editor.prod_write.run_confirm",
+                            environment = environment
+                        )
+                        .into_owned(),
                         tab_index,
                     },
                     |panel, window, cx| panel.execute_script_tab(window, cx),
@@ -90,11 +127,11 @@ impl EditorPanel {
         match self.statement_to_run(tab_index, cx) {
             Ok(Some(statement)) => self.run_statement(statement, false, window, cx),
             Ok(None) => {}
-            Err(message) => {
-                window.push_notification((NotificationType::Error, message.clone()), cx);
+            Err(nothing) => {
+                window.push_notification((NotificationType::Error, nothing.user_message()), cx);
                 cx.emit(super::EditorPanelEvent::QueryRunEnded {
                     tab_index,
-                    outcome: Err(message),
+                    outcome: Err(nothing.agent_message()),
                 });
             }
         }
@@ -107,7 +144,7 @@ impl EditorPanel {
         &self,
         tab_index: usize,
         cx: &App,
-    ) -> Result<Option<StatementToRun>, String> {
+    ) -> Result<Option<StatementToRun>, NothingToRun> {
         let Some(TabType::Query(query_tab)) = self.tabs.get(tab_index) else {
             return Ok(None);
         };
@@ -127,7 +164,7 @@ impl EditorPanel {
                 crate::sql::extract_command_at_cursor(&full_text, cursor_pos).unwrap_or_default()
             };
             if command.is_empty() {
-                return Err("No command to run".to_string());
+                return Err(NothingToRun::Command);
             }
             return Ok(Some(StatementToRun {
                 query: command,
@@ -165,7 +202,7 @@ impl EditorPanel {
                 .unwrap_or_default()
         };
         if query.is_empty() {
-            return Err("No query to execute".to_string());
+            return Err(NothingToRun::Query);
         }
         // The dashboard a tab came from writes out its own `$` names, which
         // are no bind parameters to ask for.
@@ -254,7 +291,10 @@ impl EditorPanel {
             window.push_notification(
                 (
                     NotificationType::Error,
-                    SharedString::from(format!("{} has no Explain Analyze", db_type.as_str())),
+                    SharedString::from(t!(
+                        "editor.explain_analyze_unsupported",
+                        database = db_type.as_str()
+                    )),
                 ),
                 cx,
             );
@@ -269,7 +309,7 @@ impl EditorPanel {
                 .unwrap_or_default()
         };
         if raw.trim().is_empty() {
-            window.push_notification((NotificationType::Error, "No query to explain"), cx);
+            window.push_notification((NotificationType::Error, t!("editor.explain_no_query")), cx);
             return;
         }
 
@@ -299,7 +339,10 @@ impl EditorPanel {
                         Err(error) => window.push_notification(
                             (
                                 NotificationType::Error,
-                                SharedString::from(format!("Could not explain: {error:#}")),
+                                SharedString::from(t!(
+                                    "editor.explain_failed",
+                                    error = format!("{error:#}")
+                                )),
                             ),
                             cx,
                         ),
@@ -350,30 +393,29 @@ impl EditorPanel {
         let Some(TabType::Query(query_tab)) = self.tabs.get(self.active_tab_ix) else {
             return;
         };
-        let environment_note = match query_tab.context.environment_type {
-            Some(environment) if environment.confirms_writes() => format!(
-                " \"{}\" is tagged {environment}.",
-                query_tab.context.connection_name
+        let message = match query_tab.context.environment_type {
+            Some(environment) if environment.confirms_writes() => t!(
+                "editor.explain_analyze_confirm.message_tagged",
+                connection = query_tab.context.connection_name,
+                environment = environment
             ),
-            _ => String::new(),
-        };
-        let message = format!(
-            "Explain Analyze executes the statement to measure it, so its changes are made.{environment_note}"
-        );
+            _ => t!("editor.explain_analyze_confirm.message"),
+        }
+        .into_owned();
         let weak_panel = cx.entity().downgrade();
         window.open_dialog(cx, move |dialog, _, _| {
             let weak_panel = weak_panel.clone();
             let wrapped = wrapped.clone();
             let database_name = database_name.clone();
             dialog
-                .title("Run the statement to analyze it?")
+                .title(t!("editor.explain_analyze_confirm.title"))
                 .child(message.clone())
                 .footer(
                     DialogFooter::new()
                         .child(
                             DialogClose::new().child(
                                 Button::new("explain-analyze-cancel")
-                                    .label("Cancel")
+                                    .label(t!("editor.cancel"))
                                     .outline(),
                             ),
                         )
@@ -381,7 +423,7 @@ impl EditorPanel {
                             DialogAction::new().child(
                                 Button::new("explain-analyze-confirm")
                                     .danger()
-                                    .label("Run and Analyze")
+                                    .label(t!("editor.explain_analyze_confirm.confirm"))
                                     .on_click(move |_, window, cx| {
                                         weak_panel
                                             .update(cx, |panel, cx| {
@@ -433,11 +475,19 @@ impl EditorPanel {
         let tab_index = self.active_tab_ix;
         self.confirm_prod_write(
             ProdWritePrompt {
-                title: format!("Run write statement on {environment}?"),
-                message: format!(
-                    "\"{connection_name}\" is tagged {environment} and this statement modifies data."
-                ),
-                confirm_label: format!("Run on {environment}"),
+                title: t!(
+                    "editor.prod_write.statement_title",
+                    environment = environment
+                )
+                .into_owned(),
+                message: t!(
+                    "editor.prod_write.statement_message",
+                    connection = connection_name,
+                    environment = environment
+                )
+                .into_owned(),
+                confirm_label: t!("editor.prod_write.run_confirm", environment = environment)
+                    .into_owned(),
                 tab_index,
             },
             move |panel, window, cx| {
@@ -452,7 +502,7 @@ impl EditorPanel {
             Some(Box::new(move |_, cx| {
                 cx.emit(super::EditorPanelEvent::QueryRunEnded {
                     tab_index,
-                    outcome: Err("The user did not confirm the write on PROD.".to_string()),
+                    outcome: Err(WRITE_NOT_CONFIRMED.to_string()),
                 });
             })),
             window,
@@ -498,8 +548,10 @@ impl EditorPanel {
             // the foreground result task: success/error finish it with an
             // outcome, cancellation drops it (clearing the line).
             let activity_label = query_tab.context.connection_name.clone();
-            let activity =
-                ActivityReporter::global(cx).begin(format!("{activity_label}: executing query"));
+            let activity = ActivityReporter::global(cx).begin(t!(
+                "editor.activity.executing_query",
+                connection = activity_label
+            ));
 
             // Set loading state to true
             self.loading = true;
@@ -511,13 +563,14 @@ impl EditorPanel {
 
             // Log the query to the SQL log, truncating if too long
             let query_for_log = if kept_query.chars().count() > SQL_QUERY_LOG_MAX_LENGTH {
-                format!(
-                    "{}... (truncated)",
-                    kept_query
+                t!(
+                    "editor.log.truncated_query",
+                    query = kept_query
                         .chars()
                         .take(SQL_QUERY_LOG_MAX_LENGTH)
                         .collect::<String>()
                 )
+                .into_owned()
             } else {
                 kept_query.clone()
             };
@@ -567,8 +620,8 @@ impl EditorPanel {
                             let deadline = async {
                                 smol::Timer::after(timeout).await;
                                 Err(anyhow::anyhow!(
-                                    "Query exceeded the configured {}s timeout",
-                                    timeout.as_secs()
+                                    "{}",
+                                    t!("editor.run.timeout", seconds = timeout.as_secs())
                                 ))
                             };
                             smol::future::or(execution_future, deadline).await
@@ -663,7 +716,7 @@ impl EditorPanel {
                             sql_view_clone.update(cx, |sql_view, cx| {
                                 sql_view.append_text(
                                     &blanco_ui::SqlViewMessage::Comment(
-                                        "query cancelled by user".to_string(),
+                                        t!("editor.log.query_cancelled").into_owned(),
                                     ),
                                     cx,
                                 );
@@ -674,7 +727,7 @@ impl EditorPanel {
                                     editor_panel.abort_query_task = None;
                                     cx.emit(super::EditorPanelEvent::QueryRunEnded {
                                         tab_index,
-                                        outcome: Err("Query cancelled by the user.".to_string()),
+                                        outcome: Err(RUN_CANCELLED.to_string()),
                                     });
                                     cx.notify();
                                 })
@@ -790,12 +843,17 @@ impl EditorPanel {
                         let returned_row_count: i64 =
                             results.iter().map(|result| result.row_count() as i64).sum();
 
+                        let duration = time_format::format_duration(duration_us);
                         activity.finish(ActivityResult::Ok(
-                            format!(
-                                "Query OK · {} rows · {}",
-                                rows_affected,
-                                time_format::format_duration(duration_us)
-                            )
+                            if rows_affected == 1 {
+                                t!("editor.activity.query_ok_one", duration = duration)
+                            } else {
+                                t!(
+                                    "editor.activity.query_ok_other",
+                                    rows = rows_affected,
+                                    duration = duration
+                                )
+                            }
                             .into(),
                         ));
 
@@ -862,9 +920,13 @@ impl EditorPanel {
                                     window.push_notification(
                                         (
                                             NotificationType::Warning,
-                                            format!(
-                                                "Large result loaded: {rows} rows, {:.1} MB of cell data",
-                                                bytes as f64 / (1024.0 * 1024.0)
+                                            t!(
+                                                "editor.large_result",
+                                                rows = rows,
+                                                megabytes = format!(
+                                                    "{:.1}",
+                                                    bytes as f64 / (1024.0 * 1024.0)
+                                                )
                                             ),
                                         ),
                                         cx,
@@ -873,12 +935,23 @@ impl EditorPanel {
 
                                 // Log execution result to SQL log
                                 sql_view_clone.update(cx, |sql_view, cx| {
-                                    let mut log_message = format!(
-                                        "{}, {} rows in {}",
-                                        time_format::format_current_timestamp(),
-                                        rows_affected,
-                                        time_format::format_duration(duration_us)
-                                    );
+                                    let timestamp = time_format::format_current_timestamp();
+                                    let duration = time_format::format_duration(duration_us);
+                                    let mut log_message = if rows_affected == 1 {
+                                        t!(
+                                            "editor.log.query_finished_one",
+                                            timestamp = timestamp,
+                                            duration = duration
+                                        )
+                                    } else {
+                                        t!(
+                                            "editor.log.query_finished_other",
+                                            timestamp = timestamp,
+                                            rows = rows_affected,
+                                            duration = duration
+                                        )
+                                    }
+                                    .into_owned();
                                     if let Some(timing) = &timing {
                                         log_message.push_str(&format!(
                                             " ({})",
@@ -933,14 +1006,19 @@ impl EditorPanel {
                         let duration_ms = query_duration.as_millis() as i64;
                         let error_message = format!("{e:#}");
 
-                        activity.finish(ActivityResult::Err("query execution failed".into()));
+                        activity.finish(ActivityResult::Err(
+                            t!("editor.activity.query_failed").into(),
+                        ));
 
                         window
                             .update(|window, cx| {
                                 // Log execution error to SQL log
                                 sql_view_clone.update(cx, |sql_view, cx| {
-                                    let log_message =
-                                        format!("query execution failed: {error_message}");
+                                    let log_message = t!(
+                                        "editor.log.query_failed",
+                                        error = error_message
+                                    )
+                                    .into_owned();
                                     sql_view.append_text(
                                         &blanco_ui::SqlViewMessage::Comment(log_message),
                                         cx,
@@ -1044,12 +1122,12 @@ impl EditorPanel {
             let submitted_on_close = submitted.clone();
             let weak_on_close = weak_editor_panel.clone();
             modal
-                .title("Query Parameters")
+                .title(t!("editor.parameters.title"))
                 .w(px(500.))
                 .child(param_form.clone())
                 .footer(
                     DialogFooter::new()
-                        .child(Button::new("clear").label("Clear").ghost().on_click({
+                        .child(Button::new("clear").label(t!("editor.parameters.clear")).ghost().on_click({
                             let param_form = param_form.clone();
                             let weak_editor_panel = weak_editor_panel.clone();
                             move |_, window, cx| {
@@ -1067,9 +1145,14 @@ impl EditorPanel {
                         }))
                         .child(
                             DialogClose::new()
-                                .child(Button::new("cancel").label("Cancel").outline()),
+                                .child(Button::new("cancel").label(t!("editor.cancel")).outline()),
                         )
-                        .child(DialogAction::new().child(Button::new("ok").primary().label("Run"))),
+                        .child(
+                            DialogAction::new().child(
+                                Button::new("ok").primary().label(t!("editor.parameters.run")),
+                            ),
+                        ),
+
                 )
                 .on_ok({
                     let param_form = param_form.clone();

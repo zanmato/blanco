@@ -203,7 +203,7 @@ impl EditorPanel {
         let formatter_settings = AppSettings::global(cx).settings.formatter.clone();
         let editor_settings = AppSettings::global(cx).settings.editor.clone();
 
-        let activity = ActivityReporter::global(cx).begin("linting");
+        let activity = ActivityReporter::global(cx).begin(t!("editor.activity.linting"));
 
         // Background task: do the heavy linting work
         let lint_task = cx.background_spawn(async move {
@@ -283,7 +283,10 @@ impl EditorPanel {
         let tab_index = self.active_tab_ix;
 
         let Some(TabType::Query(query_tab)) = self.tabs.get(tab_index) else {
-            window.push_notification((NotificationType::Error, "No query tab active"), cx);
+            window.push_notification(
+                (NotificationType::Error, t!("editor.format_no_query_tab")),
+                cx,
+            );
             return;
         };
 
@@ -303,7 +306,10 @@ impl EditorPanel {
         // Extract current statement using existing function
         let grammar = query_tab.context.db_type.sql_grammar();
         let Some(statement_info) = extract_statement_info(grammar, &text, cursor_pos) else {
-            window.push_notification((NotificationType::Info, "No query found at cursor"), cx);
+            window.push_notification(
+                (NotificationType::Info, t!("editor.no_query_at_cursor")),
+                cx,
+            );
             return;
         };
 
@@ -330,7 +336,8 @@ impl EditorPanel {
                 Err(e) => {
                     window
                         .update(|_window, cx| {
-                            let error_message = SharedString::from(format!("Format failed: {}", e));
+                            let error_message =
+                                SharedString::from(t!("editor.format_failed", error = e));
                             _window.push_notification((NotificationType::Error, error_message), cx);
                         })
                         .log_err();
@@ -356,8 +363,10 @@ impl EditorPanel {
                             state.apply_lsp_edits(&vec![text_edit], window, cx);
                         });
 
-                        window
-                            .push_notification((NotificationType::Success, "Query formatted"), cx);
+                        window.push_notification(
+                            (NotificationType::Success, t!("editor.query_formatted")),
+                            cx,
+                        );
                     }
                 })
                 .log_err();
@@ -437,7 +446,7 @@ impl EditorPanel {
                 Some(range) => range,
                 None => {
                     window.push_notification(
-                        (NotificationType::Info, "No query found at cursor"),
+                        (NotificationType::Info, t!("editor.no_query_at_cursor")),
                         cx,
                     );
                     return;

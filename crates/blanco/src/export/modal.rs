@@ -75,9 +75,9 @@ pub struct ExportOptions {
 type OptionSelect = Entity<SelectState<Vec<String>>>;
 
 /// A select over `all`, labelled with `label`, starting at `selected`.
-fn option_select<T: Copy + PartialEq>(
+fn option_select<T: Copy + PartialEq, Label: ToString>(
     all: &[T],
-    label: fn(T) -> &'static str,
+    label: fn(T) -> Label,
     selected: T,
     window: &mut Window,
     cx: &mut App,
@@ -85,6 +85,15 @@ fn option_select<T: Copy + PartialEq>(
     let labels = all.iter().map(|item| label(*item).to_string()).collect();
     let selected = all.iter().position(|item| *item == selected).unwrap_or(0);
     cx.new(|cx| SelectState::new(labels, Some(IndexPath::new(selected)), window, cx))
+}
+
+fn quoting_label(quoting: CsvQuoting) -> SharedString {
+    match quoting {
+        CsvQuoting::Always => t!("export.csv.quoting_always"),
+        CsvQuoting::WhenNeeded => t!("export.csv.quoting_when_needed"),
+        CsvQuoting::Never => t!("export.csv.quoting_never"),
+    }
+    .into()
 }
 
 /// The item of `all` the select has chosen.
@@ -129,7 +138,7 @@ impl CsvControls {
             quote: input(&settings.quote, window, cx),
             quoting: option_select(
                 &CsvQuoting::ALL,
-                CsvQuoting::label,
+                quoting_label,
                 settings.quoting,
                 window,
                 cx,
@@ -195,9 +204,8 @@ impl ExportModal {
             cx.new(|cx| SelectState::new(formats.clone(), Some(IndexPath::new(0)), window, cx));
 
         // Initialize directory input
-        let directory_input = cx.new(|cx| {
-            InputState::new(window, cx).placeholder("Export directory (e.g., /home/user/exports)")
-        });
+        let directory_input = cx
+            .new(|cx| InputState::new(window, cx).placeholder(t!("export.directory_placeholder")));
 
         // Generate default filename and prepopulate it
         let default_filename = generate_default_filename(&table_name, &ExportFormat::Csv);
@@ -278,11 +286,11 @@ impl ExportModal {
         let format = self.get_selected_format(cx);
 
         if directory.is_empty() {
-            return Err("Please select a directory".to_string());
+            return Err(t!("export.select_directory").into_owned());
         }
 
         if filename.is_empty() {
-            return Err("Please enter a filename".to_string());
+            return Err(t!("export.enter_filename").into_owned());
         }
 
         let dir_path = PathBuf::from(directory.as_ref());
@@ -304,7 +312,7 @@ impl ExportModal {
             files: false,
             directories: true,
             multiple: false,
-            prompt: Some("Select export directory".into()),
+            prompt: Some(t!("export.select_directory_prompt").into()),
         });
 
         let directory_input = self.directory_input.clone();
@@ -449,7 +457,16 @@ impl ExportModal {
                     ..
                 }) => Some((
                     NotificationType::Success,
-                    format!("Exported {rows_exported} rows to {file_path}"),
+                    t!(
+                        if *rows_exported == 1 {
+                            "export.exported_rows_one"
+                        } else {
+                            "export.exported_rows_other"
+                        },
+                        count = rows_exported,
+                        path = file_path
+                    )
+                    .into_owned(),
                 )),
                 // A cancelled or failed export leaves a partial file behind,
                 // which is not something to keep.
@@ -460,7 +477,10 @@ impl ExportModal {
                 Err(error) => {
                     remove_partial_file(&file_path).await;
                     tracing::error!("Export failed: {error:#}");
-                    Some((NotificationType::Error, format!("Export failed: {error:#}")))
+                    Some((
+                        NotificationType::Error,
+                        t!("export.failed", error = format!("{error:#}")).into_owned(),
+                    ))
                 }
             };
 
@@ -485,9 +505,9 @@ impl ExportModal {
         div().when(self.is_exporting, |this| {
             this.text_sm()
                 .text_color(cx.theme().muted_foreground)
-                .child(format!(
-                    "Exporting… {} rows written. Close the dialog to stop.",
-                    self.exported_rows.load(Ordering::Relaxed)
+                .child(t!(
+                    "export.progress",
+                    count = self.exported_rows.load(Ordering::Relaxed)
                 ))
         })
     }
@@ -507,7 +527,7 @@ pub fn open_export_dialog(modal: Entity<ExportModal>, window: &mut Window, cx: &
     window.open_dialog(cx, move |dialog, _window, cx| {
         let is_exporting = modal.read(cx).is_exporting();
         dialog
-            .title("Export Table Data")
+            .title(t!("export.title"))
             .h(px(600.0))
             .child(modal.clone())
             .on_close({
@@ -517,13 +537,16 @@ pub fn open_export_dialog(modal: Entity<ExportModal>, window: &mut Window, cx: &
             .footer(
                 DialogFooter::new()
                     .child(
-                        DialogClose::new()
-                            .child(Button::new("export-cancel").label("Cancel").outline()),
+                        DialogClose::new().child(
+                            Button::new("export-cancel")
+                                .label(t!("export.cancel"))
+                                .outline(),
+                        ),
                     )
                     .child(
                         Button::new("export-submit")
                             .primary()
-                            .label("Export")
+                            .label(t!("export.export"))
                             .loading(is_exporting)
                             .on_click({
                                 let modal = modal.clone();
@@ -541,7 +564,7 @@ impl ExportModal {
         let csv = &self.csv;
         let custom_delimiter =
             chosen(&csv.delimiter, &CsvDelimiter::ALL, cx) == CsvDelimiter::Custom;
-        let field = |label: &'static str, control: gpui::AnyElement| {
+        let field = |label: SharedString, control: gpui::AnyElement| {
             v_flex()
                 .gap_2()
                 .flex_1()
@@ -556,11 +579,11 @@ impl ExportModal {
                     .gap_3()
                     .items_start()
                     .child(field(
-                        "Delimiter",
+                        t!("export.csv.delimiter").into(),
                         Select::new(&csv.delimiter).into_any_element(),
                     ))
                     .child(field(
-                        "Custom Delimiter",
+                        t!("export.csv.custom_delimiter").into(),
                         Input::new(&csv.custom_delimiter)
                             .disabled(!custom_delimiter)
                             .into_any_element(),
@@ -571,21 +594,21 @@ impl ExportModal {
                     .gap_3()
                     .items_start()
                     .child(field(
-                        "Quote Values",
+                        t!("export.csv.quote_values").into(),
                         Select::new(&csv.quoting).into_any_element(),
                     ))
                     .child(field(
-                        "Quote Character",
+                        t!("export.csv.quote_character").into(),
                         Input::new(&csv.quote).into_any_element(),
                     )),
             )
             .child(field(
-                "NULL Text",
+                t!("export.csv.null_text").into(),
                 Input::new(&csv.null_text).into_any_element(),
             ))
             .child(
                 Checkbox::new("export-csv-header")
-                    .label("Header row")
+                    .label(t!("export.csv.header_row").into_owned())
                     .checked(csv.header)
                     .on_click(cx.listener(|modal, checked: &bool, _, cx| {
                         modal.csv.header = *checked;
@@ -597,7 +620,7 @@ impl ExportModal {
                     .gap_3()
                     .child(
                         Checkbox::new("export-csv-replace-line-breaks")
-                            .label("Replace line breaks with")
+                            .label(t!("export.csv.replace_line_breaks_with").into_owned())
                             .checked(csv.replace_line_breaks)
                             .on_click(cx.listener(|modal, checked: &bool, _, cx| {
                                 modal.csv.replace_line_breaks = *checked;
@@ -642,34 +665,38 @@ impl Render for ExportModal {
             .child(
                 v_flex()
                     .gap_2()
-                    .child(div().text_sm().child("Export Format"))
+                    .child(div().text_sm().child(t!("export.format")))
                     .child(Select::new(&self.format_select)),
             )
             .child(
                 v_flex()
                     .gap_2()
-                    .child(div().text_sm().child("Export Directory"))
+                    .child(div().text_sm().child(t!("export.directory")))
                     .child(
                         h_flex()
                             .gap_2()
                             .child(Input::new(&self.directory_input).flex_1())
-                            .child(Button::new("browse-btn").label("Browse").on_click(
-                                cx.listener(|modal: &mut Self, _event, window, cx| {
-                                    modal.browse_directory(window, cx);
-                                }),
-                            )),
+                            .child(
+                                Button::new("browse-btn")
+                                    .label(t!("export.browse"))
+                                    .on_click(cx.listener(
+                                        |modal: &mut Self, _event, window, cx| {
+                                            modal.browse_directory(window, cx);
+                                        },
+                                    )),
+                            ),
                     ),
             )
             .child(
                 v_flex()
                     .gap_2()
-                    .child(div().text_sm().child("File Name"))
+                    .child(div().text_sm().child(t!("export.file_name")))
                     .child(Input::new(&self.filename_input)),
             )
             .child(
                 v_flex()
                     .gap_2()
-                    .child(div().text_sm().child("Encoding"))
+                    .child(div().text_sm().child(t!("export.encoding")))
                     .child(Select::new(&self.encoding_select)),
             )
             .when(
@@ -678,7 +705,7 @@ impl Render for ExportModal {
                     this.child(
                         v_flex()
                             .gap_2()
-                            .child(div().text_sm().child("Binary Values"))
+                            .child(div().text_sm().child(t!("export.binary_values")))
                             .child(Select::new(&self.binary_select)),
                     )
                 },
@@ -687,7 +714,7 @@ impl Render for ExportModal {
                 ExportFormat::Csv => this.child(self.render_csv_options(cx)),
                 ExportFormat::Sql => this.child(
                     Checkbox::new("export-sql-multi-row")
-                        .label("One INSERT for all rows")
+                        .label(t!("export.sql_multi_row").into_owned())
                         .checked(self.sql_multi_row)
                         .on_click(cx.listener(|modal, checked: &bool, _, cx| {
                             modal.sql_multi_row = *checked;

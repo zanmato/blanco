@@ -9,6 +9,7 @@
 use async_trait::async_trait;
 
 use crate::connection_config::{ConnectionConfig, SecretKind};
+use crate::ssh_tunnel::SshAuthenticationError;
 
 /// What a prompt shows: which connection, which secret and whose it is.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -80,11 +81,12 @@ pub struct SecretPromptCancelled {
 
 impl std::fmt::Display for SecretPromptCancelled {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "Connecting was cancelled at the {} prompt",
-            self.kind.label()
-        )
+        let message = match self.kind {
+            SecretKind::Password => t!("database.cancelled_at_password"),
+            SecretKind::SshPassword => t!("database.cancelled_at_ssh_password"),
+            SecretKind::SshPrivateKeyPassword => t!("database.cancelled_at_key_passphrase"),
+        };
+        f.write_str(&message)
     }
 }
 
@@ -98,60 +100,41 @@ pub(crate) fn rejected_secret(
     prompted: &[SecretKind],
     error: &anyhow::Error,
 ) -> Option<SecretKind> {
-    let message = format!("{error:#}").to_lowercase();
     let promptable = |kind: SecretKind| {
         config.uses_secret(kind)
             && (config.asks_for(kind)
                 || prompted.contains(&kind)
                 || config.secret(kind).is_none_or(str::is_empty))
     };
-    if is_ssh_key_failure(&message) {
-        let kind = SecretKind::SshPrivateKeyPassword;
-        return promptable(kind).then_some(kind);
-    }
-    if let Some(failure) = ssh_authentication_failure(&message) {
+    let ssh_failure = error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<SshAuthenticationError>());
+    if let Some(failure) = ssh_failure {
+        if let SshAuthenticationError::KeyNotLoaded { .. } = failure {
+            let kind = SecretKind::SshPrivateKeyPassword;
+            return promptable(kind).then_some(kind);
+        }
         // The password is the tunnel's last resort after every key. Asking
         // for one helps when it was refused, when the connection is set to
         // ask, or when there was nothing at all to try. Keys alone being
         // refused is not a missing password.
         let kind = SecretKind::SshPassword;
         let password_at_stake = match failure {
-            SshAuthenticationFailure::NothingToTry => true,
-            SshAuthenticationFailure::Refused { tried_password } => {
-                tried_password || config.asks_for(kind) || prompted.contains(&kind)
+            SshAuthenticationError::NothingToTry { .. } => true,
+            SshAuthenticationError::Refused { tried_password, .. }
+            | SshAuthenticationError::Closed { tried_password, .. } => {
+                *tried_password || config.asks_for(kind) || prompted.contains(&kind)
             }
+            SshAuthenticationError::KeyNotLoaded { .. } => false,
         };
         return (password_at_stake && promptable(kind)).then_some(kind);
     }
+    let message = format!("{error:#}").to_lowercase();
     if is_authentication_failure(&message) {
         let kind = SecretKind::Password;
         return promptable(kind).then_some(kind);
     }
     None
-}
-
-/// The key chosen for the connection did not load, which a passphrase fixes.
-fn is_ssh_key_failure(message: &str) -> bool {
-    message.contains("failed to load private key")
-}
-
-enum SshAuthenticationFailure {
-    /// No key, agent or password was available.
-    NothingToTry,
-    /// The SSH host refused everything offered.
-    Refused { tried_password: bool },
-}
-
-/// How `ssh_tunnel::authenticate` failed, from its lowercased message.
-fn ssh_authentication_failure(message: &str) -> Option<SshAuthenticationFailure> {
-    if message.contains("no way to authenticate") {
-        return Some(SshAuthenticationFailure::NothingToTry);
-    }
-    let (_, tried) = message.split_once("ssh authentication failed for")?;
-    let tried_password = tried
-        .split_once("; tried ")
-        .is_some_and(|(_, tried)| tried.split(", ").any(|what| what.trim() == "password"));
-    Some(SshAuthenticationFailure::Refused { tried_password })
 }
 
 /// Whether a lowercased error message is a server refusing the credentials,
@@ -233,25 +216,33 @@ mod tests {
             None,
             None,
         );
-        let rejected = anyhow::anyhow!(
-            "SSH authentication failed for deploy@bastion:22; tried 1 key(s) from the SSH agent, password"
-        );
+        let rejected = anyhow::Error::new(SshAuthenticationError::Refused {
+            hop: "deploy@bastion:22".to_string(),
+            tried: vec![
+                "1 key(s) from the SSH agent".to_string(),
+                "password".to_string(),
+            ],
+            tried_password: true,
+        })
+        .context("Failed to create SSH tunnel");
         assert_eq!(
             rejected_secret(&tunnel, &[], &rejected),
             Some(SecretKind::SshPassword)
         );
-        let nothing = anyhow::anyhow!(
-            "No way to authenticate deploy@bastion:22: no key file, SSH agent, default key or password"
-        );
+        let nothing = anyhow::Error::new(SshAuthenticationError::NothingToTry {
+            hop: "deploy@bastion:22".to_string(),
+        });
         assert_eq!(
             rejected_secret(&tunnel, &[], &nothing),
             Some(SecretKind::SshPassword)
         );
         // Keys alone were refused: no password was involved, so none is
         // asked for, unless the connection is set to ask for it.
-        let keys_refused = anyhow::anyhow!(
-            "SSH authentication failed for deploy@bastion:22; tried /home/deploy/.ssh/id_ed25519"
-        );
+        let keys_refused = anyhow::Error::new(SshAuthenticationError::Refused {
+            hop: "deploy@bastion:22".to_string(),
+            tried: vec!["/home/deploy/.ssh/id_ed25519".to_string()],
+            tried_password: false,
+        });
         assert_eq!(rejected_secret(&tunnel, &[], &keys_refused), None);
         let asking = tunnel
             .clone()
@@ -268,9 +259,10 @@ mod tests {
             None,
             None,
         );
-        let locked = anyhow::anyhow!(
-            "Failed to load private key /home/deploy/.ssh/id_ed25519: The key is encrypted"
-        );
+        let locked = anyhow::Error::new(SshAuthenticationError::KeyNotLoaded {
+            path: "/home/deploy/.ssh/id_ed25519".to_string(),
+            error: "The key is encrypted".to_string(),
+        });
         assert_eq!(
             rejected_secret(&keyed, &[], &locked),
             Some(SecretKind::SshPrivateKeyPassword)

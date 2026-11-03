@@ -272,6 +272,10 @@ fn window_options(saved: &WindowData, cx: &App) -> WindowOptions {
         app_owns_titlebar_drag: true,
         // Matches gpui's own default: throttle to 30fps while inactive.
         inactive_frame_interval: Some(Duration::from_micros(33_333)),
+        // gpui's defaults: 30fps in Low Power Mode, 60fps under thermal pressure.
+        low_power_frame_interval: Some(Duration::from_micros(33_333)),
+        thermal_frame_interval: Some(Duration::from_micros(16_667)),
+        use_display_p3: false,
         is_minimizable: true,
         is_resizable: true,
         tabbing_identifier: None,
@@ -432,7 +436,11 @@ fn spawn_service_listener(cx: &mut App) {
                         status_bar.update(cx, |state, cx| {
                             state.flash(
                                 ActivityResult::Ok(
-                                    format!("connected to {}", connected.database_name).into(),
+                                    t!(
+                                        "shell.status.connected",
+                                        database = connected.database_name
+                                    )
+                                    .into(),
                                 ),
                                 cx,
                             );
@@ -450,12 +458,19 @@ fn spawn_service_listener(cx: &mut App) {
                         }
                         let result = if disconnected.idle {
                             ActivityResult::Ok(
-                                format!("closed idle connection {}", disconnected.database_name)
-                                    .into(),
+                                t!(
+                                    "shell.status.closed_idle",
+                                    database = disconnected.database_name
+                                )
+                                .into(),
                             )
                         } else {
                             ActivityResult::Err(
-                                format!("disconnected from {}", disconnected.database_name).into(),
+                                t!(
+                                    "shell.status.disconnected",
+                                    database = disconnected.database_name
+                                )
+                                .into(),
                             )
                         };
                         status_bar.update(cx, |state, cx| state.flash(result, cx));

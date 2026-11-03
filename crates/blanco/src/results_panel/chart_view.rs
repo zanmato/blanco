@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use blanco_ui::table::TableState;
 use gpui::{
     AnyElement, App, AppContext, Context, Entity, FocusHandle, Focusable, Hsla, InteractiveElement,
     IntoElement, ParentElement, Render, SharedString, Styled, Subscription, Window, div,
@@ -18,7 +19,6 @@ use gpui_component::{
     },
     scroll::ScrollableElement as _,
     select::{Select, SelectEvent, SelectState},
-    table::TableState,
     v_flex,
 };
 
@@ -146,12 +146,13 @@ pub enum ChartKind {
 }
 
 impl ChartKind {
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> SharedString {
         match self {
-            ChartKind::Line => "Line",
-            ChartKind::Bar => "Bar",
-            ChartKind::Pie => "Pie",
+            ChartKind::Line => t!("chart.kind.line"),
+            ChartKind::Bar => t!("chart.kind.bar"),
+            ChartKind::Pie => t!("chart.kind.pie"),
         }
+        .into()
     }
 
     pub fn all() -> [ChartKind; 3] {
@@ -170,13 +171,14 @@ pub enum Aggregate {
 }
 
 impl Aggregate {
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> SharedString {
         match self {
-            Aggregate::None => "None",
-            Aggregate::Sum => "Sum",
-            Aggregate::Avg => "Avg",
-            Aggregate::Count => "Count",
+            Aggregate::None => t!("chart.aggregate.none"),
+            Aggregate::Sum => t!("chart.aggregate.sum"),
+            Aggregate::Avg => t!("chart.aggregate.avg"),
+            Aggregate::Count => t!("chart.aggregate.count"),
         }
+        .into()
     }
 
     pub fn all() -> [Aggregate; 4] {
@@ -441,8 +443,7 @@ impl ChartView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let kind_items: Vec<SharedString> =
-            ChartKind::all().iter().map(|k| k.label().into()).collect();
+        let kind_items: Vec<SharedString> = ChartKind::all().iter().map(|k| k.label()).collect();
         let kind_select =
             cx.new(|cx| SelectState::new(kind_items, Some(IndexPath::new(0)), window, cx));
 
@@ -451,8 +452,7 @@ impl ChartView {
         let value_select =
             cx.new(|cx| SelectState::new(Vec::<SharedString>::new(), None, window, cx));
 
-        let agg_items: Vec<SharedString> =
-            Aggregate::all().iter().map(|a| a.label().into()).collect();
+        let agg_items: Vec<SharedString> = Aggregate::all().iter().map(|a| a.label()).collect();
         let aggregate_select =
             cx.new(|cx| SelectState::new(agg_items, Some(IndexPath::new(0)), window, cx));
 
@@ -460,6 +460,7 @@ impl ChartView {
             cx.new(|cx| SelectState::new(Vec::<SharedString>::new(), None, window, cx));
 
         let subs = vec![
+            cx.observe_global_in::<crate::i18n::Locale>(window, Self::on_locale_change),
             cx.subscribe_in(&kind_select, window, Self::on_kind_changed),
             cx.subscribe(&axis_select, Self::on_choice_changed),
             cx.subscribe(&value_select, Self::on_choice_changed),
@@ -562,6 +563,30 @@ impl ChartView {
 
     /// Offer the result's columns again, keeping the columns chosen so far
     /// where the result still has them.
+    /// Names the chart kinds, aggregates and the series' "none" again in the
+    /// new language. The selects are read by position, so they keep their
+    /// choices.
+    fn on_locale_change(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let relabel = |select: &Entity<SelectState<Vec<SharedString>>>,
+                       items: Vec<SharedString>,
+                       window: &mut Window,
+                       cx: &mut Context<Self>| {
+            select.update(cx, |select, cx| {
+                let selected = select.selected_index(cx);
+                select.set_items(items, window, cx);
+                select.set_selected_index(selected, window, cx);
+            });
+        };
+        let kinds = ChartKind::all().iter().map(|kind| kind.label()).collect();
+        relabel(&self.kind_select, kinds, window, cx);
+        let aggregates = Aggregate::all()
+            .iter()
+            .map(|aggregate| aggregate.label())
+            .collect();
+        relabel(&self.aggregate_select, aggregates, window, cx);
+        self.rebuild_column_selects(window, cx);
+    }
+
     pub fn rebuild_column_selects(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let previous = self.spec(cx);
         let (axis_items, axis_indices, value_items, value_indices, all_items, all_indices) =
@@ -592,7 +617,7 @@ impl ChartView {
                     numeric_pairs.iter().map(|(_, n)| n.clone()).collect();
                 let value_indices: Vec<usize> = numeric_pairs.iter().map(|(i, _)| *i).collect();
                 // Series: all columns (like axis), prepended with "None".
-                let mut all_items = vec![SharedString::from("None")];
+                let mut all_items = vec![SharedString::from(t!("chart.series_none"))];
                 all_items.extend(pairs.iter().map(|(_, n)| n.clone()));
                 let mut all_indices = vec![usize::MAX];
                 all_indices.extend(pairs.iter().map(|(i, _)| *i));
@@ -873,18 +898,14 @@ impl ChartView {
 
     fn render_axis_field(
         &self,
-        label: &str,
+        label: impl Into<SharedString>,
         select: &Entity<SelectState<Vec<SharedString>>>,
-        empty_text: &str,
+        empty_text: impl Into<SharedString>,
     ) -> gpui::Div {
         v_flex()
             .gap_1()
-            .child(div().text_sm().child(label.to_string()))
-            .child(
-                Select::new(select)
-                    .small()
-                    .placeholder(SharedString::from(empty_text.to_string())),
-            )
+            .child(div().text_sm().child(label.into()))
+            .child(Select::new(select).small().placeholder(empty_text.into()))
     }
 
     fn render_settings(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -899,37 +920,36 @@ impl ChartView {
             .child(
                 v_flex()
                     .gap_1()
-                    .child(div().text_sm().child("Chart"))
+                    .child(div().text_sm().child(SharedString::from(t!("chart.chart"))))
                     .child(Select::new(&self.kind_select).small()),
             )
-            .child(match kind {
-                ChartKind::Line => {
-                    self.render_axis_field("X-axis", &self.axis_select, "Select a column")
-                }
-                ChartKind::Bar => {
-                    self.render_axis_field("Categories", &self.axis_select, "Select a column")
-                }
-                ChartKind::Pie => {
-                    self.render_axis_field("Keys", &self.axis_select, "Select a column")
-                }
-            })
-            .child(match kind {
-                ChartKind::Line => {
-                    self.render_axis_field("Y-axis", &self.value_select, "Select a numeric column")
-                }
-                ChartKind::Bar => {
-                    self.render_axis_field("Values", &self.value_select, "Select a numeric column")
-                }
-                ChartKind::Pie => {
-                    self.render_axis_field("Values", &self.value_select, "Select a numeric column")
-                }
-            })
-            .child(self.render_axis_field("Aggregate", &self.aggregate_select, ""))
-            .child(self.render_axis_field("Series", &self.series_select, "None"))
+            .child(self.render_axis_field(
+                match kind {
+                    ChartKind::Line => t!("chart.x_axis"),
+                    ChartKind::Bar => t!("chart.categories"),
+                    ChartKind::Pie => t!("chart.keys"),
+                },
+                &self.axis_select,
+                t!("chart.select_column"),
+            ))
+            .child(self.render_axis_field(
+                match kind {
+                    ChartKind::Line => t!("chart.y_axis"),
+                    ChartKind::Bar | ChartKind::Pie => t!("chart.values"),
+                },
+                &self.value_select,
+                t!("chart.select_numeric_column"),
+            ))
+            .child(self.render_axis_field(t!("chart.aggregate_label"), &self.aggregate_select, ""))
+            .child(self.render_axis_field(
+                t!("chart.series"),
+                &self.series_select,
+                t!("chart.series_none"),
+            ))
             .when(matches!(kind, ChartKind::Line), |this| {
                 this.child(
                     Checkbox::new("chart-line-stepped")
-                        .label("Stepped")
+                        .label(t!("chart.stepped").into_owned())
                         .small()
                         .checked(self.config.line_stepped)
                         .on_click(cx.listener(|view, checked: &bool, _window, cx| {
@@ -940,7 +960,7 @@ impl ChartView {
                 )
                 .child(
                     Checkbox::new("chart-line-points")
-                        .label("Show points")
+                        .label(t!("chart.show_points").into_owned())
                         .small()
                         .checked(self.config.line_show_points)
                         .on_click(cx.listener(|view, checked: &bool, _window, cx| {
@@ -980,7 +1000,7 @@ impl ChartView {
         let theme = cx.theme();
         let muted_fg = theme.muted_foreground;
         let border_color = theme.border;
-        let make_placeholder = |message: &'static str| -> AnyElement {
+        let make_placeholder = |message: std::borrow::Cow<'static, str>| -> AnyElement {
             div()
                 .flex_1()
                 .h_full()
@@ -989,7 +1009,7 @@ impl ChartView {
                 .items_center()
                 .justify_center()
                 .text_color(muted_fg)
-                .child(message)
+                .child(SharedString::from(message))
                 .into_any_element()
         };
 
@@ -998,16 +1018,16 @@ impl ChartView {
         if has_series {
             return match self.render_multi_series(cx, border_color) {
                 Some(el) => el,
-                None => make_placeholder("Select an axis and a numeric value column."),
+                None => make_placeholder(t!("chart.select_axis_and_value")),
             };
         }
 
         let Some(points) = self.extract_points(cx) else {
-            return make_placeholder("Select an axis and a numeric value column.");
+            return make_placeholder(t!("chart.select_axis_and_value"));
         };
 
         if points.is_empty() {
-            return make_placeholder("No plottable rows (all values are NULL or non-numeric).");
+            return make_placeholder(t!("chart.no_plottable_rows"));
         }
 
         match self.kind {
@@ -1056,7 +1076,7 @@ impl ChartView {
                 let points: Vec<ChartPoint> =
                     points.into_iter().filter(|p| p.value > 0.0).collect();
                 if points.is_empty() {
-                    return make_placeholder("Pie charts require positive values.");
+                    return make_placeholder(t!("chart.pie_needs_positive_values"));
                 }
                 let pie = PieChart::new(points.clone())
                     .outer_radius(self.pie_radius())

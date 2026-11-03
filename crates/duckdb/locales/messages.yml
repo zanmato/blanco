@@ -1,0 +1,25 @@
+_version: 2
+# Messages the DuckDB driver writes around the engine's errors. See the
+# glossary at the top of crates/blanco/locales/app.yml.
+duckdb:
+  no_file_path:
+    en: "The DuckDB connection has no file path"
+    sv: "DuckDB-anslutningen har ingen sökväg till en fil"
+  file_locked:
+    en: "%{path} is open for writing in another program. Close it there, or connect read only. (%{message})"
+    sv: "%{path} är öppen för skrivning i ett annat program. Stäng den där eller anslut skrivskyddat. (%{message})"
+  open_failed:
+    en: "Failed to open %{path}"
+    sv: "Det gick inte att öppna %{path}"
+  not_connected:
+    en: "Not connected to DuckDB"
+    sv: "Inte ansluten till DuckDB"
+  worker_stopped:
+    en: "The DuckDB worker stopped"
+    sv: "DuckDB-arbetstråden har stannat"
+  switch_database_failed:
+    en: "Failed to switch to database %{database}"
+    sv: "Det gick inte att byta till databasen %{database}"
+  table_not_found:
+    en: "Table '%{table}' not found"
+    sv: "Tabellen '%{table}' hittades inte"

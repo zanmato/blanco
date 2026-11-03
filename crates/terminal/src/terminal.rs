@@ -6,6 +6,11 @@
 //! `element.rs` paints. [`view::TerminalView`] wraps it into a focusable view
 //! with keyboard handling, actions and a blinking cursor.
 
+#[macro_use]
+extern crate rust_i18n;
+
+rust_i18n::i18n!("locales", fallback = "en");
+
 pub mod element;
 mod keys;
 mod mouse;
@@ -33,7 +38,7 @@ use alacritty_terminal::tty;
 use anyhow::Context as _;
 use gpui::{
     App, AppContext as _, ClipboardItem, Context, Entity, EventEmitter, Hsla, Keystroke, Modifiers,
-    MouseButton, MouseDownEvent, MouseUpEvent, Pixels, Point, ScrollWheelEvent, Task, TouchPhase,
+    MouseButton, MouseDownEvent, MouseUpEvent, Pixels, Point, ScrollEvent, Task, TouchPhase,
     px,
 };
 use vte::ansi::{Color, CursorShape as EngineCursorShape, NamedColor};
@@ -304,9 +309,9 @@ impl Terminal {
             escape_args: false,
         };
         let pty = tty::new(&options, size.window_size(), window_id)
-            .context("opening a pseudo terminal")?;
+            .with_context(|| t!("terminal.errors.open_pseudo_terminal"))?;
         let event_loop = EventLoop::new(term.clone(), Listener(sender), pty, true, false)
-            .context("starting the terminal reader")?;
+            .with_context(|| t!("terminal.errors.start_reader"))?;
         let notifier = Notifier(event_loop.channel());
         // The reader thread ends on its own when the PTY closes, so its join
         // handle is not kept.
@@ -706,7 +711,7 @@ impl Terminal {
     /// Wheel movement: reported to mouse-aware programs, turned into arrow keys
     /// for full-screen programs that asked for alternate scrolling, otherwise
     /// scrolls the buffer. `position` is relative to the grid's origin.
-    pub fn scroll_wheel(&mut self, event: &ScrollWheelEvent, position: Point<Pixels>) {
+    pub fn scroll_wheel(&mut self, event: &ScrollEvent, position: Point<Pixels>) {
         let lines = match event.touch_phase {
             TouchPhase::Started => {
                 self.scroll_remainder = px(0.0);

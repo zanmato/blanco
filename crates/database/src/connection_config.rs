@@ -296,7 +296,7 @@ impl ConnectionConfig {
                 .ssh_host
                 .clone()
                 .filter(|host| !host.trim().is_empty())
-                .ok_or_else(|| anyhow::anyhow!("SSH host is required"))?,
+                .ok_or_else(|| anyhow::anyhow!(t!("database.ssh_host_required")))?,
             ssh_port: self.ssh_port(),
             // An empty user is taken from ~/.ssh/config or the local user.
             ssh_user: self.ssh_user.clone().unwrap_or_default(),

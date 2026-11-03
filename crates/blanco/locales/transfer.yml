@@ -1,0 +1,307 @@
+_version: 2
+# The export and import dialogs. Terms follow the glossary in app.yml.
+export:
+  title:
+    en: "Export Table Data"
+    sv: "Exportera tabelldata"
+  format:
+    en: "Export Format"
+    sv: "Exportformat"
+  directory:
+    en: "Export Directory"
+    sv: "Exportmapp"
+  directory_placeholder:
+    en: "Export directory (e.g., /home/user/exports)"
+    sv: "Exportmapp (t.ex. /home/user/exports)"
+  browse:
+    en: "Browse"
+    sv: "Bläddra"
+  select_directory_prompt:
+    en: "Select export directory"
+    sv: "Välj exportmapp"
+  file_name:
+    en: "File Name"
+    sv: "Filnamn"
+  encoding:
+    en: "Encoding"
+    sv: "Teckenkodning"
+  binary_values:
+    en: "Binary Values"
+    sv: "Binära värden"
+  sql_multi_row:
+    en: "One INSERT for all rows"
+    sv: "En INSERT för alla rader"
+  select_directory:
+    en: "Please select a directory"
+    sv: "Välj en mapp"
+  enter_filename:
+    en: "Please enter a filename"
+    sv: "Ange ett filnamn"
+  cancel:
+    en: "Cancel"
+    sv: "Avbryt"
+  export:
+    en: "Export"
+    sv: "Exportera"
+  progress:
+    en: "Exporting… %{count} rows written. Close the dialog to stop."
+    sv: "Exporterar… %{count} rader skrivna. Stäng dialogrutan för att stoppa."
+  exported_rows_one:
+    en: "Exported %{count} row to %{path}"
+    sv: "Exporterade %{count} rad till %{path}"
+  exported_rows_other:
+    en: "Exported %{count} rows to %{path}"
+    sv: "Exporterade %{count} rader till %{path}"
+  failed:
+    en: "Export failed: %{error}"
+    sv: "Exporten misslyckades: %{error}"
+  csv:
+    delimiter:
+      en: "Delimiter"
+      sv: "Avgränsare"
+    custom_delimiter:
+      en: "Custom Delimiter"
+      sv: "Egen avgränsare"
+    quote_values:
+      en: "Quote Values"
+      sv: "Citera värden"
+    quote_character:
+      en: "Quote Character"
+      sv: "Citattecken"
+    null_text:
+      en: "NULL Text"
+      sv: "Text för NULL"
+    header_row:
+      en: "Header row"
+      sv: "Rubrikrad"
+    replace_line_breaks_with:
+      en: "Replace line breaks with"
+      sv: "Ersätt radbrytningar med"
+    quoting_always:
+      en: "Always"
+      sv: "Alltid"
+    quoting_when_needed:
+      en: "When needed"
+      sv: "Vid behov"
+    quoting_never:
+      en: "Never"
+      sv: "Aldrig"
+  errors:
+    no_streaming:
+      en: "Transformer '%{format}' does not support streaming"
+      sv: "Formatet '%{format}' kan inte strömmas"
+    initialize_failed:
+      en: "Failed to initialize transformer: %{error}"
+      sv: "Kunde inte starta konverteringen: %{error}"
+    read_row_failed:
+      en: "Failed to read a row: %{error}"
+      sv: "Kunde inte läsa en rad: %{error}"
+    create_file_failed:
+      en: "Failed to create file: %{error}"
+      sv: "Kunde inte skapa filen: %{error}"
+    write_bom_failed:
+      en: "Failed to write byte order mark: %{error}"
+      sv: "Kunde inte skriva byteordningsmarkering: %{error}"
+    write_initial_failed:
+      en: "Failed to write initial output: %{error}"
+      sv: "Kunde inte skriva filens början: %{error}"
+    transform_row_failed:
+      en: "Failed to transform row: %{error}"
+      sv: "Kunde inte konvertera en rad: %{error}"
+    write_row_failed:
+      en: "Failed to write transformed row: %{error}"
+      sv: "Kunde inte skriva en konverterad rad: %{error}"
+    finalize_failed:
+      en: "Failed to finalize transformer: %{error}"
+      sv: "Kunde inte avsluta konverteringen: %{error}"
+    write_final_failed:
+      en: "Failed to write final output: %{error}"
+      sv: "Kunde inte skriva filens slut: %{error}"
+    flush_failed:
+      en: "Failed to flush file: %{error}"
+      sv: "Kunde inte skriva klart filen: %{error}"
+    transform_data_failed:
+      en: "Failed to transform data: %{error}"
+      sv: "Kunde inte konvertera data: %{error}"
+    write_failed:
+      en: "Failed to write to file: %{error}"
+      sv: "Kunde inte skriva till filen: %{error}"
+import:
+  title:
+    en: "Import CSV"
+    sv: "Importera CSV"
+  file:
+    en: "CSV or JSON file"
+    sv: "CSV- eller JSON-fil"
+  file_placeholder:
+    en: "CSV file path (click Browse)"
+    sv: "Sökväg till CSV-fil (klicka på Bläddra)"
+  browse:
+    en: "Browse"
+    sv: "Bläddra"
+  select_file_prompt:
+    en: "Select CSV file"
+    sv: "Välj CSV-fil"
+  encoding:
+    en: "Encoding"
+    sv: "Teckenkodning"
+  delimiter:
+    en: "Delimiter"
+    sv: "Avgränsare"
+  auto_detect:
+    en: "Auto-detect"
+    sv: "Identifiera automatiskt"
+  delimiter_comma:
+    en: "Comma ,"
+    sv: "Komma ,"
+  delimiter_semicolon:
+    en: "Semicolon ;"
+    sv: "Semikolon ;"
+  delimiter_tab:
+    en: "Tab \\t"
+    sv: "Tabb \\t"
+  delimiter_pipe:
+    en: "Pipe |"
+    sv: "Lodstreck |"
+  first_row_is_header:
+    en: "First row is header"
+    sv: "Första raden är rubrikrad"
+  json_keys_become_columns:
+    en: "JSON: object keys become columns"
+    sv: "JSON: objektens nycklar blir kolumner"
+  no_headers:
+    en: "(no headers)"
+    sv: "(inga rubriker)"
+  detected:
+    en: "Detected %{encoding} | delimiter '%{delimiter}' | columns: %{columns}"
+    sv: "Identifierade %{encoding} | avgränsare '%{delimiter}' | kolumner: %{columns}"
+  column_mapping:
+    en: "Column mapping"
+    sv: "Kolumnmappning"
+  table_column:
+    en: "Table column"
+    sv: "Tabellkolumn"
+  source:
+    en: "Source"
+    sv: "Källa"
+  fixed_value:
+    en: "Fixed value"
+    sv: "Fast värde"
+  transform:
+    en: "Transform"
+    sv: "Omvandling"
+  transform_none:
+    en: "None"
+    sv: "Ingen"
+  transform_slugify:
+    en: "Slugify"
+    sv: "Gör till slug"
+  mapping_skip:
+    en: "Skip"
+    sv: "Hoppa över"
+  mapping_source_column:
+    en: "CSV: %{name} (#%{number})"
+    sv: "CSV: %{name} (nr %{number})"
+  mapping_fixed_value:
+    en: "Fixed value"
+    sv: "Fast värde"
+  on_conflict:
+    en: "On conflict"
+    sv: "Vid konflikt"
+  conflict_fail:
+    en: "Fail (abort + rollback)"
+    sv: "Misslyckas (avbryt och ångra)"
+  conflict_do_nothing:
+    en: "Do nothing"
+    sv: "Gör ingenting"
+  conflict_update:
+    en: "Update"
+    sv: "Uppdatera"
+  conflict_keys_placeholder:
+    en: "Conflict keys (comma-separated)"
+    sv: "Konfliktnycklar (kommaseparerade)"
+  update_columns:
+    en: "Update columns"
+    sv: "Kolumner att uppdatera"
+  preview:
+    en: "Preview (first 3 rows)"
+    sv: "Förhandsgranskning (de 3 första raderna)"
+  preview_map_one_column:
+    en: "-- map at least one column --"
+    sv: "-- mappa minst en kolumn --"
+  preview_no_columns_mapped:
+    en: "-- no columns mapped --"
+    sv: "-- inga kolumner mappade --"
+  preview_no_sample_data:
+    en: "-- no sample data --"
+    sv: "-- ingen exempeldata --"
+  progress:
+    en: "Importing... %{count} rows"
+    sv: "Importerar... %{count} rader"
+  complete:
+    en: "Import complete"
+    sv: "Importen är klar"
+  rows_imported_one:
+    en: "%{count} row imported into %{table} in %{seconds}s"
+    sv: "%{count} rad importerad till %{table} på %{seconds} s"
+  rows_imported_other:
+    en: "%{count} rows imported into %{table} in %{seconds}s"
+    sv: "%{count} rader importerade till %{table} på %{seconds} s"
+  done:
+    en: "Done"
+    sv: "Klar"
+  cancel:
+    en: "Cancel"
+    sv: "Avbryt"
+  import:
+    en: "Import"
+    sv: "Importera"
+  select_file:
+    en: "Please select a file"
+    sv: "Välj en fil"
+  map_one_column:
+    en: "Map at least one column"
+    sv: "Mappa minst en kolumn"
+  select_update_column:
+    en: "Select at least one column to update on conflict"
+    sv: "Välj minst en kolumn att uppdatera vid konflikt"
+  load_columns_failed:
+    en: "Failed to load columns: %{error}"
+    sv: "Kunde inte läsa in kolumnerna: %{error}"
+  read_file_failed:
+    en: "Failed to read file: %{error}"
+    sv: "Kunde inte läsa filen: %{error}"
+  failed:
+    en: "Import failed: %{error}"
+    sv: "Importen misslyckades: %{error}"
+  errors:
+    cancelled:
+      en: "import cancelled"
+      sv: "importen avbröts"
+    open_failed:
+      en: "failed to open %{path}"
+      sv: "kunde inte öppna %{path}"
+    read_failed:
+      en: "failed to read %{path}"
+      sv: "kunde inte läsa %{path}"
+    no_columns_mapped:
+      en: "no columns mapped for import"
+      sv: "inga kolumner är mappade för importen"
+    batches_applied:
+      en: "import failed, %{applied} of %{total} batches were applied"
+      sv: "importen misslyckades, %{applied} av %{total} omgångar hann köras"
+    read_json_sample:
+      en: "failed to read JSON sample"
+      sv: "kunde inte läsa JSON-urvalet"
+    read_csv_sample:
+      en: "failed to read CSV sample"
+      sv: "kunde inte läsa CSV-urvalet"
+    json_elements_not_objects:
+      en: "JSON array elements must be objects"
+      sv: "elementen i JSON-arrayen måste vara objekt"
+    json_line_not_object:
+      en: "each JSON line must be an object"
+      sv: "varje JSON-rad måste vara ett objekt"
+    no_json_objects:
+      en: "no JSON objects found"
+      sv: "inga JSON-objekt hittades"

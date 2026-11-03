@@ -2,9 +2,10 @@
 //! it is down, unless `BLANCO_RUN_DB_TESTS=1`.
 
 use blanco_core::{ConnectionContext, DatabaseService as _};
+use blanco_ui::table::TableSelection;
 use database::{ConnectionConfig, DatabaseType};
 use gpui::{TestAppContext, VisualTestContext};
-use gpui_component::{WindowExt as _, table::TableSelection};
+use gpui_component::WindowExt as _;
 
 use super::{ProcessListTab, SessionAction};
 use crate::app::CopySelection;
@@ -113,7 +114,7 @@ async fn process_list_tab_lists_copies_and_guards_read_only(cx: &mut TestAppCont
     // The copy shortcut copies the selected row as TSV with its header.
     let table_state = tab.read_with(&cx, |tab, _| tab.table_state.clone());
     table_state.update(&mut cx, |table, cx| {
-        table.set_selection(TableSelection::Row(row), cx)
+        table.set_selection(TableSelection::row(row), cx)
     });
     tab.update_in(&mut cx, |tab, window, cx| {
         tab.copy_selection(&CopySelection, window, cx)

@@ -16,6 +16,8 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 futures = { workspace = true }
 tracing = { workspace = true }
+# The interface language, a process global the app sets at startup.
+rust-i18n = "4.2"
 
 # SQL parsing
 sqlparser = { workspace = true }

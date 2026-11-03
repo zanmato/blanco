@@ -98,7 +98,7 @@ fn build_overflow_menu(
                     PopupMenuItem::element(move |window, cx| builder(window, cx)).disabled(true),
                 );
             } else {
-                let header = group_key.unwrap_or_else(|| "Other".into());
+                let header = group_key.unwrap_or_else(|| t!("ui.tab_bar.other_group").into());
                 menu = menu.label(header);
             }
         }

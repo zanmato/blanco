@@ -37,7 +37,7 @@ impl ConnectionsTreeDelegate {
     /// driver-agnostic.
     fn new_script_item(&self, metadata: &TreeItemMetadata, window: &mut Window) -> PopupMenuItem {
         let action = metadata.create_new_script_tab_action();
-        PopupMenuItem::new("New Script").on_click(window.listener_for(
+        PopupMenuItem::new(t!("sidebar.menu.new_script")).on_click(window.listener_for(
             &self.parent,
             move |_this, _event, window, cx| {
                 window.dispatch_action(Box::new(action.clone()), cx);
@@ -57,7 +57,7 @@ impl ConnectionsTreeDelegate {
         }
         let context = metadata.create_new_script_tab_action().context;
         Some(
-            PopupMenuItem::new("New Table…").on_click(window.listener_for(
+            PopupMenuItem::new(t!("sidebar.menu.new_table")).on_click(window.listener_for(
                 &self.parent,
                 move |_this, _event, window, cx| {
                     window.dispatch_action(
@@ -85,7 +85,7 @@ impl ConnectionsTreeDelegate {
         }
         let run_context = context.clone();
         menu.item(
-            PopupMenuItem::new("Open SQL File…").on_click(window.listener_for(
+            PopupMenuItem::new(t!("sidebar.menu.open_sql_file")).on_click(window.listener_for(
                 &self.parent,
                 move |_this, _event, window, cx| {
                     window.dispatch_action(
@@ -98,7 +98,7 @@ impl ConnectionsTreeDelegate {
             )),
         )
         .item(
-            PopupMenuItem::new("Run SQL File…").on_click(window.listener_for(
+            PopupMenuItem::new(t!("sidebar.menu.run_sql_file")).on_click(window.listener_for(
                 &self.parent,
                 move |_this, _event, window, cx| {
                     window.dispatch_action(
@@ -125,28 +125,32 @@ impl ConnectionsTreeDelegate {
         }
         let restore_context = context.clone();
         menu.separator()
-            .item(PopupMenuItem::new("Back Up…").on_click(window.listener_for(
-                &self.parent,
-                move |_this, _event, window, cx| {
-                    window.dispatch_action(
-                        Box::new(BackupDatabase {
-                            context: context.clone(),
-                        }),
-                        cx,
-                    );
-                },
-            )))
-            .item(PopupMenuItem::new("Restore…").on_click(window.listener_for(
-                &self.parent,
-                move |_this, _event, window, cx| {
-                    window.dispatch_action(
-                        Box::new(RestoreDatabase {
-                            context: restore_context.clone(),
-                        }),
-                        cx,
-                    );
-                },
-            )))
+            .item(
+                PopupMenuItem::new(t!("sidebar.menu.back_up")).on_click(window.listener_for(
+                    &self.parent,
+                    move |_this, _event, window, cx| {
+                        window.dispatch_action(
+                            Box::new(BackupDatabase {
+                                context: context.clone(),
+                            }),
+                            cx,
+                        );
+                    },
+                )),
+            )
+            .item(
+                PopupMenuItem::new(t!("sidebar.menu.restore")).on_click(window.listener_for(
+                    &self.parent,
+                    move |_this, _event, window, cx| {
+                        window.dispatch_action(
+                            Box::new(RestoreDatabase {
+                                context: restore_context.clone(),
+                            }),
+                            cx,
+                        );
+                    },
+                )),
+            )
     }
 
     pub fn new(parent: &Entity<ConnectionsPanel>) -> Self {
@@ -204,13 +208,14 @@ fn format_bytes_exact(bytes: u64) -> String {
 /// Tooltip for the count shown next to a table with nested tables, e.g.
 /// "12 partitions" or "1 child table".
 fn child_table_description(child_tables: ChildTables) -> String {
-    let noun = match (child_tables.are_partitions, child_tables.count) {
-        (true, 1) => "partition",
-        (true, _) => "partitions",
-        (false, 1) => "child table",
-        (false, _) => "child tables",
-    };
-    format!("{} {noun}", child_tables.count)
+    let count = child_tables.count;
+    match (child_tables.are_partitions, count) {
+        (true, 1) => t!("sidebar.tree.partitions_one", count = count),
+        (true, _) => t!("sidebar.tree.partitions_other", count = count),
+        (false, 1) => t!("sidebar.tree.child_tables_one", count = count),
+        (false, _) => t!("sidebar.tree.child_tables_other", count = count),
+    }
+    .into_owned()
 }
 
 /// Total width of the bordered size indicator rectangle, including border.
@@ -285,8 +290,8 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                 .unwrap_or_default();
             let tooltip_text: SharedString = metadata
                 .size_bytes
-                .map(|b| format!("{} bytes", format_bytes_exact(b)))
-                .unwrap_or_else(|| "unknown size".to_string())
+                .map(|b| t!("sidebar.tree.size_bytes", size = format_bytes_exact(b)).into_owned())
+                .unwrap_or_else(|| t!("sidebar.tree.unknown_size").into_owned())
                 .into();
             let theme = cx.theme();
             let bar = SizeIndicator::new(("tree-item-size", ix), size_text, relative)
@@ -404,27 +409,27 @@ impl TreeDelegate for ConnectionsTreeDelegate {
             // remove: it is saved or closed instead.
             TreeItemKind::Connection if metadata.connection_id < 0 => {
                 let connection_id = metadata.connection_id;
-                menu.item(PopupMenuItem::new("Refresh").on_click(window.listener_for(
-                    &self.parent,
-                    move |this, _event, _window, cx| {
+                menu.item(PopupMenuItem::new(t!("sidebar.menu.refresh")).on_click(
+                    window.listener_for(&self.parent, move |this, _event, _window, cx| {
                         this.refresh_connection(connection_id, cx);
-                    },
-                )))
+                    }),
+                ))
                 .item(
-                    PopupMenuItem::new("Save Connection…").on_click(window.listener_for(
+                    PopupMenuItem::new(t!("sidebar.menu.save_connection")).on_click(
+                        window.listener_for(&self.parent, move |this, _event, _window, cx| {
+                            this.save_temporary_connection(connection_id, cx);
+                        }),
+                    ),
+                )
+                .separator()
+                .item(
+                    PopupMenuItem::new(t!("sidebar.menu.close")).on_click(window.listener_for(
                         &self.parent,
                         move |this, _event, _window, cx| {
-                            this.save_temporary_connection(connection_id, cx);
+                            this.close_temporary_connection(connection_id, cx);
                         },
                     )),
                 )
-                .separator()
-                .item(PopupMenuItem::new("Close").on_click(window.listener_for(
-                    &self.parent,
-                    move |this, _event, _window, cx| {
-                        this.close_temporary_connection(connection_id, cx);
-                    },
-                )))
             }
             TreeItemKind::Connection => {
                 let connection_id = metadata.connection_id;
@@ -458,17 +463,16 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                     environment_type: metadata.environment_type,
                 });
                 let menu = menu
-                    .item(PopupMenuItem::new("Refresh").on_click(window.listener_for(
-                        &self.parent,
-                        move |this, _event, _window, cx| {
+                    .item(PopupMenuItem::new(t!("sidebar.menu.refresh")).on_click(
+                        window.listener_for(&self.parent, move |this, _event, _window, cx| {
                             this.refresh_connection(connection_id, cx);
-                        },
-                    )))
+                        }),
+                    ))
                     .when_some(key_listing, |menu, (pattern, truncated)| {
                         let filter_label = if pattern == "*" {
-                            "Filter Keys…".to_string()
+                            t!("sidebar.menu.filter_keys").into_owned()
                         } else {
-                            format!("Filter Keys ({pattern})…")
+                            t!("sidebar.menu.filter_keys_pattern", pattern = pattern).into_owned()
                         };
                         menu.item(
                             PopupMenuItem::new(filter_label).on_click(window.listener_for(
@@ -479,48 +483,50 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                             )),
                         )
                         .when(pattern != "*", |menu| {
-                            menu.item(PopupMenuItem::new("Show All Keys").on_click(
-                                window.listener_for(&self.parent, move |this, _event, _, cx| {
-                                    this.set_key_pattern(connection_id, String::new(), cx);
-                                }),
-                            ))
+                            menu.item(
+                                PopupMenuItem::new(t!("sidebar.menu.show_all_keys")).on_click(
+                                    window.listener_for(
+                                        &self.parent,
+                                        move |this, _event, _, cx| {
+                                            this.set_key_pattern(connection_id, String::new(), cx);
+                                        },
+                                    ),
+                                ),
+                            )
                         })
                         .when(truncated, |menu| {
-                            menu.item(PopupMenuItem::new("Load More Keys").on_click(
-                                window.listener_for(&self.parent, move |this, _event, _, cx| {
-                                    this.load_more_keys(connection_id, cx);
-                                }),
-                            ))
+                            menu.item(
+                                PopupMenuItem::new(t!("sidebar.menu.load_more_keys")).on_click(
+                                    window.listener_for(
+                                        &self.parent,
+                                        move |this, _event, _, cx| {
+                                            this.load_more_keys(connection_id, cx);
+                                        },
+                                    ),
+                                ),
+                            )
                         })
                     })
-                    .item(PopupMenuItem::new("Edit").on_click(window.listener_for(
-                        &self.parent,
-                        move |this, _event, _window, cx| {
+                    .item(PopupMenuItem::new(t!("sidebar.menu.edit")).on_click(
+                        window.listener_for(&self.parent, move |this, _event, _window, cx| {
                             this.edit_connection(connection_id, cx);
-                        },
-                    )))
-                    .item(
-                        PopupMenuItem::new("Duplicate").on_click(window.listener_for(
-                            &self.parent,
-                            move |this, _event, _window, cx| {
-                                this.duplicate_connection(connection_id, cx);
-                            },
-                        )),
-                    )
-                    .item(PopupMenuItem::new("Export…").on_click(window.listener_for(
-                        &self.parent,
-                        move |this, _event, window, cx| {
+                        }),
+                    ))
+                    .item(PopupMenuItem::new(t!("sidebar.menu.duplicate")).on_click(
+                        window.listener_for(&self.parent, move |this, _event, _window, cx| {
+                            this.duplicate_connection(connection_id, cx);
+                        }),
+                    ))
+                    .item(PopupMenuItem::new(t!("sidebar.menu.export")).on_click(
+                        window.listener_for(&self.parent, move |this, _event, window, cx| {
                             this.export_connections(Some(connection_id), window, cx);
-                        },
-                    )))
-                    .item(
-                        PopupMenuItem::new("Disconnect").on_click(window.listener_for(
-                            &self.parent,
-                            move |this, _event, _window, cx| {
-                                this.disconnect_connection(connection_id, cx);
-                            },
-                        )),
-                    );
+                        }),
+                    ))
+                    .item(PopupMenuItem::new(t!("sidebar.menu.disconnect")).on_click(
+                        window.listener_for(&self.parent, move |this, _event, _window, cx| {
+                            this.disconnect_connection(connection_id, cx);
+                        }),
+                    ));
                 // A connection with no database level holds its tables.
                 let menu = match (!metadata.db_type.dialect().lists_server_databases())
                     .then(|| self.new_table_item(metadata, window))
@@ -547,20 +553,18 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                         schema_name: None,
                         environment_type: metadata.environment_type,
                     };
-                    menu.separator()
-                        .item(
-                            PopupMenuItem::new("Process List").on_click(window.listener_for(
-                                &self.parent,
-                                move |_this, _event, window, cx| {
-                                    window.dispatch_action(
-                                        Box::new(OpenProcessList {
-                                            context: context.clone(),
-                                        }),
-                                        cx,
-                                    );
-                                },
-                            )),
-                        )
+                    menu.separator().item(
+                        PopupMenuItem::new(t!("sidebar.menu.process_list")).on_click(
+                            window.listener_for(&self.parent, move |_this, _event, window, cx| {
+                                window.dispatch_action(
+                                    Box::new(OpenProcessList {
+                                        context: context.clone(),
+                                    }),
+                                    cx,
+                                );
+                            }),
+                        ),
+                    )
                 } else {
                     menu
                 };
@@ -572,17 +576,16 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                     None => menu,
                 };
                 menu.separator()
-                    .item(PopupMenuItem::new("Remove").on_click(window.listener_for(
-                        &self.parent,
-                        move |this, _event, window, cx| {
+                    .item(PopupMenuItem::new(t!("sidebar.menu.remove")).on_click(
+                        window.listener_for(&self.parent, move |this, _event, window, cx| {
                             this.confirm_remove_connection(
                                 connection_id,
                                 connection_name.clone(),
                                 window,
                                 cx,
                             );
-                        },
-                    )))
+                        }),
+                    ))
             }
             TreeItemKind::Database => {
                 let connection_id = metadata.connection_id;
@@ -592,14 +595,11 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                 let environment_type = metadata.environment_type;
 
                 let mut menu = if let Some(action) = metadata.create_new_query_tab_action() {
-                    menu.item(
-                        PopupMenuItem::new("New Query").on_click(window.listener_for(
-                            &self.parent,
-                            move |_this, _event, window, cx| {
-                                window.dispatch_action(Box::new(action.clone()), cx);
-                            },
-                        )),
-                    )
+                    menu.item(PopupMenuItem::new(t!("sidebar.menu.new_query")).on_click(
+                        window.listener_for(&self.parent, move |_this, _event, window, cx| {
+                            window.dispatch_action(Box::new(action.clone()), cx);
+                        }),
+                    ))
                 } else {
                     menu
                 };
@@ -623,23 +623,25 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                 if let Some(item) = self.new_table_item(metadata, window) {
                     menu = menu.item(item);
                 }
-                menu = menu.item(PopupMenuItem::new("View Schema Graph").on_click(
-                    window.listener_for(&self.parent, move |_this, _event, window, cx| {
-                        window.dispatch_action(
-                            Box::new(OpenSchemaGraph {
-                                context: ConnectionContext {
-                                    connection_id,
-                                    connection_name: connection_name_for_graph.clone(),
-                                    db_type,
-                                    database_name: database_name_for_graph.clone(),
-                                    schema_name: None,
-                                    environment_type,
-                                },
-                            }),
-                            cx,
-                        );
-                    }),
-                ));
+                menu = menu.item(
+                    PopupMenuItem::new(t!("sidebar.menu.view_schema_graph")).on_click(
+                        window.listener_for(&self.parent, move |_this, _event, window, cx| {
+                            window.dispatch_action(
+                                Box::new(OpenSchemaGraph {
+                                    context: ConnectionContext {
+                                        connection_id,
+                                        connection_name: connection_name_for_graph.clone(),
+                                        db_type,
+                                        database_name: database_name_for_graph.clone(),
+                                        schema_name: None,
+                                        environment_type,
+                                    },
+                                }),
+                                cx,
+                            );
+                        }),
+                    ),
+                );
                 menu = self.backup_items(
                     menu,
                     ConnectionContext {
@@ -653,14 +655,11 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                     window,
                 );
                 menu.separator()
-                    .item(
-                        PopupMenuItem::new("Disconnect").on_click(window.listener_for(
-                            &self.parent,
-                            move |this, _event, _window, cx| {
-                                this.disconnect_database(connection_id, database_name.clone(), cx);
-                            },
-                        )),
-                    )
+                    .item(PopupMenuItem::new(t!("sidebar.menu.disconnect")).on_click(
+                        window.listener_for(&self.parent, move |this, _event, _window, cx| {
+                            this.disconnect_database(connection_id, database_name.clone(), cx);
+                        }),
+                    ))
             }
             TreeItemKind::Procedure
             | TreeItemKind::Function
@@ -693,14 +692,11 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                             environment_type: metadata.environment_type,
                         },
                     };
-                    menu.item(
-                        PopupMenuItem::new("New Query").on_click(window.listener_for(
-                            &self.parent,
-                            move |_this, _event, window, cx| {
-                                window.dispatch_action(Box::new(action.clone()), cx);
-                            },
-                        )),
-                    )
+                    menu.item(PopupMenuItem::new(t!("sidebar.menu.new_query")).on_click(
+                        window.listener_for(&self.parent, move |_this, _event, window, cx| {
+                            window.dispatch_action(Box::new(action.clone()), cx);
+                        }),
+                    ))
                     .item(self.new_script_item(metadata, window))
                 } else if metadata.category == Some(super::data_loading::DatabaseItemType::Table) {
                     match self.new_table_item(metadata, window) {
@@ -756,48 +752,58 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                     };
 
                     let mut menu = menu
-                        .item(
-                            PopupMenuItem::new("New Query").on_click(window.listener_for(
-                                &self.parent,
-                                move |_this, _event, window, cx| {
-                                    window.dispatch_action(Box::new(new_query_action.clone()), cx);
-                                },
-                            )),
-                        )
+                        .item(PopupMenuItem::new(t!("sidebar.menu.new_query")).on_click(
+                            window.listener_for(&self.parent, move |_this, _event, window, cx| {
+                                window.dispatch_action(Box::new(new_query_action.clone()), cx);
+                            }),
+                        ))
                         .item(self.new_script_item(metadata, window));
 
                     if let Some(inspect_action) = inspect_action {
-                        menu = menu.item(PopupMenuItem::new("Inspect Key").on_click(
-                            window.listener_for(&self.parent, move |_this, _event, window, cx| {
-                                window.dispatch_action(Box::new(inspect_action.clone()), cx);
-                            }),
-                        ));
+                        menu =
+                            menu.item(PopupMenuItem::new(t!("sidebar.menu.inspect_key")).on_click(
+                                window.listener_for(
+                                    &self.parent,
+                                    move |_this, _event, window, cx| {
+                                        window
+                                            .dispatch_action(Box::new(inspect_action.clone()), cx);
+                                    },
+                                ),
+                            ));
                     }
 
                     if supports_table_ops {
-                        menu = menu.item(PopupMenuItem::new("Export Data").on_click(
-                            window.listener_for(&self.parent, move |this, _event, window, cx| {
-                                this.export_table_data(
-                                    context_for_export.clone(),
-                                    table_name.clone(),
-                                    window,
-                                    cx,
-                                );
-                            }),
-                        ));
+                        menu =
+                            menu.item(PopupMenuItem::new(t!("sidebar.menu.export_data")).on_click(
+                                window.listener_for(
+                                    &self.parent,
+                                    move |this, _event, window, cx| {
+                                        this.export_table_data(
+                                            context_for_export.clone(),
+                                            table_name.clone(),
+                                            window,
+                                            cx,
+                                        );
+                                    },
+                                ),
+                            ));
                     }
 
                     if supports_table_ops && matches!(metadata.kind, TreeItemKind::Table) {
-                        menu = menu.item(PopupMenuItem::new("Import Data").on_click(
-                            window.listener_for(&self.parent, move |this, _event, window, cx| {
-                                this.import_table_data(
-                                    context_for_import.clone(),
-                                    table_name_for_import.clone(),
-                                    window,
-                                    cx,
-                                );
-                            }),
-                        ));
+                        menu =
+                            menu.item(PopupMenuItem::new(t!("sidebar.menu.import_data")).on_click(
+                                window.listener_for(
+                                    &self.parent,
+                                    move |this, _event, window, cx| {
+                                        this.import_table_data(
+                                            context_for_import.clone(),
+                                            table_name_for_import.clone(),
+                                            window,
+                                            cx,
+                                        );
+                                    },
+                                ),
+                            ));
                     }
 
                     if supports_table_ops
@@ -808,22 +814,22 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                                 | TreeItemKind::MaterializedView
                         )
                     {
-                        menu =
-                            menu.separator()
-                                .item(PopupMenuItem::new("Open Structure").on_click(
-                                    window.listener_for(
-                                        &self.parent,
-                                        move |_this, _event, window, cx| {
-                                            window.dispatch_action(
-                                                Box::new(OpenTableStructure {
-                                                    table_name: table_name_for_structure.clone(),
-                                                    context: context_for_structure.clone(),
-                                                }),
-                                                cx,
-                                            );
-                                        },
-                                    ),
-                                ));
+                        menu = menu.separator().item(
+                            PopupMenuItem::new(t!("sidebar.menu.open_structure")).on_click(
+                                window.listener_for(
+                                    &self.parent,
+                                    move |_this, _event, window, cx| {
+                                        window.dispatch_action(
+                                            Box::new(OpenTableStructure {
+                                                table_name: table_name_for_structure.clone(),
+                                                context: context_for_structure.clone(),
+                                            }),
+                                            cx,
+                                        );
+                                    },
+                                ),
+                            ),
+                        );
                     }
 
                     if supports_table_ops
@@ -835,19 +841,20 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                         )
                     {
                         use blanco_core::ddl::TableOperation;
-                        let operations: Vec<(&str, TableOperation)> = match metadata.kind {
-                            TreeItemKind::Table => vec![
-                                (
-                                    "Rename…",
-                                    TableOperation::Rename {
-                                        new_name: String::new(),
-                                    },
-                                ),
-                                ("Truncate…", TableOperation::Truncate),
-                                ("Drop…", TableOperation::Drop),
-                            ],
-                            _ => vec![("Drop…", TableOperation::Drop)],
-                        };
+                        let operations: Vec<(std::borrow::Cow<str>, TableOperation)> =
+                            match metadata.kind {
+                                TreeItemKind::Table => vec![
+                                    (
+                                        t!("sidebar.menu.rename"),
+                                        TableOperation::Rename {
+                                            new_name: String::new(),
+                                        },
+                                    ),
+                                    (t!("sidebar.menu.truncate"), TableOperation::Truncate),
+                                    (t!("sidebar.menu.drop"), TableOperation::Drop),
+                                ],
+                                _ => vec![(t!("sidebar.menu.drop"), TableOperation::Drop)],
+                            };
                         menu = menu.separator();
                         for (label, operation) in operations {
                             let metadata = metadata.clone();
@@ -872,16 +879,21 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                         if let Some(item) = self.new_table_item(metadata, window) {
                             menu = menu.item(item);
                         }
-                        menu = menu.item(PopupMenuItem::new("View Schema Graph").on_click(
-                            window.listener_for(&self.parent, move |_this, _event, window, cx| {
-                                window.dispatch_action(
-                                    Box::new(OpenSchemaGraph {
-                                        context: context_for_graph.clone(),
-                                    }),
-                                    cx,
-                                );
-                            }),
-                        ));
+                        menu = menu.item(
+                            PopupMenuItem::new(t!("sidebar.menu.view_schema_graph")).on_click(
+                                window.listener_for(
+                                    &self.parent,
+                                    move |_this, _event, window, cx| {
+                                        window.dispatch_action(
+                                            Box::new(OpenSchemaGraph {
+                                                context: context_for_graph.clone(),
+                                            }),
+                                            cx,
+                                        );
+                                    },
+                                ),
+                            ),
+                        );
                     }
 
                     menu

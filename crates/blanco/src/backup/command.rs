@@ -2,6 +2,7 @@ use anyhow::{Context as _, Result, anyhow, bail};
 use blanco_core::ClientTools;
 use chrono::{DateTime, TimeZone};
 use database::ClientToolEndpoint;
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
 use super::tools::{LocatedTool, Product, ToolProgram, Version};
@@ -31,11 +32,11 @@ impl BackupFormat {
         }
     }
 
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> Cow<'static, str> {
         match self {
-            BackupFormat::Plain => "Plain SQL",
-            BackupFormat::Custom => "Custom archive",
-            BackupFormat::Directory => "Directory archive",
+            BackupFormat::Plain => t!("backup.format.plain"),
+            BackupFormat::Custom => t!("backup.format.custom"),
+            BackupFormat::Directory => t!("backup.format.directory"),
         }
     }
 
@@ -67,12 +68,12 @@ impl Compression {
         Compression::Best,
     ];
 
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> Cow<'static, str> {
         match self {
-            Compression::None => "None",
-            Compression::Fast => "Fast",
-            Compression::Default => "Default",
-            Compression::Best => "Smallest",
+            Compression::None => t!("backup.compression.none"),
+            Compression::Fast => t!("backup.compression.fast"),
+            Compression::Default => t!("backup.compression.default"),
+            Compression::Best => t!("backup.compression.smallest"),
         }
     }
 
@@ -253,7 +254,7 @@ pub fn backup_plan(
         .count();
     let included = request.tables.iter().filter(|table| table.include).count();
     if !request.tables.is_empty() && included == 0 {
-        bail!("Choose at least one table to back up");
+        bail!("{}", t!("backup.errors.no_tables_chosen"));
     }
 
     match tool.program.family() {
@@ -296,7 +297,13 @@ pub fn backup_plan(
         }
         ClientTools::MySql => {
             if request.format != BackupFormat::Plain {
-                bail!("{} only writes plain SQL", tool.program.display_name());
+                bail!(
+                    "{}",
+                    t!(
+                        "backup.errors.plain_only",
+                        program = tool.program.display_name()
+                    )
+                );
             }
             let database = &endpoint.database;
             let mut common = connection_arguments;
@@ -402,14 +409,14 @@ pub struct DumpFile {
 impl DumpFile {
     pub fn description(&self) -> String {
         let format = match self.format {
-            DumpFormat::Plain => "SQL script",
-            DumpFormat::Custom => "pg_dump custom archive",
-            DumpFormat::Directory => "pg_dump directory archive",
+            DumpFormat::Plain => t!("backup.dump.sql_script"),
+            DumpFormat::Custom => t!("backup.dump.custom_archive"),
+            DumpFormat::Directory => t!("backup.dump.directory_archive"),
         };
         if self.gzip {
-            format!("{format}, gzip compressed")
+            t!("backup.dump.gzip_compressed", format = format).into_owned()
         } else {
-            format.to_string()
+            format.into_owned()
         }
     }
 
@@ -421,11 +428,19 @@ impl DumpFile {
                 Ok(ToolProgram::PgRestore)
             }
             (ClientTools::MySql, DumpFormat::Plain) => Ok(ToolProgram::Mysql),
-            (ClientTools::MySql, DumpFormat::Custom | DumpFormat::Directory) => Err(anyhow!(
-                "This is a pg_dump archive. Only a PostgreSQL connection can restore it."
-            )),
+            (ClientTools::MySql, DumpFormat::Custom | DumpFormat::Directory) => {
+                Err(anyhow!("{}", t!("backup.errors.pg_archive_needs_postgres")))
+            }
         }
     }
+}
+
+fn cannot_read(path: &Path) -> String {
+    t!("backup.errors.cannot_read", path = path.display()).into_owned()
+}
+
+fn cannot_open(path: &Path) -> String {
+    t!("backup.errors.cannot_open", path = path.display()).into_owned()
 }
 
 const GZIP_MAGIC: [u8; 2] = [0x1f, 0x8b];
@@ -434,13 +449,12 @@ const PG_ARCHIVE_MAGIC: &[u8] = b"PGDMP";
 /// Look at the first bytes of `path` to tell a SQL script from a pg_dump
 /// archive, looking through gzip compression.
 pub fn detect_dump(path: &Path) -> Result<DumpFile> {
-    let metadata =
-        std::fs::metadata(path).with_context(|| format!("Cannot read {}", path.display()))?;
+    let metadata = std::fs::metadata(path).with_context(|| cannot_read(path))?;
     if metadata.is_dir() {
         if !path.join("toc.dat").is_file() {
             bail!(
-                "{} is a folder but not a pg_dump directory archive",
-                path.display()
+                "{}",
+                t!("backup.errors.not_directory_archive", path = path.display())
             );
         }
         return Ok(DumpFile {
@@ -451,19 +465,18 @@ pub fn detect_dump(path: &Path) -> Result<DumpFile> {
         });
     }
 
-    let mut file =
-        std::fs::File::open(path).with_context(|| format!("Cannot open {}", path.display()))?;
+    let mut file = std::fs::File::open(path).with_context(|| cannot_open(path))?;
     let mut head = [0u8; 5];
     let read = read_up_to(&mut file, &mut head)?;
     let head = head.get(..read).unwrap_or_default();
     let gzip = head.starts_with(&GZIP_MAGIC);
     let content_head = if gzip {
         let mut decoder = flate2::read::GzDecoder::new(
-            std::fs::File::open(path).with_context(|| format!("Cannot open {}", path.display()))?,
+            std::fs::File::open(path).with_context(|| cannot_open(path))?,
         );
         let mut content = [0u8; 5];
         let read = read_up_to(&mut decoder, &mut content)
-            .with_context(|| format!("{} is not a readable gzip file", path.display()))?;
+            .with_context(|| t!("backup.errors.not_gzip", path = path.display()).into_owned())?;
         content.get(..read).unwrap_or_default().to_vec()
     } else {
         head.to_vec()
@@ -548,7 +561,13 @@ pub fn restore_plan(
             }
         }
         ToolProgram::PgDump | ToolProgram::MysqlDump => {
-            bail!("{} cannot restore", tool.program.display_name())
+            bail!(
+                "{}",
+                t!(
+                    "backup.errors.cannot_restore",
+                    program = tool.program.display_name()
+                )
+            )
         }
     };
 
@@ -591,8 +610,11 @@ pub fn connection_settings(
             (config.host.clone(), port)
         }
         Some(_) if verifies_host => bail!(
-            "verify-full cannot check the server's name through an SSH tunnel with {}. Use verify-ca for this connection to back up or restore it.",
-            tool.program.display_name()
+            "{}",
+            t!(
+                "backup.errors.verify_full_through_tunnel",
+                program = tool.program.display_name()
+            )
         ),
         Some(port) => (TUNNEL_ADDRESS.to_string(), port),
         None => (config.host.clone(), config.port),
@@ -691,7 +713,7 @@ fn mysql_ssl_arguments(product: Product, ssl_mode: Option<&str>) -> Vec<String> 
 /// Split the extra arguments field like a shell would, so quoted values may
 /// contain spaces.
 pub fn split_arguments(text: &str) -> Result<Vec<String>> {
-    shlex::split(text).ok_or_else(|| anyhow!("The extra arguments have an unclosed quote"))
+    shlex::split(text).ok_or_else(|| anyhow!("{}", t!("backup.errors.unclosed_quote")))
 }
 
 /// Expand a backup file name pattern. `{database}`, `{connection}`, `{date}`
@@ -729,7 +751,7 @@ where
         .collect();
     let name = name.trim().trim_end_matches('.').to_string();
     if name.is_empty() {
-        bail!("The file name is empty");
+        bail!("{}", t!("backup.errors.empty_file_name"));
     }
     Ok(name)
 }

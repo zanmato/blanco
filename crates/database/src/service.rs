@@ -385,9 +385,7 @@ impl DatabaseService {
         let configs = self.connection_configs.read().await;
         let config = configs
             .get(&config_id)
-            .ok_or_else(|| {
-                anyhow::anyhow!("Connection configuration not found for ID: {}", config_id)
-            })?
+            .ok_or_else(|| anyhow::anyhow!(t!("database.configuration_not_found", id = config_id)))?
             .clone();
         drop(configs);
 
@@ -449,7 +447,7 @@ impl DatabaseService {
         database: Option<&str>,
     ) -> Result<DedicatedConnection> {
         let config = self.get_connection_config(config_id).await.ok_or_else(|| {
-            anyhow::anyhow!("Connection configuration not found for ID: {}", config_id)
+            anyhow::anyhow!(t!("database.configuration_not_found", id = config_id))
         })?;
         let tunnel = self
             .register_tunnel_user(&config)
@@ -500,7 +498,7 @@ impl DatabaseService {
         database: Option<&str>,
     ) -> Result<ShortLivedConnection> {
         let config = self.get_connection_config(config_id).await.ok_or_else(|| {
-            anyhow::anyhow!("Connection configuration not found for ID: {}", config_id)
+            anyhow::anyhow!(t!("database.configuration_not_found", id = config_id))
         })?;
         let tunnel_key = self.register_tunnel_user(&config).await;
         // Writes are refused by the connection wrapper alone. The config's
@@ -685,10 +683,10 @@ impl DatabaseService {
                 )
                 .await
                 .map_err(|_| {
-                    anyhow::anyhow!(
-                        "Database connection timed out after {}s",
-                        connect_timeout.as_secs()
-                    )
+                    anyhow::anyhow!(t!(
+                        "database.connect_timed_out",
+                        seconds = connect_timeout.as_secs()
+                    ))
                 })?
             })
             .await
@@ -766,7 +764,7 @@ impl DatabaseService {
         self.get_or_create_connection(config_id, Some(database))
             .await?;
         let mut config = self.get_connection_config(config_id).await.ok_or_else(|| {
-            anyhow::anyhow!("Connection configuration not found for ID: {}", config_id)
+            anyhow::anyhow!(t!("database.configuration_not_found", id = config_id))
         })?;
         // A secret that is asked for was just answered for the connection
         // above and is remembered for the session, so this does not ask again.
@@ -775,7 +773,7 @@ impl DatabaseService {
             let tunnels = self.ssh_tunnels.read().await;
             let tunnel = tunnels
                 .get(&config_id)
-                .ok_or_else(|| anyhow::anyhow!("The SSH tunnel for this connection is closed"))?
+                .ok_or_else(|| anyhow::anyhow!(t!("database.ssh_tunnel_closed")))?
                 .lock()
                 .map_err(|error| anyhow::anyhow!("Failed to lock SSH tunnel mutex: {}", error))?;
             Some(tunnel.get_info().local_port)
@@ -1053,10 +1051,10 @@ impl DatabaseService {
                 })
                 .await
                 .map_err(|_| {
-                    anyhow::anyhow!(
-                        "SSH tunnel connection timed out after {}s",
-                        connect_timeout.as_secs()
-                    )
+                    anyhow::anyhow!(t!(
+                        "database.ssh_tunnel_timed_out",
+                        seconds = connect_timeout.as_secs()
+                    ))
                 })?
             })
             .await
@@ -1118,10 +1116,10 @@ impl DatabaseService {
                     })
                     .await
                     .map_err(|_| {
-                        anyhow::anyhow!(
-                            "SSH tunnel connection timed out after {}s",
-                            connect_timeout.as_secs()
-                        )
+                        anyhow::anyhow!(t!(
+                            "database.ssh_tunnel_timed_out",
+                            seconds = connect_timeout.as_secs()
+                        ))
                     })?
                 })
                 .await
@@ -1156,10 +1154,10 @@ impl DatabaseService {
                 )
                 .await
                 .map_err(|_| {
-                    anyhow::anyhow!(
-                        "Database connection timed out after {}s",
-                        connect_timeout.as_secs()
-                    )
+                    anyhow::anyhow!(t!(
+                        "database.connect_timed_out",
+                        seconds = connect_timeout.as_secs()
+                    ))
                 })??;
                 connection.ping().await
             })

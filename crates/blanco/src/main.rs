@@ -1,5 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[macro_use]
+extern crate rust_i18n;
+
+rust_i18n::i18n!("locales", fallback = "en");
+
 #[cfg(target_os = "linux")]
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
@@ -21,6 +26,7 @@ mod database_file;
 mod editor;
 mod export;
 mod history_panel;
+mod i18n;
 mod import;
 mod keybindings;
 mod logging;
@@ -106,6 +112,7 @@ fn main() {
             at_launch,
         });
         gpui_component::init(cx);
+        blanco_ui::table::init(cx);
         gpui_tokio::init(cx);
         command_palette::CommandPalette::init(cx);
         sql::register_languages();
@@ -207,6 +214,7 @@ fn main() {
 
         cx.set_global(results_panel::ColumnLayouts::from_key_values(&settings));
         let app_settings = AppSettings::new(Settings::from_key_values(&settings));
+        i18n::init(app_settings.settings.general.language.as_deref(), cx);
         blanco_core::set_connect_timeout_secs(
             app_settings
                 .settings

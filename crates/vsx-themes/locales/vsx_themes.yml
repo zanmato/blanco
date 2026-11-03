@@ -1,0 +1,140 @@
+_version: 2
+# Strings of the VS Code theme browser. The crate is copied into other
+# gpui-component apps, so it keeps its translations to itself. Swedish uses
+# sentence case. Button names quoted in the description match the buttons.
+vsx_themes:
+  group_title:
+    en: "VS Code Themes"
+    sv: "VS Code-teman"
+  group_description:
+    en: "Find VS Code color themes on Open VSX, the open extension registry. Try shows one across the app until you revert it or close Settings. Install adds it to the theme lists above."
+    sv: "Hitta färgteman för VS Code på Open VSX, det öppna registret för tillägg. Prova visar ett tema i hela appen tills du återställer det eller stänger inställningarna. Installera lägger till det i temalistorna ovan."
+  search_placeholder:
+    en: "Search Open VSX"
+    sv: "Sök på Open VSX"
+  no_themes_found:
+    en: "No themes found"
+    sv: "Inga teman hittades"
+  extensions_listed:
+    en: "%{shown} of %{total} extensions"
+    sv: "%{shown} av %{total} tillägg"
+  extensions_listed_hidden_one:
+    en: "%{shown} of %{total} extensions, 1 icon theme hidden"
+    sv: "%{shown} av %{total} tillägg, 1 ikontema dolt"
+  extensions_listed_hidden_other:
+    en: "%{shown} of %{total} extensions, %{hidden} icon themes hidden"
+    sv: "%{shown} av %{total} tillägg, %{hidden} ikonteman dolda"
+  load_more:
+    en: "Load more"
+    sv: "Läs in fler"
+  theme_count_one:
+    en: "1 theme"
+    sv: "1 tema"
+  theme_count_other:
+    en: "%{count} themes"
+    sv: "%{count} teman"
+  by_publisher:
+    en: "by %{publisher}"
+    sv: "av %{publisher}"
+  installs:
+    en: "%{count} installs"
+    sv: "%{count} installationer"
+  variant_light:
+    en: "%{name} (light)"
+    sv: "%{name} (ljust)"
+  variant_dark:
+    en: "%{name} (dark)"
+    sv: "%{name} (mörkt)"
+  buttons:
+    preview:
+      en: "Preview"
+      sv: "Förhandsgranska"
+    install:
+      en: "Install"
+      sv: "Installera"
+    reinstall:
+      en: "Reinstall"
+      sv: "Installera om"
+    remove:
+      en: "Remove"
+      sv: "Ta bort"
+    try:
+      en: "Try"
+      sv: "Prova"
+    revert:
+      en: "Revert"
+      sv: "Återställ"
+    use:
+      en: "Use"
+      sv: "Använd"
+  status:
+    installing:
+      en: "Installing…"
+      sv: "Installerar…"
+    converting:
+      en: "Converting…"
+      sv: "Konverterar…"
+    installed_after_restart:
+      en: "Installed. A theme of the same name was already loaded, so the new one takes over after a restart."
+      sv: "Installerat. Ett tema med samma namn var redan inläst, så det nya tar över efter en omstart."
+    removed:
+      en: "Removed."
+      sv: "Borttaget."
+    removed_after_restart:
+      en: "Removed. Its themes leave the lists after a restart."
+      sv: "Borttaget. Dess teman försvinner från listorna efter en omstart."
+  errors:
+    no_color_themes:
+      en: "the extension contributes no color themes"
+      sv: "tillägget innehåller inga färgteman"
+    creating:
+      en: "creating %{path}"
+      sv: "%{path} kunde inte skapas"
+    writing:
+      en: "writing %{path}"
+      sv: "%{path} kunde inte skrivas"
+    removing:
+      en: "removing %{path}"
+      sv: "%{path} kunde inte tas bort"
+    not_in_gallery:
+      en: "%{id} is not in the gallery"
+      sv: "%{id} finns inte i galleriet"
+    search_failed:
+      en: "Gallery search failed"
+      sv: "Sökningen i galleriet misslyckades"
+    unexpected_search_answer:
+      en: "The gallery answered the search with something unexpected"
+      sv: "Galleriet gav ett oväntat svar på sökningen"
+    missing_asset:
+      en: "%{id} has no %{asset}"
+      sv: "%{id} saknar %{asset}"
+    downloading:
+      en: "downloading %{asset} of %{id}"
+      sv: "%{asset} för %{id} kunde inte hämtas"
+    too_large:
+      en: "%{id} is too large"
+      sv: "%{id} är för stort"
+    rate_limited:
+      en: "the gallery is rate limiting requests, try again in %{seconds} seconds"
+      sv: "galleriet begränsar antalet förfrågningar, försök igen om %{seconds} sekunder"
+    not_vsix:
+      en: "not a .vsix archive"
+      sv: "inte ett .vsix-arkiv"
+    not_in_package:
+      en: "%{path} is not in the package"
+      sv: "%{path} finns inte i paketet"
+    file_too_large:
+      en: "%{path} is too large to be a theme"
+      sv: "%{path} är för stor för att vara ett tema"
+    not_utf8:
+      en: "%{path} is not UTF-8"
+      sv: "%{path} är inte UTF-8"
+    include_too_deep:
+      en: "%{path}: include chain is too deep"
+      sv: "%{path}: för många nivåer av include"
+    outside_package:
+      en: "%{path} points outside the package"
+      sv: "%{path} pekar utanför paketet"
+    tmtheme_without_settings:
+      en: "tmTheme has no settings"
+      sv: "tmTheme saknar settings"

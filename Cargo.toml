@@ -42,23 +42,24 @@ tree-sitter-sql-polyglot = { git = "https://github.com/zanmato/Tree-sitter-sql-p
     "cockroachdb",
 ] }
 
-# Core GPUI dependencies. gpui-component depends on the `gpui-pre` crates.io
-# snapshots of GPUI, so these must resolve to the same packages or cargo builds
-# two copies of gpui. Keep the version requirement in step with the one in
-# gpui-component's workspace Cargo.toml.
-gpui = { package = "gpui-pre", version = "0.3.8" }
-gpui_platform = { package = "gpui-pre-platform", version = "0.3.8", features = [
+# Core GPUI dependencies. gpui-component runs on gpui-fast through its
+# `gpui-fast` feature, so these must name the same gpui-fast packages or cargo
+# builds two copies of gpui. Keep the version requirement in step with the one
+# in gpui-component's workspace Cargo.toml.
+gpui = { package = "gpui-fast", version = "0.1.13" }
+gpui_platform = { package = "gpui-fast-platform", version = "0.1.13", features = [
     "font-kit",
     "x11",
     "wayland",
     "runtime_shaders",
 ] }
 gpui-component = { git = "https://github.com/zanmato/gpui-component", branch = "blanco", features = [
+    "gpui-fast",
     "tree-sitter",
     "tree-sitter-javascript",
 ] }
 
-gpui-base = { git = "https://github.com/zanmato/gpui-component", branch = "blanco" }
+gpui-base = { git = "https://github.com/zanmato/gpui-component", branch = "blanco", features = ["gpui-fast"] }
 
 # LSP dependencies (needed by gpui-component)
 lsp-types = { version = "0.97.0", features = ["proposed"] }
@@ -156,17 +157,6 @@ opt-level = 3
 [profile.profiling]
 inherits = "release"
 debug = true
-
-[patch.crates-io]
-# Run on gpui-fast instead of the gpui-pre snapshots. Its compat crates carry the
-# gpui-pre names and the version gpui-component pins, so they must move with it.
-# See https://github.com/longbridge/gpui-fast/blob/main/compat/README.md
-# Pinned to the v0.1.2 tag. gpui-component's `gpui-fast` feature would do the
-# same without a patch, but it compiles the gpui-pre snapshots as well.
-gpui-pre = { git = "https://github.com/longbridge/gpui-fast", rev = "8e1e1987fdb512bb8b0ab27261906a598aff2ab8" }
-gpui-pre-platform = { git = "https://github.com/longbridge/gpui-fast", rev = "8e1e1987fdb512bb8b0ab27261906a598aff2ab8" }
-gpui-pre-macros = { git = "https://github.com/longbridge/gpui-fast", rev = "8e1e1987fdb512bb8b0ab27261906a598aff2ab8" }
-gpui-pre-sum-tree = { git = "https://github.com/longbridge/gpui-fast", rev = "8e1e1987fdb512bb8b0ab27261906a598aff2ab8" }
 
 # To develop against a local gpui-component clone next to this repository, uncomment:
 # [patch."https://github.com/zanmato/gpui-component"]

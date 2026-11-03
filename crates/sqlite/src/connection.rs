@@ -109,7 +109,7 @@ impl SqliteConnection {
         let pool = self
             .pool
             .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("Not connected to database"))?;
+            .ok_or_else(|| anyhow::anyhow!(t!("sqlite.not_connected")))?;
         // Taken before the timer starts, so opening a connection does not
         // count as execution.
         let mut connection = pool.acquire().await?;
@@ -202,7 +202,7 @@ impl SqliteConnection {
         let pool = self
             .pool
             .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("Not connected to database"))?;
+            .ok_or_else(|| anyhow::anyhow!(t!("sqlite.not_connected")))?;
         // Taken before the timer starts, so opening a connection does not
         // count as execution.
         let mut connection = pool.acquire().await?;

@@ -1,0 +1,320 @@
+_version: 2
+settings:
+  general:
+    page:
+      en: "General"
+      sv: "Allmänt"
+    language_group:
+      en: "Language"
+      sv: "Språk"
+    language:
+      en: "Language"
+      sv: "Språk"
+    language_description:
+      en: "The language of the interface. System follows the operating system's language."
+      sv: "Gränssnittets språk. System följer operativsystemets språk."
+    language_system:
+      en: "System (%{language})"
+      sv: "System (%{language})"
+    updates:
+      en: "Updates"
+      sv: "Uppdateringar"
+    check_for_updates:
+      en: "Check for Updates"
+      sv: "Sök efter uppdateringar"
+    check_for_updates_description:
+      en: "Check for new releases hourly. An Update button appears in the title bar when one is available."
+      sv: "Sök efter nya versioner varje timme. En knapp för att uppdatera visas i namnlisten när en ny version finns."
+    sidebar:
+      en: "Sidebar"
+      sv: "Sidopanel"
+    follow_active_tab:
+      en: "Follow Active Tab"
+      sv: "Följ aktiv flik"
+    follow_active_tab_description:
+      en: "Select the active tab's table in the sidebar, opening the groups above it."
+      sv: "Markera den aktiva flikens tabell i sidopanelen och öppna grupperna ovanför den."
+  editor:
+    page:
+      en: "Editor"
+      sv: "Redigerare"
+    text:
+      en: "Text"
+      sv: "Text"
+    word_wrap:
+      en: "Word Wrap"
+      sv: "Radbrytning"
+    word_wrap_description:
+      en: "Enable word wrapping in the SQL editor."
+      sv: "Bryt långa rader i SQL-redigeraren."
+    render_whitespace:
+      en: "Render Whitespace"
+      sv: "Visa blanksteg"
+    render_whitespace_description:
+      en: "Show whitespace characters in the SQL editor."
+      sv: "Visa blankstegstecken i SQL-redigeraren."
+    highlight_invisible_characters:
+      en: "Highlight Invisible Characters"
+      sv: "Markera osynliga tecken"
+    highlight_invisible_characters_description:
+      en: "Box no-break spaces, zero width characters and control characters in the SQL editor, which otherwise look like a plain space or nothing."
+      sv: "Rama in hårda blanksteg, tecken med noll bredd och styrtecken i SQL-redigeraren, som annars ser ut som ett vanligt blanksteg eller ingenting."
+    colorize_brackets:
+      en: "Colorize Brackets"
+      sv: "Färglägg parenteser"
+    colorize_brackets_description:
+      en: "Color brackets in the SQL editor by how deeply they nest, and brackets without a partner in the error color."
+      sv: "Färglägg parenteser i SQL-redigeraren efter hur djupt de är nästlade, och parenteser utan motsvarighet i felfärgen."
+    folding:
+      en: "Folding"
+      sv: "Kodvikning"
+    folding_description:
+      en: "Enable code folding in the SQL editor."
+      sv: "Låt kodblock fällas ihop i SQL-redigeraren."
+    hard_tabs:
+      en: "Hard Tabs"
+      sv: "Tabbtecken"
+    hard_tabs_description:
+      en: "Use tab characters instead of spaces for indentation."
+      sv: "Använd tabbtecken i stället för blanksteg för indrag."
+    tab_size:
+      en: "Tab Size"
+      sv: "Tabbstorlek"
+    tab_size_description:
+      en: "Number of spaces per tab stop (1-8)."
+      sv: "Antal blanksteg per tabbstopp (1-8)."
+    accept_suggestion_with:
+      en: "Accept Suggestion With"
+      sv: "Godkänn förslag med"
+    accept_enter_or_tab:
+      en: "Enter or Tab"
+      sv: "Enter eller Tab"
+    accept_suggestion_with_description:
+      en: "The key that accepts the highlighted completion. A key that does not accept keeps its usual meaning: Enter starts a new line and closes the list, Tab indents."
+      sv: "Tangenten som godkänner det markerade förslaget. En tangent som inte godkänner behåller sin vanliga funktion: Enter börjar en ny rad och stänger listan, Tab gör indrag."
+    wrap_tab_navigation:
+      en: "Wrap Tab Navigation"
+      sv: "Flikbyte runt om"
+    wrap_tab_navigation_description:
+      en: "Next and Previous Tab go around from the last tab to the first. Off, they stop at the ends."
+      sv: "Nästa och Föregående flik går runt från den sista fliken till den första. Avstängt stannar de vid ändarna."
+    font_size:
+      en: "Font Size"
+      sv: "Textstorlek"
+    font_size_description:
+      en: "Font size in pixels for the query, script and snippet editors (8-32)."
+      sv: "Textstorlek i pixlar för fråge-, skript- och kodsnuttsredigerarna (8-32)."
+  database:
+    page:
+      en: "Database"
+      sv: "Databas"
+    connection:
+      en: "Connection"
+      sv: "Anslutning"
+    default_connection_timeout:
+      en: "Default Connection Timeout"
+      sv: "Standardtidsgräns för anslutning"
+    default_connection_timeout_description:
+      en: "Default timeout in seconds for database connections (5-300 seconds)."
+      sv: "Standardtidsgräns i sekunder för databasanslutningar (5-300 sekunder)."
+    query_timeout:
+      en: "Query Timeout"
+      sv: "Tidsgräns för frågor"
+    query_timeout_description:
+      en: "Timeout in seconds for SQL query execution (10-600 seconds)."
+      sv: "Tidsgräns i sekunder för körning av SQL-frågor (10-600 sekunder)."
+    script_timeout:
+      en: "Script Timeout"
+      sv: "Tidsgräns för skript"
+    script_timeout_description:
+      en: "Wall-clock limit in seconds for a script run. 0 means unlimited, Stop is always available."
+      sv: "Längsta körtid i sekunder för ett skript. 0 betyder obegränsat, Stoppa finns alltid."
+    disconnect_when_idle:
+      en: "Disconnect When Idle"
+      sv: "Koppla från vid inaktivitet"
+    disconnect_when_idle_description:
+      en: "Close a connection after this many minutes without a query, metadata fetch or pending edit. The next action reconnects. 0 keeps connections open. A connection can set its own value."
+      sv: "Stäng en anslutning efter så här många minuter utan fråga, hämtning av metadata eller väntande ändring. Nästa åtgärd ansluter igen. 0 håller anslutningarna öppna. En anslutning kan ha ett eget värde."
+    show_connection_notifications:
+      en: "Show Connection Notifications"
+      sv: "Visa aviseringar om anslutningar"
+    show_connection_notifications_description:
+      en: "Show notifications when connecting to or disconnecting from databases."
+      sv: "Visa aviseringar när en databas ansluts eller kopplas från."
+    max_history_items:
+      en: "Max History Items"
+      sv: "Max antal historikposter"
+    max_history_items_description:
+      en: "Maximum number of query-history entries to keep. Older entries are pruned after each query. Set to 0 to keep an unlimited history."
+      sv: "Högsta antal poster att spara i frågehistoriken. Äldre poster rensas efter varje fråga. 0 sparar obegränsad historik."
+    show_row_numbers:
+      en: "Show Row Numbers"
+      sv: "Visa radnummer"
+    show_row_numbers_description:
+      en: "Number the rows of a result. Applies to the next result shown."
+      sv: "Numrera raderna i ett resultat. Gäller från nästa resultat som visas."
+    show_invisible_characters:
+      en: "Show Invisible Characters"
+      sv: "Visa osynliga tecken"
+    show_invisible_characters_description:
+      en: "Mark control characters, zero width characters, Unicode spaces and spaces at the end of a value in result cells. Copy, export and editing use the value unchanged."
+      sv: "Markera styrtecken, tecken med noll bredd, Unicode-blanksteg och blanksteg i slutet av ett värde i resultatceller. Kopiering, export och redigering använder värdet oförändrat."
+    defer_values:
+      en: "Defer Values Larger Than (KB)"
+      sv: "Skjut upp värden större än (kB)"
+    defer_values_description:
+      en: "When a table is opened, text and binary values larger than this are left on the server and shown with their size. The full value loads when the cell is opened or copied. Applies to SELECT * on one table with a primary key. Set to 0 to always load full values."
+      sv: "När en tabell öppnas lämnas text- och binärvärden större än så här kvar på servern och visas med sin storlek. Hela värdet hämtas när cellen öppnas eller kopieras. Gäller SELECT * på en tabell med primärnyckel. 0 hämtar alltid hela värden."
+    backup_tools:
+      en: "Backup Tools"
+      sv: "Verktyg för säkerhetskopiering"
+    client_tool_description:
+      en: "Path to %{name}. Leave empty to find it on PATH and in the usual install locations."
+      sv: "Sökväg till %{name}. Lämna tomt för att leta i PATH och på de vanliga installationsplatserna."
+  results:
+    title:
+      en: "Results"
+      sv: "Resultat"
+    dates_and_times:
+      en: "Dates and Times"
+      sv: "Datum och tider"
+    date_format:
+      en: "Date Format"
+      sv: "Datumformat"
+    date_format_description:
+      en: "How dates and timestamps are shown in results. Copy, export and editing use the value as the database returns it."
+      sv: "Hur datum och tidsstämplar visas i resultat. Kopiering, export och redigering använder värdet som databasen returnerar det."
+    time_zone:
+      en: "Time Zone"
+      sv: "Tidszon"
+    time_zone_description:
+      en: "The time zone timestamps with a time zone are shown in. The date and time picker uses it too."
+      sv: "Tidszonen som tidsstämplar med tidszon visas i. Datum- och tidsväljaren använder den också."
+  date_format:
+    day_month_year:
+      en: "Day first (31/01/2024 14:05:09)"
+      sv: "Dagen först (31/01/2024 14:05:09)"
+    month_day_year:
+      en: "Month first (01/31/2024 2:05:09 PM)"
+      sv: "Månaden först (01/31/2024 2:05:09 PM)"
+  time_zone:
+    local:
+      en: "Local time"
+      sv: "Lokal tid"
+  csv_delimiter:
+    comma:
+      en: "Comma"
+      sv: "Komma"
+    semicolon:
+      en: "Semicolon"
+      sv: "Semikolon"
+    tab:
+      en: "Tab"
+      sv: "Tabb"
+    pipe:
+      en: "Pipe"
+      sv: "Lodstreck"
+    custom:
+      en: "Custom"
+      sv: "Annan"
+  appearance:
+    page:
+      en: "Appearance"
+      sv: "Utseende"
+    theme:
+      en: "Theme"
+      sv: "Tema"
+    theme_description:
+      en: "Choose the color theme for the application. Used while Follow System Appearance is off."
+      sv: "Välj färgtema för programmet. Används när Följ systemets utseende är avstängt."
+    follow_system:
+      en: "Follow System Appearance"
+      sv: "Följ systemets utseende"
+    follow_system_description:
+      en: "Switch between the light and dark theme below as the system appearance changes."
+      sv: "Växla mellan det ljusa och det mörka temat nedan när systemets utseende ändras."
+    light_theme:
+      en: "Light Theme"
+      sv: "Ljust tema"
+    dark_theme:
+      en: "Dark Theme"
+      sv: "Mörkt tema"
+    fonts:
+      en: "Fonts"
+      sv: "Typsnitt"
+    ui_font:
+      en: "UI Font"
+      sv: "Gränssnittets typsnitt"
+    ui_font_description:
+      en: "Font used for the application UI."
+      sv: "Typsnitt för programmets gränssnitt."
+    theme_default_font:
+      en: "%{font} (theme default)"
+      sv: "%{font} (temats standard)"
+    search_fonts:
+      en: "Search fonts"
+      sv: "Sök typsnitt"
+    editor_font:
+      en: "Editor Font"
+      sv: "Redigerarens typsnitt"
+    editor_font_description:
+      en: "Monospace font used in the SQL editor and results table."
+      sv: "Typsnitt med fast bredd i SQL-redigeraren och resultattabellen."
+    terminal_font_size:
+      en: "Terminal Font Size"
+      sv: "Terminalens textstorlek"
+    terminal_font_size_description:
+      en: "Font size in pixels for the terminal pane (8-32)."
+      sv: "Textstorlek i pixlar för terminalpanelen (8-32)."
+  mcp:
+    page:
+      en: "MCP Server"
+      sv: "MCP-server"
+    server:
+      en: "Server"
+      sv: "Server"
+    enable:
+      en: "Enable MCP server"
+      sv: "Aktivera MCP-servern"
+    enable_description:
+      en: "Expose the open tabs, saved connections, SQL execution and schema browsing to external agents (Claude Code, OpenCode, ...) over a local MCP endpoint on 127.0.0.1. Requests must carry the bearer token shown below."
+      sv: "Ge externa agenter (Claude Code, OpenCode med flera) tillgång till öppna flikar, sparade anslutningar, körning av SQL och schemabläddring via en lokal MCP-ändpunkt på 127.0.0.1. Förfrågningar måste ha den bearer-token som visas nedan."
+    port:
+      en: "Port"
+      sv: "Port"
+    port_description:
+      en: "Loopback port the server listens on. Changing it restarts a running server and rotates the token."
+      sv: "Porten på loopback som servern lyssnar på. En ändring startar om en körande server och byter token."
+    allow_writes:
+      en: "Allow writes without confirmation"
+      sv: "Tillåt skrivningar utan bekräftelse"
+    allow_writes_description:
+      en: "Run INSERT, UPDATE, DELETE and DDL sent by an agent without asking. Writes on PROD connections and DROP/TRUNCATE always ask, and reads never do."
+      sv: "Kör INSERT, UPDATE, DELETE och DDL från en agent utan att fråga. Skrivningar på PROD-anslutningar och DROP/TRUNCATE frågar alltid, läsningar aldrig."
+    status:
+      en: "Status"
+      sv: "Status"
+    running_at:
+      en: "Running at %{url}"
+      sv: "Körs på %{url}"
+    stopped:
+      en: "Stopped"
+      sv: "Stoppad"
+    error:
+      en: "Error: %{message}"
+      sv: "Fel: %{message}"
+    workspace:
+      en: "Agent workspace: %{path} (a tab's terminal pane opens there; start claude, opencode or codex and .mcp.json / opencode.json point them at this server)"
+      sv: "Agentens arbetsyta: %{path} (en fliks terminalpanel öppnas där. Starta claude, opencode eller codex så pekar .mcp.json och opencode.json dem mot den här servern)"
+    copy_url:
+      en: "Copy URL"
+      sv: "Kopiera URL"
+    copy_token:
+      en: "Copy token"
+      sv: "Kopiera token"
+    copy_claude_command:
+      en: "Copy `claude mcp add` command"
+      sv: "Kopiera kommandot `claude mcp add`"
+    open_workspace:
+      en: "Open workspace folder"
+      sv: "Öppna arbetsytans mapp"

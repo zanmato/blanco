@@ -1,7 +1,7 @@
 //! Action handlers for the `CopyAs*` actions on `ResultsPanel`.
 
+use blanco_ui::table::TableSelection;
 use gpui::{Context, Window};
-use gpui_component::table::TableSelection;
 
 use crate::app::{
     CopyAsCSV, CopyAsHTML, CopyAsJSON, CopyAsMarkdown, CopyAsSQL, CopyAsTSV, CopyAsVALUES,
@@ -17,19 +17,12 @@ impl ResultsPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let selected_rows = {
-            let table_state = self.table_state.read(cx);
-            let mut selected_rows = table_state.selected_rows().clone();
-            if selected_rows.is_empty() {
-                if let Some(cell) = table_state.selected_cell() {
-                    selected_rows.insert(cell.0);
-                } else {
-                    tracing::error!("Failed to copy as {}: No rows selected for copying", format);
-                    return;
-                }
-            }
-            selected_rows
-        };
+        // Selected rows, or the row of a selected cell.
+        let selected_rows = self.table_state.read(cx).selection().rows();
+        if selected_rows.is_empty() {
+            tracing::error!("Failed to copy as {}: No rows selected for copying", format);
+            return;
+        }
 
         // A copy holds values, not previews of them.
         let format_for_retry = format.to_string();
@@ -86,9 +79,8 @@ impl ResultsPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let table_state = self.table_state.read(cx);
-        let has_rows = !table_state.selected_rows().is_empty();
-        match table_state.selection() {
+        let selection = self.table_state.read(cx).selection().clone();
+        match selection {
             TableSelection::Cell(row, col) => {
                 self.on_copy_cell_value(&CopyCellValue { row, col }, window, cx)
             }
@@ -102,10 +94,7 @@ impl ResultsPanel {
                 window,
                 cx,
             ),
-            // Rows picked with ctrl or shift report only through
-            // `selected_rows`.
-            TableSelection::Row(_) => self.copy_selected_as("tsv", window, cx),
-            TableSelection::None if has_rows => self.copy_selected_as("tsv", window, cx),
+            TableSelection::Rows(_) => self.copy_selected_as("tsv", window, cx),
             TableSelection::None => {}
         }
     }

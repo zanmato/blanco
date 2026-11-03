@@ -39,7 +39,7 @@ impl EditorPanel {
         };
 
         if source.trim().is_empty() {
-            window.push_notification((NotificationType::Error, "No script to run"), cx);
+            window.push_notification((NotificationType::Error, t!("editor.script.no_script")), cx);
             return;
         }
 
@@ -47,7 +47,10 @@ impl EditorPanel {
         // so refuse to start a second one for the same tab.
         if self.loading {
             window.push_notification(
-                (NotificationType::Warning, "A script is already running"),
+                (
+                    NotificationType::Warning,
+                    t!("editor.script.already_running"),
+                ),
                 cx,
             );
             return;
@@ -60,8 +63,10 @@ impl EditorPanel {
         let editor_entity = script_tab.editor.clone();
 
         let activity_label = script_tab.context.connection_name.clone();
-        let activity =
-            ActivityReporter::global(cx).begin(format!("{activity_label}: running script"));
+        let activity = ActivityReporter::global(cx).begin(t!(
+            "editor.activity.running_script",
+            connection = activity_label
+        ));
 
         // Save the tab with its run time, through the autosave path so a new
         // tab's row is inserted exactly once.
@@ -71,7 +76,10 @@ impl EditorPanel {
         cx.notify();
 
         log_view.update(cx, |log, cx| {
-            log.append_text(&SqlViewMessage::Comment("running script…".to_string()), cx);
+            log.append_text(
+                &SqlViewMessage::Comment(t!("editor.script.running").into_owned()),
+                cx,
+            );
         });
 
         let db_service: Arc<dyn DatabaseServiceTrait> =
@@ -148,27 +156,31 @@ impl EditorPanel {
             let elapsed = time_format::format_duration(duration_us);
 
             match &outcome {
-                Ok(()) => {
-                    activity.finish(ActivityResult::Ok(format!("Script OK · {elapsed}").into()))
-                }
-                Err(message) if message == scripting::CANCELLED_MESSAGE => {
-                    activity.finish(ActivityResult::Err("script cancelled".into()))
-                }
-                Err(message) if message.starts_with(scripting::TIMED_OUT_PREFIX) => {
-                    activity.finish(ActivityResult::Err("script timed out".into()))
-                }
-                Err(_) => activity.finish(ActivityResult::Err("script failed".into())),
+                Ok(()) => activity.finish(ActivityResult::Ok(
+                    t!("editor.activity.script_ok", duration = elapsed).into(),
+                )),
+                Err(message) if message == scripting::CANCELLED_MESSAGE => activity.finish(
+                    ActivityResult::Err(t!("editor.activity.script_cancelled").into()),
+                ),
+                Err(message) if message.starts_with(scripting::TIMED_OUT_PREFIX) => activity
+                    .finish(ActivityResult::Err(
+                        t!("editor.activity.script_timed_out").into(),
+                    )),
+                Err(_) => activity.finish(ActivityResult::Err(
+                    t!("editor.activity.script_failed").into(),
+                )),
             }
 
             window
                 .update(|window, cx| {
                     let summary = match &outcome {
-                        Ok(()) => format!(
-                            "{}, script finished in {}",
-                            time_format::format_current_timestamp(),
-                            elapsed
-                        ),
-                        Err(message) => format!("script failed: {message}"),
+                        Ok(()) => t!(
+                            "editor.script.finished",
+                            timestamp = time_format::format_current_timestamp(),
+                            duration = elapsed
+                        )
+                        .into_owned(),
+                        Err(message) => t!("editor.script.failed", error = message).into_owned(),
                     };
                     log_view.update(cx, |log, cx| {
                         log.append_text(&SqlViewMessage::Comment(summary), cx);
@@ -316,9 +328,9 @@ fn syntax_errors(source: &str) -> Vec<SyntaxError> {
     while let Some(node) = stack.pop() {
         if node.is_error() || node.is_missing() {
             let message = if node.is_missing() {
-                format!("missing {}", node.kind())
+                t!("editor.script.missing_token", token = node.kind()).into_owned()
             } else {
-                "syntax error".to_string()
+                t!("editor.script.syntax_error").into_owned()
             };
             // An empty ERROR node (a missing token at EOF) would render as a
             // zero-width squiggle; widen it to at least one character.

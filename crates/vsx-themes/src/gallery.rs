@@ -127,7 +127,7 @@ impl Client {
             .extensions
             .into_iter()
             .next()
-            .with_context(|| format!("{id} is not in the gallery"))
+            .with_context(|| t!("vsx_themes.errors.not_in_gallery", id = id))
     }
 
     fn query(
@@ -168,9 +168,9 @@ impl Client {
                     )
                     .json(&body)
             })
-            .context("Gallery search failed")?
+            .with_context(|| t!("vsx_themes.errors.search_failed"))?
             .json()
-            .context("The gallery answered the search with something unexpected")?;
+            .with_context(|| t!("vsx_themes.errors.unexpected_search_answer"))?;
         Ok(parse_query(response))
     }
 
@@ -197,17 +197,25 @@ impl Client {
 
     fn asset(&self, extension: &Extension, asset_type: &str) -> anyhow::Result<Vec<u8>> {
         let Some(url) = extension.assets.get(asset_type) else {
-            bail!("{} has no {asset_type}", extension.id());
+            bail!(t!(
+                "vsx_themes.errors.missing_asset",
+                id = extension.id(),
+                asset = asset_type
+            ));
         };
-        let response = self
-            .send(|| self.http.get(url))
-            .with_context(|| format!("downloading {asset_type} of {}", extension.id()))?;
+        let response = self.send(|| self.http.get(url)).with_context(|| {
+            t!(
+                "vsx_themes.errors.downloading",
+                asset = asset_type,
+                id = extension.id()
+            )
+        })?;
         let mut bytes = Vec::new();
         response
             .take(MAX_DOWNLOAD_BYTES + 1)
             .read_to_end(&mut bytes)?;
         if bytes.len() as u64 > MAX_DOWNLOAD_BYTES {
-            bail!("{} is too large", extension.id());
+            bail!(t!("vsx_themes.errors.too_large", id = extension.id()));
         }
         Ok(bytes)
     }
@@ -230,10 +238,10 @@ impl Client {
             .map(Duration::from_secs)
             .unwrap_or(Duration::from_secs(1));
         if wait > MAX_RETRY_WAIT {
-            bail!(
-                "the gallery is rate limiting requests, try again in {} seconds",
-                wait.as_secs()
-            );
+            bail!(t!(
+                "vsx_themes.errors.rate_limited",
+                seconds = wait.as_secs()
+            ));
         }
         std::thread::sleep(wait);
         Ok(build().send()?.error_for_status()?)

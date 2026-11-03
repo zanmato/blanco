@@ -302,10 +302,14 @@ impl SnippetsPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let base = if is_group { "New Group" } else { "New Snippet" };
+        let base = if is_group {
+            t!("sidebar.snippets.new_group_name")
+        } else {
+            t!("sidebar.snippets.new_snippet_name")
+        };
         let snippet = SnippetData {
             id: None,
-            name: self.unique_name(base, parent_id),
+            name: self.unique_name(&base, parent_id),
             content: String::new(),
             kind: EditorKind::default(),
             parent_id,
@@ -335,7 +339,10 @@ impl SnippetsPanel {
         };
         let copy = SnippetData {
             id: None,
-            name: self.unique_name(&format!("{} copy", original.name), original.parent_id),
+            name: self.unique_name(
+                &t!("sidebar.copy_name", name = original.name),
+                original.parent_id,
+            ),
             position: self.next_position(original.parent_id),
             trigger: None,
             ..original
@@ -557,8 +564,8 @@ impl Render for SnippetsPanel {
                                 .gap_1()
                                 .text_size(px(12.))
                                 .text_color(cx.theme().muted_foreground)
-                                .child("No snippets yet")
-                                .child("Right-click to add a snippet or group"),
+                                .child(t!("sidebar.snippets.empty"))
+                                .child(t!("sidebar.snippets.empty_hint")),
                         )
                     })
                     .overflow_y_scrollbar(),

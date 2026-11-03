@@ -33,10 +33,10 @@ impl RedisConnection {
         let (connection_string, client_name) = take_client_name(connection_string);
         let connection_string = connection_string.as_str();
         let config = Config::from_url(connection_string)
-            .map_err(|e| anyhow!("invalid Redis connection URL: {e}"))?;
+            .map_err(|e| anyhow!(t!("redis.invalid_url", error = e)))?;
         let client = Builder::from_config(config)
             .build()
-            .map_err(|e| anyhow!("failed to build Redis client: {e}"))?;
+            .map_err(|e| anyhow!(t!("redis.client_failed", error = e)))?;
 
         // Derive a display name from the URL without leaking the password.
         let display_name = match url::Url::parse(connection_string) {
@@ -65,7 +65,7 @@ impl RedisConnection {
     async fn run_command(&self, parts: &[String]) -> Result<Value> {
         let (name, args) = parts
             .split_first()
-            .ok_or_else(|| anyhow!("empty command"))?;
+            .ok_or_else(|| anyhow!(t!("redis.empty_command")))?;
         let custom = CustomCommand::new(name.to_uppercase(), ClusterHash::FirstKey, false);
         let args: Vec<Value> = args.iter().map(|a| Value::from(a.as_str())).collect();
         let reply: Value = self
@@ -80,7 +80,7 @@ impl RedisConnection {
     async fn run_line(&self, line: &str) -> Result<Value> {
         let parts = tokenize(line)?;
         if parts.is_empty() {
-            return Err(anyhow!("empty command"));
+            return Err(anyhow!(t!("redis.empty_command")));
         }
         self.run_command(&parts).await
     }
@@ -398,7 +398,7 @@ impl Connection for RedisConnection {
             });
         }
         if results.is_empty() {
-            return Err(anyhow!("no command to run"));
+            return Err(anyhow!(t!("redis.no_command")));
         }
         Ok(results)
     }

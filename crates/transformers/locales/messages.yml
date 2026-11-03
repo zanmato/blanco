@@ -1,0 +1,13 @@
+_version: 2
+# Messages the transformers write for the user. See the glossary at the top
+# of crates/blanco/locales/app.yml.
+transformers:
+  format_error:
+    en: "Format error: %{error}"
+    sv: "Formatfel: %{error}"
+  empty_selection:
+    en: "No data selected for copying"
+    sv: "Inga data har markerats för kopiering"
+  utf8_with_bom:
+    en: "UTF-8 with BOM"
+    sv: "UTF-8 med BOM"

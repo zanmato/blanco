@@ -559,6 +559,48 @@ is set. Tests that connect without a password call
 `DatabaseService::set_password_file` with a temporary path, so they do not
 depend on the home directory of whoever runs them.
 
+## Interface language
+
+UI text is looked up with rust-i18n's `t!("area.key")` (macro imported crate
+wide in `main.rs`, `%{name}` placeholders as `t!("key", name = value)`). The
+strings live in `crates/blanco/locales/*.yml`, one file per area, in rust-i18n's
+version 2 format: every key holds its `en` and `sv` text side by side. A group
+must never hold a bare string, which v2 reads as a locale, and YAML 1.1 words
+such as `On` (Swedish Wednesday) need quotes. `build.rs` reruns the build when a
+locale file changes, since the macro reads them unseen by Cargo.
+`i18n::tests::every_locale_translates_every_string` fails on a key missing in a
+language or with other placeholders. Whole sentences go in one string, never
+glued from translated pieces, so a language can reorder them. `t!` gives a
+`Cow<str>`, which converts into `SharedString`, while `Text` (setting
+descriptions) needs `.into_owned()`. Text held in statics must be looked up when
+drawn, since the locale is chosen after settings load.
+
+Every other crate with text a user sees (blanco-core, database, app-database,
+transformers, the drivers, blanco-ui, vsx-themes, terminal) has its own
+`i18n!`, `locales/` and `build.rs` the same way, keys prefixed with the crate
+name, and its own completeness test. The locale is one process global, so the
+app's `set_locale` reaches them all. Server, driver and OS error text passes
+through untranslated, Blanco's words around it are translated. Text for agents
+(MCP tools, `QueryRunEnded` outcomes) and logs stay English. Code must never
+decide anything by matching Blanco's own message text, which differs per
+language: SSH authentication failures are `SshAuthenticationError`, and keys
+built at run time (`t!(format!(..))`) get a test that each exists. Counts that
+can be one use `_one` and `_other` keys.
+
+`locales/gpui_component.yml` translates gpui-component's own `ui.yml` strings
+under `gpui_component`, laid over the library's by `rust_i18n::extend!` in
+`i18n::init` (callable once, a second call panics). Its `en` entries replace the
+library's wording where Blanco's differs. `general.language` names a locale or
+is empty to follow the system (`sys-locale`, `sv-SE` matching `sv`), and applies
+at once: `i18n::change` sets the locale and the `i18n::Locale` global, rebuilds
+the menus and redraws. Text translated while rendering follows by itself. A view
+that keeps translated text in its state (an input's placeholder, select items,
+column headers, a stored tab title) observes `Locale` and makes it again, with
+`i18n::placeholder_follows_locale` for a placeholder from one key. Prefer
+keeping what a label names over its text, as `ResultTabTitle` does. Dialogs keep
+their text until reopened. A new language is a `xx:` line under every key, then
+`language.name`.
+
 ## Windows
 
 `windows.rs` owns Blanco's windows. Each window is a `BlancoApp` with its own tabs,

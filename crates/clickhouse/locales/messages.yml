@@ -1,0 +1,49 @@
+_version: 2
+# Messages the ClickHouse driver writes around the server's errors. See the
+# glossary at the top of crates/blanco/locales/app.yml.
+clickhouse:
+  invalid_url:
+    en: "invalid ClickHouse connection URL: %{error}"
+    sv: "ogiltig anslutnings-URL för ClickHouse: %{error}"
+  invalid_scheme:
+    en: "ClickHouse connection URL must use http or https, got '%{scheme}'"
+    sv: "anslutnings-URL:en för ClickHouse måste använda http eller https, fick '%{scheme}'"
+  read_ca_failed:
+    en: "failed to read CA certificate %{path}: %{error}"
+    sv: "det gick inte att läsa CA-certifikatet %{path}: %{error}"
+  invalid_ca:
+    en: "invalid CA certificate: %{error}"
+    sv: "ogiltigt CA-certifikat: %{error}"
+  read_client_certificate_failed:
+    en: "failed to read client certificate %{path}: %{error}"
+    sv: "det gick inte att läsa klientcertifikatet %{path}: %{error}"
+  read_client_key_failed:
+    en: "failed to read client key %{path}: %{error}"
+    sv: "det gick inte att läsa klientnyckeln %{path}: %{error}"
+  invalid_client_identity:
+    en: "invalid client identity: %{error}"
+    sv: "ogiltig klientidentitet: %{error}"
+  http_client_failed:
+    en: "failed to build HTTP client: %{error}"
+    sv: "det gick inte att skapa HTTP-klienten: %{error}"
+  query_failed:
+    en: "ClickHouse query failed (%{status}): %{error}"
+    sv: "Frågan misslyckades i ClickHouse (%{status}): %{error}"
+  table_not_found:
+    en: "Table '%{table}' not found"
+    sv: "Tabellen '%{table}' hittades inte"
+  engine:
+    en: "Engine"
+    sv: "Tabellmotor"
+  sorting_key:
+    en: "Sorting key"
+    sv: "Sorteringsnyckel"
+  partition_key:
+    en: "Partition key"
+    sv: "Partitionsnyckel"
+  definition_changed:
+    en: "Definition changed"
+    sv: "Definitionen ändrades"
+  modified_newest_part:
+    en: "when the newest data part was written"
+    sv: "när den senaste datadelen skrevs"

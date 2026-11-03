@@ -65,14 +65,14 @@ impl RedisForm {
         let username_input = make_input(
             window,
             cx,
-            "(optional, Redis 6+ ACL)",
+            &t!("connection_dialog.redis_username_placeholder"),
             false,
             conn.and_then(|c| c.username.as_deref()),
         );
         let password_input = make_input(
             window,
             cx,
-            "Password (optional)",
+            &t!("connection_dialog.password_optional"),
             true,
             conn.and_then(|c| c.password.as_deref()),
         );
@@ -88,7 +88,7 @@ impl RedisForm {
         let ssh_host_input = make_input(
             window,
             cx,
-            "SSH Host",
+            &t!("connection_dialog.ssh_host_placeholder"),
             false,
             conn.and_then(|c| c.ssh_host.as_deref()),
         );
@@ -96,35 +96,35 @@ impl RedisForm {
         let ssh_user_input = make_input(
             window,
             cx,
-            "SSH Username (optional)",
+            &t!("connection_dialog.ssh_username_optional"),
             false,
             conn.and_then(|c| c.ssh_user.as_deref()),
         );
         let ssh_password_input = make_input(
             window,
             cx,
-            "SSH Password (optional)",
+            &t!("connection_dialog.ssh_password_optional"),
             true,
             conn.and_then(|c| c.ssh_password.as_deref()),
         );
         let ssh_private_key_input = make_input(
             window,
             cx,
-            "Private Key Path (optional)",
+            &t!("connection_dialog.private_key_path_optional"),
             false,
             conn.and_then(|c| c.ssh_private_key_path.as_deref()),
         );
         let ssh_private_key_password_input = make_input(
             window,
             cx,
-            "Private Key Password (optional)",
+            &t!("connection_dialog.private_key_password_optional"),
             true,
             conn.and_then(|c| c.ssh_private_key_password.as_deref()),
         );
         let ssh_jump_hosts_input = make_input(
             window,
             cx,
-            "From ~/.ssh/config, or user@bastion:22, other",
+            &t!("connection_dialog.jump_hosts_placeholder"),
             false,
             conn.and_then(|c| c.ssh_jump_hosts.as_deref()),
         );
@@ -165,16 +165,16 @@ impl RedisForm {
         let database = self.database_input.read(cx).value();
 
         if host.is_empty() {
-            return Some("Host is required".to_string());
+            return Some(t!("connection_dialog.errors.host_required").into_owned());
         }
         if port_str.is_empty() {
-            return Some("Port is required".to_string());
+            return Some(t!("connection_dialog.errors.port_required").into_owned());
         }
         if port_str.parse::<u16>().is_err() {
-            return Some("Port must be a valid number (1-65535)".to_string());
+            return Some(t!("connection_dialog.errors.port_invalid").into_owned());
         }
         if !database.is_empty() && database.parse::<u8>().is_err() {
-            return Some("Database must be a numeric index (e.g. 0)".to_string());
+            return Some(t!("connection_dialog.errors.redis_database_index").into_owned());
         }
         None
     }
@@ -271,14 +271,14 @@ pub(super) fn render(
                     v_flex()
                         .flex_1()
                         .gap_2()
-                        .child(div().text_sm().child("Host"))
+                        .child(div().text_sm().child(t!("connection_dialog.host")))
                         .child(Input::new(&form.host_input)),
                 )
                 .child(
                     v_flex()
                         .flex_1()
                         .gap_2()
-                        .child(div().text_sm().child("Port"))
+                        .child(div().text_sm().child(t!("connection_dialog.port")))
                         .child(Input::new(&form.port_input)),
                 ),
         )
@@ -289,12 +289,12 @@ pub(super) fn render(
                     v_flex()
                         .flex_1()
                         .gap_2()
-                        .child(div().text_sm().child("User"))
+                        .child(div().text_sm().child(t!("connection_dialog.user")))
                         .child(Input::new(&form.username_input)),
                 )
                 .child(secret_field(
                     "redis-password-ask",
-                    "Password",
+                    t!("connection_dialog.password"),
                     &form.password_input,
                     SecretKind::Password,
                     &modal.ask_secrets,
@@ -308,14 +308,18 @@ pub(super) fn render(
                     v_flex()
                         .flex_1()
                         .gap_2()
-                        .child(div().text_sm().child("Database (index)"))
+                        .child(
+                            div()
+                                .text_sm()
+                                .child(t!("connection_dialog.database_index")),
+                        )
                         .child(Input::new(&form.database_input)),
                 )
                 .child(
                     v_flex()
                         .flex_1()
                         .gap_2()
-                        .child(div().text_sm().child("Client Name"))
+                        .child(div().text_sm().child(t!("connection_dialog.client_name")))
                         .child(Input::new(&form.client_name_input)),
                 ),
         )

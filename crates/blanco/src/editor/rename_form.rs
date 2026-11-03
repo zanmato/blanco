@@ -34,7 +34,7 @@ impl Render for RenameTabForm {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         v_flex().gap_3().min_w(px(200.)).child(
             field()
-                .label("Name")
+                .label(t!("editor.rename_tab.name").into_owned())
                 .child(Input::new(&self.input).w_full()),
         )
     }

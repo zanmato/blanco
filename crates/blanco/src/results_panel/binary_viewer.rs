@@ -64,16 +64,16 @@ impl ImageKind {
         }
     }
 
-    pub fn label(self) -> &'static str {
+    pub fn format_name(self) -> &'static str {
         match self {
-            Self::Png => "PNG image",
-            Self::Jpeg => "JPEG image",
-            Self::Gif => "GIF image",
-            Self::Webp => "WebP image",
-            Self::Bmp => "BMP image",
-            Self::Tiff => "TIFF image",
-            Self::Ico => "ICO image",
-            Self::Svg => "SVG image",
+            Self::Png => "PNG",
+            Self::Jpeg => "JPEG",
+            Self::Gif => "GIF",
+            Self::Webp => "WebP",
+            Self::Bmp => "BMP",
+            Self::Tiff => "TIFF",
+            Self::Ico => "ICO",
+            Self::Svg => "SVG",
         }
     }
 
@@ -269,10 +269,10 @@ impl BinaryViewer {
         };
         if self.bytes.len() > PREVIEW_LIMIT {
             self.preview = Preview::Failed(
-                format!(
-                    "Too large to preview ({}, the limit is {})",
-                    format_size(self.bytes.len()),
-                    format_size(PREVIEW_LIMIT)
+                t!(
+                    "results.binary.too_large_to_preview",
+                    size = format_size(self.bytes.len()),
+                    limit = format_size(PREVIEW_LIMIT)
                 )
                 .into(),
             );
@@ -332,14 +332,19 @@ impl BinaryViewer {
                     async move { std::fs::write(&path, bytes.as_slice()) }
                 })
                 .await;
-            let notification = match written {
+            let notification: (NotificationType, SharedString) = match written {
                 Ok(()) => (
                     NotificationType::Success,
-                    SharedString::from(format!("Saved {}", path.display())),
+                    t!("results.binary.saved", path = path.display()).into(),
                 ),
                 Err(error) => (
                     NotificationType::Error,
-                    SharedString::from(format!("Could not save {}: {error}", path.display())),
+                    t!(
+                        "results.binary.save_failed",
+                        path = path.display(),
+                        error = error
+                    )
+                    .into(),
                 ),
             };
             cx.update(|window, cx| window.push_notification(notification, cx))
@@ -353,7 +358,7 @@ impl BinaryViewer {
             files: true,
             directories: false,
             multiple: false,
-            prompt: Some("Load".into()),
+            prompt: Some(t!("results.binary.load_prompt").into()),
         });
         cx.spawn_in(window, async move |viewer, cx| {
             let Ok(Ok(Some(paths))) = paths.await else {
@@ -380,8 +385,12 @@ impl BinaryViewer {
                         .ok();
                 }
                 Err(error) => {
-                    let message =
-                        SharedString::from(format!("Could not read {}: {error}", path.display()));
+                    let message: SharedString = t!(
+                        "results.binary.read_failed",
+                        path = path.display(),
+                        error = error
+                    )
+                    .into();
                     cx.update(|window, cx| {
                         window.push_notification((NotificationType::Error, message), cx)
                     })
@@ -398,7 +407,12 @@ impl BinaryViewer {
         }
         let size = format_size(self.bytes.len());
         match self.kind {
-            Some(kind) => format!("{}, {size}", kind.label()),
+            Some(kind) => t!(
+                "results.binary.image_description",
+                format = kind.format_name(),
+                size = size
+            )
+            .into_owned(),
             None => size,
         }
     }
@@ -449,13 +463,17 @@ impl BinaryViewer {
                             .object_fit(ObjectFit::ScaleDown),
                     )
                     .into_any_element(),
-                Preview::Decoding => self.render_message("Decoding image…", cx),
+                Preview::Decoding => self.render_message(t!("results.binary.decoding"), cx),
                 Preview::Failed(error) => self.render_message(error.clone(), cx),
-                Preview::None => self.render_message("No preview", cx),
+                Preview::None => self.render_message(t!("results.binary.no_preview"), cx),
             };
         }
         if self.bytes.is_empty() {
-            let message = if self.is_null { "NULL" } else { "Empty value" };
+            let message: SharedString = if self.is_null {
+                "NULL".into()
+            } else {
+                t!("results.binary.empty_value").into()
+            };
             return self.render_message(message, cx);
         }
         uniform_list(
@@ -506,7 +524,7 @@ impl Render for BinaryViewer {
                                 .outline()
                                 .child(
                                     Button::new("binary-viewer-image")
-                                        .label("Image")
+                                        .label(t!("results.binary.image"))
                                         .selected(mode == ViewMode::Image)
                                         .on_click(cx.listener(|viewer, _, _, cx| {
                                             viewer.mode = ViewMode::Image;
@@ -515,7 +533,7 @@ impl Render for BinaryViewer {
                                 )
                                 .child(
                                     Button::new("binary-viewer-hex-mode")
-                                        .label("Hex")
+                                        .label(t!("results.binary.hex"))
                                         .selected(mode == ViewMode::Hex)
                                         .on_click(cx.listener(|viewer, _, _, cx| {
                                             viewer.mode = ViewMode::Hex;
@@ -527,7 +545,7 @@ impl Render for BinaryViewer {
                     .child(
                         Button::new("binary-viewer-save")
                             .icon(IconName::Save)
-                            .label("Save to File")
+                            .label(t!("results.binary.save_to_file"))
                             .ghost()
                             .xsmall()
                             .disabled(self.is_null)
@@ -539,7 +557,7 @@ impl Render for BinaryViewer {
                         this.child(
                             Button::new("binary-viewer-load")
                                 .icon(IconName::FolderOpen)
-                                .label("Load File")
+                                .label(t!("results.binary.load_file"))
                                 .ghost()
                                 .xsmall()
                                 .on_click(cx.listener(|viewer, _, window, cx| {

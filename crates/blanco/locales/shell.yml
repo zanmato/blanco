@@ -1,0 +1,312 @@
+_version: 2
+shell:
+  common:
+    cancel:
+      en: "Cancel"
+      sv: "Avbryt"
+    save:
+      en: "Save"
+      sv: "Spara"
+  sidebar:
+    connections:
+      en: "Connections"
+      sv: "Anslutningar"
+    snippets:
+      en: "Snippets"
+      sv: "Kodsnuttar"
+    history:
+      en: "History"
+      sv: "Historik"
+    open_tabs:
+      en: "Open Tabs"
+      sv: "Öppna flikar"
+    dashboards:
+      en: "Dashboards"
+      sv: "Instrumentpaneler"
+    settings:
+      en: "Settings"
+      sv: "Inställningar"
+    select_table_to_import:
+      en: "Select a table in the sidebar to import into."
+      sv: "Välj en tabell i sidopanelen att importera till."
+    select_table_to_export:
+      en: "Select a table in the sidebar to export."
+      sv: "Välj en tabell i sidopanelen att exportera."
+  title_bar:
+    search_commands:
+      en: "Search commands"
+      sv: "Sök kommandon"
+    toggle_sidebar:
+      en: "Toggle Sidebar"
+      sv: "Visa eller dölj sidopanel"
+  tabs:
+    script_title:
+      en: "%{name} script"
+      sv: "Skript för %{name}"
+  activity:
+    loading_ddl:
+      en: "%{connection}: loading DDL"
+      sv: "%{connection}: läser in DDL"
+  status:
+    ready:
+      en: "Ready"
+      sv: "Klar"
+    connected:
+      en: "connected to %{database}"
+      sv: "ansluten till %{database}"
+    closed_idle:
+      en: "closed idle connection %{database}"
+      sv: "stängde inaktiv anslutning %{database}"
+    disconnected:
+      en: "disconnected from %{database}"
+      sv: "frånkopplad från %{database}"
+  close_window:
+    title:
+      en: "Close the window without saving?"
+      sv: "Stänga fönstret utan att spara?"
+    close:
+      en: "Close Window"
+      sv: "Stäng fönster"
+    unsaved_one:
+      en: "Your changes to %{name} are lost if you close the window."
+      sv: "Dina ändringar i %{name} går förlorade om du stänger fönstret."
+    unsaved_other:
+      en: "Your changes in %{count} tabs are lost if you close the window: %{names}."
+      sv: "Dina ändringar i %{count} flikar går förlorade om du stänger fönstret: %{names}."
+  mcp_write:
+    title_environment:
+      en: "An agent wants to write to %{environment}"
+      sv: "En agent vill skriva till %{environment}"
+    title:
+      en: "An agent wants to run a write statement"
+      sv: "En agent vill köra en sats som skriver"
+    connected_through:
+      en: "Connected through the MCP server, against %{target}."
+      sv: "Ansluten via MCP-servern, mot %{target}."
+    abandoned:
+      en: "The agent stopped waiting for an answer. The statement will not run."
+      sv: "Agenten slutade vänta på svar. Satsen körs inte."
+    waiting_one:
+      en: "1 more request is waiting."
+      sv: "Ytterligare 1 begäran väntar."
+    waiting_other:
+      en: "%{count} more requests are waiting."
+      sv: "Ytterligare %{count} begäranden väntar."
+    remember:
+      en: "Don't ask again for %{kinds}"
+      sv: "Fråga inte igen för %{kinds}"
+    remember_tooltip:
+      en: "Run it, and let this agent run these statements on %{connection} without asking until it disconnects"
+      sv: "Kör den och låt agenten köra sådana satser på %{connection} utan att fråga tills den kopplar från"
+    run:
+      en: "Run"
+      sv: "Kör"
+    run_on_prod:
+      en: "Run on PROD"
+      sv: "Kör på PROD"
+  database_file:
+    open_prompt:
+      en: "Open database"
+      sv: "Öppna databas"
+    not_a_database:
+      en: "%{path} is not a SQLite or DuckDB database."
+      sv: "%{path} är inte en SQLite- eller DuckDB-databas."
+    already_exists:
+      en: "%{path} already exists. Open it with File, Open instead."
+      sv: "%{path} finns redan. Öppna den med Arkiv, Öppna i stället."
+    create_failed:
+      en: "Could not create the database: %{error}"
+      sv: "Det gick inte att skapa databasen: %{error}"
+  connection_dialog:
+    new_title:
+      en: "New Connection"
+      sv: "Ny anslutning"
+    edit_title:
+      en: "Edit Connection"
+      sv: "Redigera anslutning"
+    test:
+      en: "Test Connection"
+      sv: "Testa anslutning"
+    saved:
+      en: "Connection saved successfully"
+      sv: "Anslutningen sparades"
+    save_failed:
+      en: "Failed to save connection: %{error}"
+      sv: "Det gick inte att spara anslutningen: %{error}"
+    updated:
+      en: "Connection updated successfully"
+      sv: "Anslutningen uppdaterades"
+    update_failed:
+      en: "Failed to update connection: %{error}"
+      sv: "Det gick inte att uppdatera anslutningen: %{error}"
+    required_fields:
+      en: "Please fill in all required fields"
+      sv: "Fyll i alla obligatoriska fält"
+    credentials_failed:
+      en: "Failed to load connection credentials: %{error}"
+      sv: "Det gick inte att läsa in anslutningens inloggningsuppgifter: %{error}"
+  credentials:
+    not_utf8:
+      en: "connection credential is not valid UTF-8"
+      sv: "anslutningens inloggningsuppgift är inte giltig UTF-8"
+  secret_prompt:
+    password_title:
+      en: "Password for %{name}"
+      sv: "Lösenord för %{name}"
+    password_description:
+      en: "Enter the password for %{account}."
+      sv: "Ange lösenordet för %{account}."
+    password_placeholder:
+      en: "Password"
+      sv: "Lösenord"
+    ssh_password_title:
+      en: "SSH Password for %{name}"
+      sv: "SSH-lösenord för %{name}"
+    ssh_password_description:
+      en: "Enter the SSH password for %{account}."
+      sv: "Ange SSH-lösenordet för %{account}."
+    ssh_password_placeholder:
+      en: "SSH password"
+      sv: "SSH-lösenord"
+    passphrase_title:
+      en: "Key Passphrase for %{name}"
+      sv: "Nyckelns lösenfras för %{name}"
+    passphrase_description:
+      en: "Enter the passphrase for the key %{account}."
+      sv: "Ange lösenfrasen för nyckeln %{account}."
+    passphrase_placeholder:
+      en: "SSH key passphrase"
+      sv: "Lösenfras för SSH-nyckel"
+    not_accepted:
+      en: "Not accepted: %{reason}"
+      sv: "Godtogs inte: %{reason}"
+    kept_in_memory:
+      en: "Kept in memory until you disconnect."
+      sv: "Sparas i minnet tills du kopplar från."
+    connect:
+      en: "Connect"
+      sv: "Anslut"
+  update:
+    updated:
+      en: "Updated to v%{version}, click to view changelog"
+      sv: "Uppdaterad till v%{version}, klicka för att se ändringsloggen"
+    update:
+      en: "Update"
+      sv: "Uppdatera"
+    download_tooltip:
+      en: "Download Blanco %{version}"
+      sv: "Ladda ned Blanco %{version}"
+    download_failed:
+      en: "Failed to download update: %{error}"
+      sv: "Det gick inte att ladda ned uppdateringen: %{error}"
+    release_page_tooltip:
+      en: "Open the Blanco %{version} release page"
+      sv: "Öppna versionssidan för Blanco %{version}"
+    downloading:
+      en: "Downloading"
+      sv: "Laddar ned"
+    restart:
+      en: "Restart"
+      sv: "Starta om"
+    restart_tooltip:
+      en: "Restart to update to Blanco %{version}"
+      sv: "Starta om för att uppdatera till Blanco %{version}"
+    apply_failed:
+      en: "Failed to apply update: %{error}"
+      sv: "Det gick inte att installera uppdateringen: %{error}"
+    errors:
+      no_checksum:
+        en: "%{file} has no entry for %{asset}"
+        sv: "%{file} saknar en rad för %{asset}"
+      checksum_mismatch:
+        en: "SHA-256 mismatch for %{asset}: expected %{expected}, got %{actual}"
+        sv: "SHA-256 stämmer inte för %{asset}: väntade %{expected}, fick %{actual}"
+      public_key_malformed:
+        en: "Embedded update public key is malformed"
+        sv: "Den inbyggda publika nyckeln för uppdateringar är felaktig"
+      signature_malformed:
+        en: "Release signature is malformed"
+        sv: "Versionens signatur är felaktig"
+      signature_invalid:
+        en: "Release signature does not verify against the embedded key"
+        sv: "Versionens signatur stämmer inte med den inbyggda nyckeln"
+      unavailable:
+        en: "Updates are not available"
+        sv: "Uppdateringar är inte tillgängliga"
+      no_platform_release:
+        en: "No release is built for this platform"
+        sv: "Ingen version byggs för den här plattformen"
+      missing_asset:
+        en: "Release %{version} has no %{asset} asset"
+        sv: "Version %{version} saknar filen %{asset}"
+      verification_failed:
+        en: "Downloaded update failed verification"
+        sv: "Den nedladdade uppdateringen kunde inte verifieras"
+      executable_without_name:
+        en: "Release executable path has no file name"
+        sv: "Sökvägen till versionens programfil saknar filnamn"
+      no_executable:
+        en: "Downloaded release does not contain the executable"
+        sv: "Den nedladdade versionen innehåller inte programfilen"
+      no_data_directory:
+        en: "Failed to get data directory"
+        sv: "Det gick inte att hitta datamappen"
+      not_downloaded:
+        en: "No update has been downloaded"
+        sv: "Ingen uppdatering har laddats ned"
+      staged_missing:
+        en: "No downloaded update found at %{path}"
+        sv: "Ingen nedladdad uppdatering finns i %{path}"
+      no_digest:
+        en: "Downloaded update has no recorded digest"
+        sv: "Den nedladdade uppdateringen saknar sparad kontrollsumma"
+      tampered:
+        en: "The downloaded update changed on disk and was discarded"
+        sv: "Den nedladdade uppdateringen ändrades på disken och har kastats"
+      no_executable_path:
+        en: "Failed to resolve the executable path"
+        sv: "Det gick inte att hitta programfilens sökväg"
+      replace_failed:
+        en: "Failed to replace %{path}"
+        sv: "Det gick inte att ersätta %{path}"
+  themes:
+    folder_unreadable:
+      en: "Theme folder %{path} could not be read: %{error}"
+      sv: "Det gick inte att läsa temamappen %{path}: %{error}"
+    file_unloadable:
+      en: "Theme file %{name} could not be loaded: %{error}"
+      sv: "Det gick inte att läsa in temafilen %{name}: %{error}"
+    unknown_keys:
+      en: "Theme file %{name} has keys Blanco does not know, which are ignored: %{keys}"
+      sv: "Temafilen %{name} har nycklar som Blanco inte känner till och som ignoreras: %{keys}"
+    unknown_keys_more:
+      en: "Theme file %{name} has keys Blanco does not know, which are ignored: %{keys} and %{count} more, listed in the log"
+      sv: "Temafilen %{name} har nycklar som Blanco inte känner till och som ignoreras: %{keys} och %{count} till, som listas i loggen"
+  time:
+    minutes_seconds:
+      en: "%{minutes}m %{seconds}s"
+      sv: "%{minutes} min %{seconds} s"
+    execution:
+      en: "execution %{execution}"
+      sv: "körning %{execution}"
+    execution_fetch:
+      en: "execution %{execution} · fetch %{fetch}"
+      sv: "körning %{execution} · hämtning %{fetch}"
+    just_now:
+      en: "just now"
+      sv: "nyss"
+    seconds_ago:
+      en: "%{count}s ago"
+      sv: "för %{count} s sedan"
+    minutes_ago:
+      en: "%{count}m ago"
+      sv: "för %{count} min sedan"
+    hours_ago:
+      en: "%{count}h ago"
+      sv: "för %{count} h sedan"
+    days_ago:
+      en: "%{count}d ago"
+      sv: "för %{count} d sedan"
+    unknown:
+      en: "unknown"
+      sv: "okänd"

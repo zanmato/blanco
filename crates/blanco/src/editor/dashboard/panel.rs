@@ -1,19 +1,14 @@
 //! One panel of a dashboard: the result of its query shown as a table, a
 //! single number or a chart.
 
-use std::collections::HashSet;
-
 use app_database::DashboardPanelData;
 use blanco_core::{ConnectionContext, DatabaseType, QueryResult};
+use blanco_ui::table::{DataTable, TableState};
 use gpui::{
     AnyElement, App, AppContext as _, ClipboardItem, Context, Entity, IntoElement, ParentElement,
     Render, SharedString, Styled, Window, div, prelude::FluentBuilder as _, px,
 };
-use gpui_component::{
-    ActiveTheme as _,
-    table::{DataTable, TableSelection, TableState},
-    v_flex,
-};
+use gpui_component::{ActiveTheme as _, v_flex};
 use serde::{Deserialize, Serialize};
 
 use crate::copy_handler::CopyHandler;
@@ -125,10 +120,10 @@ impl PanelKind {
         ]
     }
 
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> SharedString {
         match self {
-            PanelKind::Table => "Table",
-            PanelKind::Stat => "Stat",
+            PanelKind::Table => t!("dashboard.panel_kind.table").into(),
+            PanelKind::Stat => t!("dashboard.panel_kind.stat").into(),
             PanelKind::Chart(kind) => kind.label(),
         }
     }
@@ -419,21 +414,16 @@ impl DashboardPanel {
         let state = self.table_state.read(cx);
         let delegate = state.delegate();
         if format.is_none()
-            && let TableSelection::Cell(row, col) = state.selection()
+            && let Some((row, col)) = state.selection().cell()
         {
             if let Some(Some(value)) = delegate.rows.get(row).and_then(|row| row.get(col)) {
                 cx.write_to_clipboard(ClipboardItem::new_string(value.clone()));
             }
             return;
         }
-        let mut rows: HashSet<usize> = state.selected_rows().clone();
+        let rows = state.selection().rows();
         if rows.is_empty() {
-            match state.selection() {
-                TableSelection::Cell(row, _) | TableSelection::Row(row) => {
-                    rows.insert(row);
-                }
-                _ => return,
-            }
+            return;
         }
         let data = selected_table_data(&rows, delegate);
         CopyHandler::new().copy_as_format(&data, format.unwrap_or("tsv"), window, cx);
@@ -475,7 +465,7 @@ impl DashboardPanel {
                 .position(|column_type| column_type.is_numeric()),
         };
         let Some(column) = column else {
-            return placeholder("No numeric column to show.", cx);
+            return placeholder(t!("dashboard.panel.no_numeric_column"), cx);
         };
         let label: SharedString = delegate
             .columns
@@ -485,7 +475,7 @@ impl DashboardPanel {
             .into();
         let shown = stat_value(&delegate.rows, column, spec.aggregate);
         let Some((shown, number)) = shown else {
-            return placeholder("No rows.", cx);
+            return placeholder(t!("dashboard.panel.no_rows"), cx);
         };
         let color = spec
             .thresholds
@@ -517,7 +507,7 @@ impl DashboardPanel {
     }
 }
 
-fn placeholder(message: &'static str, cx: &App) -> AnyElement {
+fn placeholder(message: std::borrow::Cow<'static, str>, cx: &App) -> AnyElement {
     div()
         .size_full()
         .flex()
@@ -525,7 +515,7 @@ fn placeholder(message: &'static str, cx: &App) -> AnyElement {
         .justify_center()
         .text_sm()
         .text_color(cx.theme().muted_foreground)
-        .child(message)
+        .child(SharedString::from(message))
         .into_any_element()
 }
 
@@ -632,11 +622,11 @@ impl Render for DashboardPanel {
         } else if !self.has_result {
             placeholder(
                 if self.loading {
-                    "Running…"
+                    t!("dashboard.panel.running")
                 } else if self.data.connection.is_none() {
-                    "The panel's connection was deleted."
+                    t!("dashboard.panel.connection_deleted")
                 } else {
-                    "Not run yet."
+                    t!("dashboard.panel.not_run_yet")
                 },
                 cx,
             )

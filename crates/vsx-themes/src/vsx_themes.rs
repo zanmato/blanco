@@ -5,6 +5,11 @@
 //! Nothing here knows the app it runs in. An app gives the panel the folder
 //! its custom themes load from at startup, and what "use this theme" means.
 
+#[macro_use]
+extern crate rust_i18n;
+
+rust_i18n::i18n!("locales", fallback = "en");
+
 pub mod browser;
 pub mod color;
 pub mod convert;
@@ -51,18 +56,20 @@ pub fn install(
     themes: &ConvertedThemes,
 ) -> anyhow::Result<PathBuf> {
     std::fs::create_dir_all(themes_dir)
-        .with_context(|| format!("creating {}", themes_dir.display()))?;
+        .with_context(|| t!("vsx_themes.errors.creating", path = themes_dir.display()))?;
     let path = installed_path(themes_dir, extension_id);
     let temporary = path.with_extension("json.partial");
     std::fs::write(&temporary, themes.to_json())
-        .with_context(|| format!("writing {}", temporary.display()))?;
-    std::fs::rename(&temporary, &path).with_context(|| format!("writing {}", path.display()))?;
+        .with_context(|| t!("vsx_themes.errors.writing", path = temporary.display()))?;
+    std::fs::rename(&temporary, &path)
+        .with_context(|| t!("vsx_themes.errors.writing", path = path.display()))?;
     Ok(path)
 }
 
 pub fn uninstall(themes_dir: &Path, extension_id: &str) -> anyhow::Result<()> {
     let path = installed_path(themes_dir, extension_id);
-    std::fs::remove_file(&path).with_context(|| format!("removing {}", path.display()))
+    std::fs::remove_file(&path)
+        .with_context(|| t!("vsx_themes.errors.removing", path = path.display()))
 }
 
 /// The theme names an installed file holds.
@@ -103,5 +110,54 @@ mod tests {
             installed_path(dir, "../Evil/Name"),
             Path::new("/themes/vscode..._evil_name.json")
         );
+    }
+
+    /// Every string has every translation, with the same placeholders.
+    #[test]
+    fn every_locale_translates_every_string() {
+        use std::collections::{BTreeMap, BTreeSet};
+
+        fn messages(locale: &str) -> BTreeMap<String, String> {
+            crate::_rust_i18n_backend()
+                .messages_for_locale(locale)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|(key, value)| (key.into_owned(), value.into_owned()))
+                .collect()
+        }
+        fn placeholders(text: &str) -> BTreeSet<&str> {
+            text.split("%{")
+                .skip(1)
+                .filter_map(|rest| rest.split_once('}').map(|(name, _)| name))
+                .collect()
+        }
+
+        let english = messages("en");
+        assert!(!english.is_empty(), "no English strings");
+        let locales = crate::_rust_i18n_backend().available_locales();
+        assert!(
+            locales.iter().any(|locale| locale == "sv"),
+            "no Swedish strings"
+        );
+        let mut failures = Vec::new();
+        for locale in locales {
+            if locale == "en" {
+                continue;
+            }
+            let translation = messages(&locale);
+            for (key, text) in &english {
+                match translation.get(key) {
+                    None => failures.push(format!("{locale}: missing {key}")),
+                    Some(translated) if placeholders(translated) != placeholders(text) => {
+                        failures.push(format!("{locale}: {key} has other %{{}} placeholders"))
+                    }
+                    Some(_) => {}
+                }
+            }
+            for key in translation.keys().filter(|key| !english.contains_key(*key)) {
+                failures.push(format!("en: missing {key}"));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 }

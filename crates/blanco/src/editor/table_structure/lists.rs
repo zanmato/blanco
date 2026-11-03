@@ -5,6 +5,7 @@ use std::cmp::Ordering;
 
 use app_database::VirtualForeignKey;
 use blanco_core::{ColumnInfo, ColumnType, Dialect, ForeignKeyConstraint, IndexInfo};
+use blanco_ui::table::{Column, ColumnSort, TableDelegate, TableState};
 use gpui::{
     App, AppContext as _, Context, Div, EntityId, Hsla, InteractiveElement as _, IntoElement,
     ParentElement, Render, SharedString, Stateful, StatefulInteractiveElement as _, Styled,
@@ -13,7 +14,6 @@ use gpui::{
 use gpui_component::{
     ActiveTheme as _, Icon, Sizable as _,
     menu::{PopupMenu, PopupMenuItem},
-    table::{Column, ColumnSort, TableDelegate, TableState},
 };
 
 use blanco_ui::IconName;
@@ -65,46 +65,57 @@ impl Render for DraggedColumn {
 }
 
 impl ColumnsTableDelegate {
-    pub fn new(dialect: Dialect, tab: WeakEntity<TableStructureTab>) -> Self {
-        let column_defs = vec![
+    /// The grid's columns, named in the interface language.
+    fn column_defs() -> Vec<Column> {
+        let column_defs: Vec<Column> = vec![
             Column {
                 name: "#".into(),
                 width: px(40.),
                 ..Default::default()
             },
             Column {
-                name: "Name".into(),
+                name: t!("structure.columns_list.name").into(),
                 width: px(150.),
                 ..Default::default()
             },
             Column {
-                name: "Type".into(),
+                name: t!("structure.columns_list.type").into(),
                 width: px(120.),
                 ..Default::default()
             },
             Column {
-                name: "Nullable".into(),
+                name: t!("structure.columns_list.nullable").into(),
                 width: px(90.),
                 ..Default::default()
             },
             Column {
-                name: "Default".into(),
+                name: t!("structure.columns_list.default").into(),
                 width: px(100.),
                 ..Default::default()
             },
             Column {
-                name: "Key".into(),
+                name: t!("structure.columns_list.key").into(),
                 width: px(190.),
                 ..Default::default()
             },
             Column {
-                name: "Comment".into(),
+                name: t!("structure.columns_list.comment").into(),
                 width: px(200.),
                 ..Default::default()
             },
         ];
+        column_defs.into_iter().map(Column::sortable).collect()
+    }
 
-        let column_defs = column_defs.into_iter().map(Column::sortable).collect();
+    /// Names the columns again after the interface language changed.
+    pub(super) fn relabel(&mut self) {
+        for (def, fresh) in self.column_defs.iter_mut().zip(Self::column_defs()) {
+            def.name = fresh.name;
+        }
+    }
+
+    pub fn new(dialect: Dialect, tab: WeakEntity<TableStructureTab>) -> Self {
+        let column_defs = Self::column_defs();
         Self {
             dialect,
             columns: Vec::new(),
@@ -195,16 +206,24 @@ fn column_cell(col: &ColumnInfo, ordinal: usize, col_ix: usize) -> String {
         0 => (ordinal + 1).to_string(),
         1 => col.name.clone(),
         2 => col.display_type(),
-        3 => if col.is_nullable { "Yes" } else { "No" }.to_string(),
+        3 => yes_no(col.is_nullable),
         4 => col.default_value.clone().unwrap_or_default(),
         5 => {
-            let reference = col
-                .foreign_key
-                .as_ref()
-                .map(|fk| format!("FK {}({})", fk.foreign_table_name, fk.foreign_column_name));
+            let reference = col.foreign_key.as_ref().map(|fk| {
+                t!(
+                    "structure.columns_list.foreign_key_reference",
+                    table = fk.foreign_table_name,
+                    column = fk.foreign_column_name
+                )
+                .into_owned()
+            });
             match (col.is_primary_key, reference) {
-                (true, Some(reference)) => format!("PK, {reference}"),
-                (true, None) => "PK".to_string(),
+                (true, Some(reference)) => t!(
+                    "structure.columns_list.primary_key_and",
+                    reference = reference
+                )
+                .into_owned(),
+                (true, None) => t!("structure.columns_list.primary_key").into_owned(),
                 (false, Some(reference)) => reference,
                 (false, None) => String::new(),
             }
@@ -307,7 +326,7 @@ impl TableDelegate for ColumnsTableDelegate {
             return undo_items(menu, &mark, &self.tab);
         }
         let tab = self.tab.clone();
-        let item = |label: &'static str,
+        let item = |label: SharedString,
                     action: fn(
             &mut TableStructureTab,
             usize,
@@ -321,9 +340,15 @@ impl TableDelegate for ColumnsTableDelegate {
             })
         };
         let menu = menu
-            .item(item("Edit Column", TableStructureTab::edit_column))
+            .item(item(
+                t!("structure.columns_list.edit_column").into(),
+                TableStructureTab::edit_column,
+            ))
             .separator()
-            .item(item("Drop Column", TableStructureTab::drop_column));
+            .item(item(
+                t!("structure.columns_list.drop_column").into(),
+                TableStructureTab::drop_column,
+            ));
         if mark.changes.is_empty() {
             menu
         } else {
@@ -496,33 +521,55 @@ pub struct IndexesTableDelegate {
     tab: WeakEntity<TableStructureTab>,
 }
 
+impl IndexColumn {
+    /// The column's heading in the interface language.
+    fn label(self) -> std::borrow::Cow<'static, str> {
+        match self {
+            Self::Name => t!("structure.indexes_list.name"),
+            Self::Columns => t!("structure.indexes_list.columns"),
+            Self::Unique => t!("structure.indexes_list.unique"),
+            Self::Nulls => t!("structure.indexes_list.nulls"),
+            Self::Method => t!("structure.indexes_list.method"),
+            Self::Condition => t!("structure.indexes_list.condition"),
+            Self::Comment => t!("structure.indexes_list.comment"),
+        }
+    }
+}
+
 impl IndexesTableDelegate {
+    /// Names the columns again after the interface language changed.
+    pub(super) fn relabel(&mut self) {
+        for (def, column) in self.column_defs.iter_mut().zip(&self.shown) {
+            def.name = column.label().into();
+        }
+    }
+
     pub fn new(dialect: Dialect, tab: WeakEntity<TableStructureTab>) -> Self {
         let mut shown = vec![
-            (IndexColumn::Name, "Name", 220.),
-            (IndexColumn::Columns, "Columns", 200.),
-            (IndexColumn::Unique, "Unique", 70.),
+            (IndexColumn::Name, 220.),
+            (IndexColumn::Columns, 200.),
+            (IndexColumn::Unique, 70.),
         ];
         if dialect.has_nulls_not_distinct() {
-            shown.push((IndexColumn::Nulls, "NULLs", 110.));
+            shown.push((IndexColumn::Nulls, 110.));
         }
         shown.extend([
-            (IndexColumn::Method, "Method", 100.),
-            (IndexColumn::Condition, "Condition", 200.),
-            (IndexColumn::Comment, "Comment", 160.),
+            (IndexColumn::Method, 100.),
+            (IndexColumn::Condition, 200.),
+            (IndexColumn::Comment, 160.),
         ]);
         Self {
             indexes: Vec::new(),
             marks: Vec::new(),
             column_defs: shown
                 .iter()
-                .map(|(_, name, width)| Column {
-                    name: (*name).into(),
+                .map(|(column, width)| Column {
+                    name: column.label().into(),
                     width: px(*width),
                     ..Default::default()
                 })
                 .collect(),
-            shown: shown.into_iter().map(|(column, _, _)| column).collect(),
+            shown: shown.into_iter().map(|(column, _)| column).collect(),
             editable: false,
             tab,
         }
@@ -537,13 +584,13 @@ impl IndexesTableDelegate {
         match self.shown.get(col_ix) {
             Some(IndexColumn::Name) => idx.name.clone(),
             Some(IndexColumn::Columns) => idx.column_names.join(", "),
-            Some(IndexColumn::Unique) => if idx.is_unique { "Yes" } else { "No" }.to_string(),
+            Some(IndexColumn::Unique) => yes_no(idx.is_unique),
             Some(IndexColumn::Nulls) if idx.is_unique => if idx.nulls_not_distinct {
-                "Not distinct"
+                t!("structure.indexes_list.nulls_not_distinct")
             } else {
-                "Distinct"
+                t!("structure.indexes_list.nulls_distinct")
             }
-            .to_string(),
+            .into_owned(),
             Some(IndexColumn::Method) => idx.algorithm.clone(),
             Some(IndexColumn::Condition) => idx.condition.clone().unwrap_or_default(),
             Some(IndexColumn::Comment) => idx.comment.clone().unwrap_or_default(),
@@ -580,10 +627,12 @@ impl TableDelegate for IndexesTableDelegate {
         }
         let tab = self.tab.clone();
         menu.item(
-            PopupMenuItem::new("Drop Index").on_click(move |_, window, cx| {
-                tab.update(cx, |tab, cx| tab.drop_index(row_ix, window, cx))
-                    .log_err();
-            }),
+            PopupMenuItem::new(t!("structure.indexes_list.drop_index")).on_click(
+                move |_, window, cx| {
+                    tab.update(cx, |tab, cx| tab.drop_index(row_ix, window, cx))
+                        .log_err();
+                },
+            ),
         )
     }
 
@@ -648,25 +697,37 @@ pub struct ForeignKeysTableDelegate {
 }
 
 impl ForeignKeysTableDelegate {
-    pub fn new(schema: Option<String>, tab: WeakEntity<TableStructureTab>) -> Self {
-        let column = |name: &'static str, width: f32| Column {
+    /// The grid's columns, named in the interface language.
+    fn column_defs() -> Vec<Column> {
+        let column = |name: std::borrow::Cow<'static, str>, width: f32| Column {
             name: name.into(),
             width: px(width),
             ..Default::default()
         };
+        vec![
+            column(t!("structure.foreign_keys_list.name"), 200.),
+            column(t!("structure.foreign_keys_list.kind"), 90.),
+            column(t!("structure.foreign_keys_list.columns"), 150.),
+            column(t!("structure.foreign_keys_list.references"), 220.),
+            column(t!("structure.foreign_keys_list.on_update"), 100.),
+            column(t!("structure.foreign_keys_list.on_delete"), 100.),
+        ]
+    }
+
+    /// Names the columns again after the interface language changed.
+    pub(super) fn relabel(&mut self) {
+        for (def, fresh) in self.column_defs.iter_mut().zip(Self::column_defs()) {
+            def.name = fresh.name;
+        }
+    }
+
+    pub fn new(schema: Option<String>, tab: WeakEntity<TableStructureTab>) -> Self {
         Self {
             foreign_keys: Vec::new(),
             marks: Vec::new(),
             virtual_keys: Vec::new(),
             schema,
-            column_defs: vec![
-                column("Name", 200.),
-                column("Kind", 90.),
-                column("Columns", 150.),
-                column("References", 220.),
-                column("On Update", 100.),
-                column("On Delete", 100.),
-            ],
+            column_defs: Self::column_defs(),
             editable: false,
             tab,
         }
@@ -683,7 +744,7 @@ impl ForeignKeysTableDelegate {
         if let Some(key) = self.virtual_key_at(row_ix) {
             return match col_ix {
                 0 => key.name.clone(),
-                1 => "Virtual".to_string(),
+                1 => t!("structure.foreign_keys_list.virtual").into_owned(),
                 2 => key.columns.join(", "),
                 3 => format!(
                     "{}({})",
@@ -702,9 +763,11 @@ impl ForeignKeysTableDelegate {
             .is_some_and(|mark| mark.state == RowState::Added);
         match col_ix {
             // A new key without a name gets one from the server.
-            0 if foreign_key.name.is_empty() && added => "(generated)".to_string(),
+            0 if foreign_key.name.is_empty() && added => {
+                t!("structure.foreign_keys_list.generated").into_owned()
+            }
             0 => foreign_key.name.clone(),
-            1 => "Declared".to_string(),
+            1 => t!("structure.foreign_keys_list.declared").into_owned(),
             2 => foreign_key.columns.join(", "),
             3 => self.references(foreign_key),
             4 => foreign_key.on_update.clone(),
@@ -757,18 +820,20 @@ impl TableDelegate for ForeignKeysTableDelegate {
             let delete_tab = self.tab.clone();
             return menu
                 .item(
-                    PopupMenuItem::new("Edit Virtual Key").on_click(move |_, window, cx| {
-                        edit_tab
-                            .update(cx, |tab, cx| tab.edit_virtual_key(id, window, cx))
-                            .log_err();
-                    }),
+                    PopupMenuItem::new(t!("structure.foreign_keys_list.edit_virtual_key"))
+                        .on_click(move |_, window, cx| {
+                            edit_tab
+                                .update(cx, |tab, cx| tab.edit_virtual_key(id, window, cx))
+                                .log_err();
+                        }),
                 )
                 .item(
-                    PopupMenuItem::new("Delete Virtual Key").on_click(move |_, window, cx| {
-                        delete_tab
-                            .update(cx, |tab, cx| tab.delete_virtual_key(id, window, cx))
-                            .log_err();
-                    }),
+                    PopupMenuItem::new(t!("structure.foreign_keys_list.delete_virtual_key"))
+                        .on_click(move |_, window, cx| {
+                            delete_tab
+                                .update(cx, |tab, cx| tab.delete_virtual_key(id, window, cx))
+                                .log_err();
+                        }),
                 );
         }
         if !self.editable || row_ix >= self.foreign_keys.len() {
@@ -780,10 +845,12 @@ impl TableDelegate for ForeignKeysTableDelegate {
         }
         let tab = self.tab.clone();
         menu.item(
-            PopupMenuItem::new("Drop Foreign Key").on_click(move |_, window, cx| {
-                tab.update(cx, |tab, cx| tab.drop_foreign_key(row_ix, window, cx))
-                    .log_err();
-            }),
+            PopupMenuItem::new(t!("structure.foreign_keys_list.drop_foreign_key")).on_click(
+                move |_, window, cx| {
+                    tab.update(cx, |tab, cx| tab.drop_foreign_key(row_ix, window, cx))
+                        .log_err();
+                },
+            ),
         )
     }
 
@@ -929,6 +996,14 @@ fn staged_cell(
         .child(value)
 }
 
+fn yes_no(value: bool) -> String {
+    if value {
+        t!("structure.answer_yes").into_owned()
+    } else {
+        t!("structure.answer_no").into_owned()
+    }
+}
+
 /// An Undo item for each pending change on a row.
 fn undo_items(menu: PopupMenu, mark: &RowMark, tab: &WeakEntity<TableStructureTab>) -> PopupMenu {
     mark.changes
@@ -936,12 +1011,14 @@ fn undo_items(menu: PopupMenu, mark: &RowMark, tab: &WeakEntity<TableStructureTa
         .fold(menu, |menu, (change_ix, description)| {
             let tab = tab.clone();
             let change_ix = *change_ix;
-            menu.item(PopupMenuItem::new(format!("Undo {description}")).on_click(
-                move |_, window, cx| {
-                    tab.update(cx, |tab, cx| tab.undo_change(change_ix, window, cx))
-                        .log_err();
-                },
-            ))
+            menu.item(
+                PopupMenuItem::new(t!("structure.undo_change", change = description)).on_click(
+                    move |_, window, cx| {
+                        tab.update(cx, |tab, cx| tab.undo_change(change_ix, window, cx))
+                            .log_err();
+                    },
+                ),
+            )
         })
 }
 
@@ -949,7 +1026,7 @@ fn undo_items(menu: PopupMenu, mark: &RowMark, tab: &WeakEntity<TableStructureTa
 mod tests {
     use super::{column_rows, order_indexes};
     use blanco_core::{ColumnInfo, IndexInfo};
-    use gpui_component::table::ColumnSort;
+    use blanco_ui::table::ColumnSort;
 
     fn column(name: &str, data_type: &str, is_primary_key: bool) -> ColumnInfo {
         ColumnInfo {

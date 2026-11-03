@@ -32,8 +32,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
+/// Display names and `encoding_rs` labels. `auto` is drawn as Auto-detect in
+/// the interface language.
 const ENCODINGS: &[(&str, &str)] = &[
-    ("Auto-detect", "auto"),
+    ("", "auto"),
     ("UTF-8", "utf-8"),
     ("UTF-16 LE", "utf-16le"),
     ("UTF-16 BE", "utf-16be"),
@@ -42,22 +44,50 @@ const ENCODINGS: &[(&str, &str)] = &[
     ("ISO-8859-15", "iso-8859-15"),
 ];
 
-const DELIMITERS: &[(&str, u8)] = &[
-    ("Auto-detect", 0),
-    ("Comma ,", b','),
-    ("Semicolon ;", b';'),
-    ("Tab \\t", b'\t'),
-    ("Pipe |", b'|'),
-];
+/// The delimiter choices, 0 meaning auto-detect.
+const DELIMITERS: &[u8] = &[0, b',', b';', b'\t', b'|'];
 
-const CONFLICT_LABELS: &[&str] = &["Fail (abort + rollback)", "Do nothing", "Update"];
+fn encoding_label(label: &str, name: &str) -> String {
+    if name == "auto" {
+        t!("import.auto_detect").into_owned()
+    } else {
+        label.to_string()
+    }
+}
+
+fn delimiter_label(delimiter: u8) -> String {
+    match delimiter {
+        b',' => t!("import.delimiter_comma"),
+        b';' => t!("import.delimiter_semicolon"),
+        b'\t' => t!("import.delimiter_tab"),
+        b'|' => t!("import.delimiter_pipe"),
+        _ => t!("import.auto_detect"),
+    }
+    .into_owned()
+}
+
+/// In the order `resolved_conflict` reads the selected index.
+fn conflict_labels() -> Vec<String> {
+    vec![
+        t!("import.conflict_fail").into_owned(),
+        t!("import.conflict_do_nothing").into_owned(),
+        t!("import.conflict_update").into_owned(),
+    ]
+}
 
 fn mapping_options(csv_headers: &[String]) -> Vec<String> {
-    let mut options = vec!["Skip".to_string()];
+    let mut options = vec![t!("import.mapping_skip").into_owned()];
     for (idx, name) in csv_headers.iter().enumerate() {
-        options.push(format!("CSV: {} (#{})", name, idx + 1));
+        options.push(
+            t!(
+                "import.mapping_source_column",
+                name = name,
+                number = idx + 1
+            )
+            .into_owned(),
+        );
     }
-    options.push("Fixed value".to_string());
+    options.push(t!("import.mapping_fixed_value").into_owned());
     options
 }
 
@@ -119,7 +149,7 @@ pub struct ImportModal {
 pub fn open_import_dialog(modal: Entity<ImportModal>, window: &mut Window, cx: &mut App) {
     window.open_dialog(cx, move |dialog, _window, _cx| {
         dialog
-            .title("Import CSV")
+            .title(t!("import.title"))
             .w(px(780.0))
             .h(px(780.0))
             .overlay_closable(false)
@@ -136,21 +166,26 @@ impl ImportModal {
         cx: &mut Context<Self>,
     ) -> Self {
         let file_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("CSV file path (click Browse)"));
+            cx.new(|cx| InputState::new(window, cx).placeholder(t!("import.file_placeholder")));
 
-        let encoding_labels: Vec<String> = ENCODINGS.iter().map(|(l, _)| l.to_string()).collect();
+        let encoding_labels: Vec<String> = ENCODINGS
+            .iter()
+            .map(|(label, name)| encoding_label(label, name))
+            .collect();
         let encoding_select =
             cx.new(|cx| SelectState::new(encoding_labels, Some(IndexPath::new(0)), window, cx));
 
-        let delimiter_labels: Vec<String> = DELIMITERS.iter().map(|(l, _)| l.to_string()).collect();
+        let delimiter_labels: Vec<String> =
+            DELIMITERS.iter().copied().map(delimiter_label).collect();
         let delimiter_select =
             cx.new(|cx| SelectState::new(delimiter_labels, Some(IndexPath::new(0)), window, cx));
 
-        let conflict_labels: Vec<String> = CONFLICT_LABELS.iter().map(|l| l.to_string()).collect();
+        let conflict_labels = conflict_labels();
         let conflict_select =
             cx.new(|cx| SelectState::new(conflict_labels, Some(IndexPath::new(0)), window, cx));
-        let conflict_keys_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Conflict keys (comma-separated)"));
+        let conflict_keys_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(t!("import.conflict_keys_placeholder"))
+        });
 
         let mut subscriptions = Vec::new();
         subscriptions.push(cx.subscribe_in(
@@ -206,7 +241,8 @@ impl ImportModal {
                 .update_in(window, |modal, window, cx| match columns {
                     Ok(cols) => modal.set_table_columns(cols, window, cx),
                     Err(err) => {
-                        modal.error = Some(format!("Failed to load columns: {}", err));
+                        modal.error =
+                            Some(t!("import.load_columns_failed", error = err).into_owned());
                         cx.notify();
                     }
                 })
@@ -269,7 +305,10 @@ impl ImportModal {
         let mut transform_selects = Vec::with_capacity(self.table_columns.len());
         let mut new_subscriptions = Vec::new();
 
-        let transform_labels: Vec<String> = vec!["None".to_string(), "Slugify".to_string()];
+        let transform_labels: Vec<String> = vec![
+            t!("import.transform_none").into_owned(),
+            t!("import.transform_slugify").into_owned(),
+        ];
 
         for (i, (col, current)) in self
             .table_columns
@@ -414,7 +453,7 @@ impl ImportModal {
             files: true,
             directories: false,
             multiple: false,
-            prompt: Some("Select CSV file".into()),
+            prompt: Some(t!("import.select_file_prompt").into()),
         });
         let file_input = self.file_input.clone();
         cx.spawn_in(window, async move |handle, window| {
@@ -503,7 +542,7 @@ impl ImportModal {
                 self.rebuild_mapping_widgets(window, cx);
             }
             Err(err) => {
-                self.error = Some(format!("Failed to read file: {}", err));
+                self.error = Some(t!("import.read_file_failed", error = err).into_owned());
             }
         }
         cx.notify();
@@ -570,7 +609,7 @@ impl ImportModal {
         tracing::info!("file path: {:?}", path_str);
         if path_str.is_empty() {
             tracing::warn!("no file selected");
-            self.error = Some("Please select a file".into());
+            self.error = Some(t!("import.select_file").into_owned());
             cx.notify();
             return;
         }
@@ -578,7 +617,7 @@ impl ImportModal {
         tracing::info!("compiled {} mappings", compiled.len());
         if compiled.is_empty() {
             tracing::warn!("no columns mapped");
-            self.error = Some("Map at least one column".into());
+            self.error = Some(t!("import.map_one_column").into_owned());
             cx.notify();
             return;
         }
@@ -586,7 +625,7 @@ impl ImportModal {
         if let ConflictStrategy::Update { update_columns, .. } = &conflict
             && update_columns.is_empty()
         {
-            self.error = Some("Select at least one column to update on conflict".into());
+            self.error = Some(t!("import.select_update_column").into_owned());
             cx.notify();
             return;
         }
@@ -682,7 +721,7 @@ impl ImportModal {
                         }
                         Err(err) => {
                             tracing::error!("import failed: {}", err);
-                            modal.error = Some(format!("Import failed: {}", err));
+                            modal.error = Some(t!("import.failed", error = err).into_owned());
                         }
                     }
                     cx.notify();
@@ -713,7 +752,7 @@ impl ImportModal {
             .collect();
         let compiled = compile_mappings(&self.table_columns, &live_mappings, &self.transforms);
         if compiled.is_empty() {
-            return Some("-- map at least one column --".into());
+            return Some(t!("import.preview_map_one_column").into_owned());
         }
         let fq_table = quote_qualified(
             self.context.schema_name.as_deref(),
@@ -742,8 +781,8 @@ fn encoding_from_index(idx: usize) -> Option<&'static Encoding> {
 }
 
 fn delimiter_from_index(idx: usize) -> Option<u8> {
-    let (_label, byte) = DELIMITERS.get(idx)?;
-    if *byte == 0 { None } else { Some(*byte) }
+    let byte = *DELIMITERS.get(idx)?;
+    if byte == 0 { None } else { Some(byte) }
 }
 
 fn guess_csv_match(column_name: &str, headers: &[String]) -> Option<usize> {
@@ -779,24 +818,28 @@ impl Render for ImportModal {
                             div()
                                 .text_sm()
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
-                                .child("Import complete"),
+                                .child(t!("import.complete")),
                         )
                         .child(
                             div()
                                 .text_sm()
                                 .text_color(cx.theme().muted_foreground)
-                                .child(format!(
-                                    "{} rows imported into {} in {:.1}s",
-                                    report.rows_inserted,
-                                    self.table_name,
-                                    report.duration_ms as f64 / 1000.0,
+                                .child(t!(
+                                    if report.rows_inserted == 1 {
+                                        "import.rows_imported_one"
+                                    } else {
+                                        "import.rows_imported_other"
+                                    },
+                                    count = report.rows_inserted,
+                                    table = self.table_name,
+                                    seconds = format!("{:.1}", report.duration_ms as f64 / 1000.0),
                                 )),
                         ),
                 )
                 .child(
                     h_flex().gap_2().justify_end().child(
                         Button::new("import-done")
-                            .label("Done")
+                            .label(t!("import.done"))
                             .on_click(|_, window, cx| {
                                 window.close_dialog(cx);
                             }),
@@ -832,16 +875,18 @@ impl Render for ImportModal {
             .child(
                 v_flex()
                     .gap_2()
-                    .child(div().text_sm().child("CSV or JSON file"))
+                    .child(div().text_sm().child(t!("import.file")))
                     .child(
                         h_flex()
                             .gap_2()
                             .child(Input::new(&self.file_input).flex_1())
-                            .child(Button::new("import-browse").label("Browse").on_click(
-                                cx.listener(|modal, _event, window, cx| {
-                                    modal.browse_file(window, cx);
-                                }),
-                            )),
+                            .child(
+                                Button::new("import-browse")
+                                    .label(t!("import.browse"))
+                                    .on_click(cx.listener(|modal, _event, window, cx| {
+                                        modal.browse_file(window, cx);
+                                    })),
+                            ),
                     ),
             )
             .child(
@@ -852,7 +897,7 @@ impl Render for ImportModal {
                         v_flex()
                             .gap_1()
                             .flex_1()
-                            .child(div().text_sm().child("Encoding"))
+                            .child(div().text_sm().child(t!("import.encoding")))
                             .child(Select::new(&self.encoding_select)),
                     )
                     .when(!is_json, |this| {
@@ -860,13 +905,13 @@ impl Render for ImportModal {
                             v_flex()
                                 .gap_1()
                                 .flex_1()
-                                .child(div().text_sm().child("Delimiter"))
+                                .child(div().text_sm().child(t!("import.delimiter")))
                                 .child(Select::new(&self.delimiter_select)),
                         )
                         .child(
                             div().pb_1().child(
                                 Checkbox::new("import-has-header")
-                                    .label("First row is header")
+                                    .label(t!("import.first_row_is_header").into_owned())
                                     .small()
                                     .checked(self.has_header)
                                     .on_click(cx.listener(|modal, checked: &bool, window, cx| {
@@ -882,13 +927,13 @@ impl Render for ImportModal {
                                 .pb_1()
                                 .text_sm()
                                 .text_color(cx.theme().muted_foreground)
-                                .child("JSON: object keys become columns"),
+                                .child(t!("import.json_keys_become_columns")),
                         )
                     }),
             )
             .when_some(detected.as_ref(), |this, d| {
                 let headers = if d.headers.is_empty() {
-                    "(no headers)".to_string()
+                    t!("import.no_headers").into_owned()
                 } else {
                     d.headers.join(", ")
                 };
@@ -896,18 +941,18 @@ impl Render for ImportModal {
                     div()
                         .text_xs()
                         .text_color(cx.theme().muted_foreground)
-                        .child(format!(
-                            "Detected {} | delimiter '{}' | columns: {}",
-                            d.encoding.name(),
-                            d.delimiter as char,
-                            headers
+                        .child(t!(
+                            "import.detected",
+                            encoding = d.encoding.name(),
+                            delimiter = d.delimiter as char,
+                            columns = headers
                         )),
                 )
             })
             .child(
                 v_flex()
                     .gap_1()
-                    .child(div().text_sm().child("Column mapping"))
+                    .child(div().text_sm().child(t!("import.column_mapping")))
                     .child(
                         v_flex()
                             .border_1()
@@ -927,28 +972,28 @@ impl Render for ImportModal {
                                             .w(px(160.0))
                                             .text_xs()
                                             .text_color(cx.theme().table_head_foreground)
-                                            .child("Table column"),
+                                            .child(t!("import.table_column")),
                                     )
                                     .child(
                                         div()
                                             .w(px(200.0))
                                             .text_xs()
                                             .text_color(cx.theme().table_head_foreground)
-                                            .child("Source"),
+                                            .child(t!("import.source")),
                                     )
                                     .child(
                                         div()
                                             .w(px(140.0))
                                             .text_xs()
                                             .text_color(cx.theme().table_head_foreground)
-                                            .child("Fixed value"),
+                                            .child(t!("import.fixed_value")),
                                     )
                                     .child(
                                         div()
                                             .w(px(120.0))
                                             .text_xs()
                                             .text_color(cx.theme().table_head_foreground)
-                                            .child("Transform"),
+                                            .child(t!("import.transform")),
                                     ),
                             )
                             .children(self.table_columns.iter().enumerate().map(|(i, col)| {
@@ -1005,7 +1050,7 @@ impl Render for ImportModal {
             .child(
                 v_flex()
                     .gap_2()
-                    .child(div().text_sm().child("On conflict"))
+                    .child(div().text_sm().child(t!("import.on_conflict")))
                     .child(Select::new(&self.conflict_select))
                     .when(conflict_idx > 0, |this| {
                         this.child(Input::new(&self.conflict_keys_input))
@@ -1048,7 +1093,7 @@ impl Render for ImportModal {
                         this.child(
                             v_flex()
                                 .gap_1()
-                                .child(div().text_xs().child("Update columns"))
+                                .child(div().text_xs().child(t!("import.update_columns")))
                                 .children(update_checkboxes),
                         )
                     }),
@@ -1056,7 +1101,7 @@ impl Render for ImportModal {
             .child(
                 v_flex()
                     .gap_1()
-                    .child(div().text_sm().child("Preview (first 3 rows)"))
+                    .child(div().text_sm().child(t!("import.preview")))
                     .child(
                         div()
                             .id("import-preview")
@@ -1075,7 +1120,7 @@ impl Render for ImportModal {
                 let rows = self
                     .imported_rows
                     .load(std::sync::atomic::Ordering::Relaxed);
-                this.child(div().text_sm().child(format!("Importing... {} rows", rows)))
+                this.child(div().text_sm().child(t!("import.progress", count = rows)))
             })
             .when_some(self.error.clone(), |this, err| {
                 this.child(div().text_sm().text_color(cx.theme().danger).child(err))
@@ -1089,7 +1134,7 @@ impl Render for ImportModal {
                         div().flex_shrink(1.).child(
                             DialogClose::new().child(
                                 Button::new("import-cancel")
-                                    .label("Cancel")
+                                    .label(t!("import.cancel"))
                                     .outline()
                                     .flex_shrink(1.),
                             ),
@@ -1099,7 +1144,7 @@ impl Render for ImportModal {
                         this.child(
                             Button::new("import-submit")
                                 .primary()
-                                .label("Import")
+                                .label(t!("import.import"))
                                 .on_click(cx.listener(|modal, _event, window, cx| {
                                     modal.start_import(window, cx);
                                 })),

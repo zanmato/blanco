@@ -9,14 +9,23 @@ use crate::app::{
 };
 use crate::settings::Settings;
 use crate::snippets_panel::{DuplicateSnippet, RenameSnippet};
+use gpui::SharedString;
+
+/// The OS that resolves `secondary-` in a shortcut. Blanco runs natively, so
+/// it is the one the app was built for, as `App::platform_info` reports it.
+pub const HOST_OS: gpui::OperatingSystem = if cfg!(target_os = "macos") {
+    gpui::OperatingSystem::Mac
+} else if cfg!(target_os = "windows") {
+    gpui::OperatingSystem::Windows
+} else {
+    gpui::OperatingSystem::Linux
+};
 
 /// A keyboard shortcut the user can rebind from the settings UI.
 pub struct BindingDef {
     /// Stable identifier persisted in settings (`keybinding.<action>`) and used
     /// to resolve the concrete action when registering the keymap.
     pub action: &'static str,
-    /// Human-readable label shown in the settings UI.
-    pub label: &'static str,
     /// Heading the settings page lists the action under.
     pub group: &'static str,
     /// Built-in keystroke. An empty string means the action is unbound by
@@ -45,271 +54,251 @@ pub const BINDING_GROUPS: &[&str] = &[
 pub const CUSTOMIZABLE_BINDINGS: &[BindingDef] = &[
     BindingDef {
         action: "RunQuery",
-        label: "Run current statement",
         group: "Query",
         default: "secondary-enter",
         context: None,
     },
     BindingDef {
         action: "ExplainQuery",
-        label: "Explain query",
         group: "Query",
         default: "secondary-e",
         context: None,
     },
     BindingDef {
         action: "ExplainAnalyzeQuery",
-        label: "Explain analyze query",
         group: "Query",
         default: "secondary-shift-e",
         context: None,
     },
     BindingDef {
         action: "CancelQuery",
-        label: "Cancel running query",
         group: "Query",
         default: "secondary-.",
         context: Some(NOT_TERMINAL),
     },
     BindingDef {
         action: "FormatQuery",
-        label: "Format SQL",
         group: "Query",
         default: "shift-alt-f",
         context: None,
     },
     BindingDef {
         action: "UpperCaseKeywords",
-        label: "Upper case keywords",
         group: "Query",
         default: "shift-alt-u",
         context: None,
     },
     BindingDef {
         action: "LowerCaseKeywords",
-        label: "Lower case keywords",
         group: "Query",
         default: "shift-alt-l",
         context: None,
     },
     BindingDef {
         action: "NewWindow",
-        label: "New window",
         group: "File",
         default: "secondary-shift-n",
         context: None,
     },
     BindingDef {
         action: "CloseWindow",
-        label: "Close window",
         group: "File",
         default: "secondary-shift-w",
         context: None,
     },
     BindingDef {
         action: "SaveTab",
-        label: "Save tab to its file",
         group: "File",
         default: "secondary-s",
         context: Some(NOT_TERMINAL),
     },
     BindingDef {
         action: "SaveTabAs",
-        label: "Save tab as a new file",
         group: "File",
         default: "secondary-shift-s",
         context: Some(NOT_TERMINAL),
     },
     BindingDef {
         action: "CommitChanges",
-        label: "Commit changes",
         group: "Data",
         default: "super-shift-c",
         context: None,
     },
     BindingDef {
         action: "RollbackChanges",
-        label: "Rollback changes",
         group: "Data",
         default: "super-shift-r",
         context: None,
     },
     BindingDef {
         action: "ImportTableData",
-        label: "Import into the selected table",
         group: "Data",
         default: "",
         context: None,
     },
     BindingDef {
         action: "ExportTableData",
-        label: "Export the selected table",
         group: "Data",
         default: "",
         context: None,
     },
     BindingDef {
         action: "RefreshConnections",
-        label: "Refresh connection",
         group: "Data",
         default: "",
         context: None,
     },
     BindingDef {
         action: "NewQueryTab",
-        label: "New query tab",
         group: "Tabs",
         default: "secondary-t",
         context: Some(NOT_TERMINAL),
     },
     BindingDef {
         action: "CloseActiveTab",
-        label: "Close tab",
         group: "Tabs",
         default: "secondary-w",
         context: Some(NOT_TERMINAL),
     },
     BindingDef {
         action: "CloseOtherTabs",
-        label: "Close other tabs",
         group: "Tabs",
         default: "secondary-alt-w",
         context: Some(NOT_TERMINAL),
     },
     BindingDef {
         action: "CloseTabsToTheLeft",
-        label: "Close tabs to the left",
         group: "Tabs",
         default: "",
         context: Some(NOT_TERMINAL),
     },
     BindingDef {
         action: "CloseTabsToTheRight",
-        label: "Close tabs to the right",
         group: "Tabs",
         default: "",
         context: Some(NOT_TERMINAL),
     },
     BindingDef {
         action: "CloseAllTabs",
-        label: "Close all tabs",
         group: "Tabs",
         default: "secondary-alt-shift-w",
         context: Some(NOT_TERMINAL),
     },
     BindingDef {
         action: "ActivateNextTab",
-        label: "Next tab",
         group: "Tabs",
         default: "ctrl-tab",
         context: None,
     },
     BindingDef {
         action: "ActivatePreviousTab",
-        label: "Previous tab",
         group: "Tabs",
         default: "ctrl-shift-tab",
         context: None,
     },
     BindingDef {
         action: "ToggleCommandPalette",
-        label: "Toggle command palette",
         group: "View",
         default: "secondary-k",
         context: None,
     },
     BindingDef {
         action: "ToggleSidebar",
-        label: "Toggle sidebar",
         group: "View",
         default: "secondary-b",
         context: Some(NOT_TERMINAL),
     },
     BindingDef {
         action: "ToggleResults",
-        label: "Toggle results pane",
         group: "View",
         default: "",
         context: None,
     },
     BindingDef {
         action: "ToggleFilterBar",
-        label: "Toggle result filter bar",
         group: "View",
         default: "secondary-shift-f",
         context: None,
     },
     BindingDef {
         action: "OpenSettings",
-        label: "Open settings",
         group: "View",
         default: "super-,",
         context: None,
     },
     BindingDef {
         action: "OpenTerminal",
-        label: "Toggle terminal",
         group: "View",
         default: "ctrl-`",
         context: None,
     },
     BindingDef {
         action: "RenameSnippet",
-        label: "Rename snippet or group",
         group: "Snippets",
         default: "f2",
         context: None,
     },
     BindingDef {
         action: "DuplicateSnippet",
-        label: "Duplicate snippet",
         group: "Snippets",
         default: "secondary-d",
         context: Some(blanco_ui::draggable_tree::CONTEXT),
     },
     BindingDef {
         action: "ReopenClosedTab",
-        label: "Reopen closed tab",
         group: "Tabs",
         default: "secondary-shift-t",
         context: None,
     },
     BindingDef {
         action: "CopySelection",
-        label: "Copy the selected cell, rows or column",
         group: "Data",
         default: "secondary-c",
         context: Some("DataTable"),
     },
     BindingDef {
         action: "OpenReferencedRow",
-        label: "Open referenced row",
         group: "Data",
         default: "alt-enter",
         context: Some("DataTable"),
     },
     BindingDef {
         action: "IncreaseEditorFontSize",
-        label: "Increase editor font size",
         group: "Editor",
         default: "secondary-=",
         context: Some(INPUT_CONTEXT),
     },
     BindingDef {
         action: "DecreaseEditorFontSize",
-        label: "Decrease editor font size",
         group: "Editor",
         default: "secondary--",
         context: Some(INPUT_CONTEXT),
     },
     BindingDef {
         action: "ResetEditorFontSize",
-        label: "Reset editor font size",
         group: "Editor",
         default: "secondary-0",
         context: Some(INPUT_CONTEXT),
     },
 ];
+
+/// The translated label of a customizable action, shown on the settings
+/// page and in the command palette so a command reads the same in both.
+pub fn action_label(action: &str) -> SharedString {
+    t!(format!("settings.keybindings.actions.{action}"))
+        .into_owned()
+        .into()
+}
+
+/// The translated heading of a group of `BINDING_GROUPS`.
+pub fn group_label(group: &str) -> SharedString {
+    t!(format!(
+        "settings.keybindings.groups.{}",
+        group.to_lowercase()
+    ))
+    .into_owned()
+    .into()
+}
 
 /// The built-in keystroke for an action, or `""` when the action is unknown.
 pub fn default_keystroke(action: &str) -> &'static str {
@@ -336,7 +325,7 @@ pub fn parse_keystrokes(keystrokes: &str) -> Option<Vec<gpui::Keystroke>> {
     keystrokes
         .split_whitespace()
         .map(|chord| {
-            gpui::Keystroke::parse(chord)
+            gpui::Keystroke::parse_with_os(chord, HOST_OS)
                 .ok()
                 .filter(|keystroke| is_bindable(keystroke))
         })
@@ -384,61 +373,87 @@ pub fn keystrokes_valid(keystrokes: &str) -> bool {
 
 /// Resolve an action identifier and keystroke into a concrete `KeyBinding`.
 /// Returns `None` for empty/invalid keystrokes or unknown actions, so callers
-/// never hit `KeyBinding::new`'s internal panic on malformed input.
-fn key_binding(action: &str, keystrokes: &str, context: Option<&str>) -> Option<gpui::KeyBinding> {
+/// never hit a parse error on malformed input.
+fn key_binding(
+    action: &str,
+    keystrokes: &str,
+    context: Option<&str>,
+    cx: &gpui::App,
+) -> Option<gpui::KeyBinding> {
     if keystrokes.trim().is_empty() || !keystrokes_valid(keystrokes) {
         return None;
     }
 
-    let binding = match action {
-        "RunQuery" => gpui::KeyBinding::new(keystrokes, RunQuery, context),
-        "ExplainQuery" => gpui::KeyBinding::new(keystrokes, ExplainQuery, context),
-        "ExplainAnalyzeQuery" => gpui::KeyBinding::new(keystrokes, ExplainAnalyzeQuery, context),
-        "FormatQuery" => gpui::KeyBinding::new(keystrokes, FormatQuery, context),
-        "UpperCaseKeywords" => gpui::KeyBinding::new(keystrokes, UpperCaseKeywords, context),
-        "LowerCaseKeywords" => gpui::KeyBinding::new(keystrokes, LowerCaseKeywords, context),
-        "ToggleCommandPalette" => gpui::KeyBinding::new(keystrokes, ToggleCommandPalette, context),
-        "ToggleFilterBar" => gpui::KeyBinding::new(keystrokes, ToggleFilterBar, context),
-        "NewWindow" => gpui::KeyBinding::new(keystrokes, NewWindow, context),
-        "CloseWindow" => gpui::KeyBinding::new(keystrokes, CloseWindow, context),
-        "SaveTab" => gpui::KeyBinding::new(keystrokes, SaveTab, context),
-        "SaveTabAs" => gpui::KeyBinding::new(keystrokes, SaveTabAs, context),
-        "CommitChanges" => gpui::KeyBinding::new(keystrokes, CommitChanges, context),
-        "RollbackChanges" => gpui::KeyBinding::new(keystrokes, RollbackChanges, context),
-        "OpenSettings" => gpui::KeyBinding::new(keystrokes, OpenSettings, context),
-        "OpenTerminal" => gpui::KeyBinding::new(keystrokes, OpenTerminal, context),
-        "ReopenClosedTab" => gpui::KeyBinding::new(keystrokes, ReopenClosedTab, context),
-        "OpenReferencedRow" => gpui::KeyBinding::new(keystrokes, OpenReferencedRow, context),
-        "CopySelection" => gpui::KeyBinding::new(keystrokes, CopySelection, context),
-        "IncreaseEditorFontSize" => {
-            gpui::KeyBinding::new(keystrokes, IncreaseEditorFontSize, context)
-        }
-        "DecreaseEditorFontSize" => {
-            gpui::KeyBinding::new(keystrokes, DecreaseEditorFontSize, context)
-        }
-        "ResetEditorFontSize" => gpui::KeyBinding::new(keystrokes, ResetEditorFontSize, context),
-        "CancelQuery" => gpui::KeyBinding::new(keystrokes, CancelQuery, context),
-        "ImportTableData" => gpui::KeyBinding::new(keystrokes, ImportTableData, context),
-        "ExportTableData" => gpui::KeyBinding::new(keystrokes, ExportTableData, context),
-        "RefreshConnections" => gpui::KeyBinding::new(keystrokes, RefreshConnections, context),
-        "NewQueryTab" => gpui::KeyBinding::new(keystrokes, NewQueryTab, context),
-        "CloseActiveTab" => gpui::KeyBinding::new(keystrokes, CloseActiveTab, context),
-        "RenameSnippet" => gpui::KeyBinding::new(keystrokes, RenameSnippet, context),
-        "DuplicateSnippet" => gpui::KeyBinding::new(keystrokes, DuplicateSnippet, context),
-        "CloseOtherTabs" => gpui::KeyBinding::new(keystrokes, CloseOtherTabs, context),
-        "CloseTabsToTheLeft" => gpui::KeyBinding::new(keystrokes, CloseTabsToTheLeft, context),
-        "CloseTabsToTheRight" => gpui::KeyBinding::new(keystrokes, CloseTabsToTheRight, context),
-        "CloseAllTabs" => gpui::KeyBinding::new(keystrokes, CloseAllTabs, context),
-        "ActivateNextTab" => gpui::KeyBinding::new(keystrokes, ActivateNextTab, context),
-        "ActivatePreviousTab" => gpui::KeyBinding::new(keystrokes, ActivatePreviousTab, context),
-        "ToggleSidebar" => gpui::KeyBinding::new(keystrokes, ToggleSidebar, context),
-        "ToggleResults" => gpui::KeyBinding::new(keystrokes, ToggleResults, context),
+    let action: Box<dyn gpui::Action> = match action {
+        "RunQuery" => Box::new(RunQuery),
+        "ExplainQuery" => Box::new(ExplainQuery),
+        "ExplainAnalyzeQuery" => Box::new(ExplainAnalyzeQuery),
+        "FormatQuery" => Box::new(FormatQuery),
+        "UpperCaseKeywords" => Box::new(UpperCaseKeywords),
+        "LowerCaseKeywords" => Box::new(LowerCaseKeywords),
+        "ToggleCommandPalette" => Box::new(ToggleCommandPalette),
+        "ToggleFilterBar" => Box::new(ToggleFilterBar),
+        "NewWindow" => Box::new(NewWindow),
+        "CloseWindow" => Box::new(CloseWindow),
+        "SaveTab" => Box::new(SaveTab),
+        "SaveTabAs" => Box::new(SaveTabAs),
+        "CommitChanges" => Box::new(CommitChanges),
+        "RollbackChanges" => Box::new(RollbackChanges),
+        "OpenSettings" => Box::new(OpenSettings),
+        "OpenTerminal" => Box::new(OpenTerminal),
+        "ReopenClosedTab" => Box::new(ReopenClosedTab),
+        "OpenReferencedRow" => Box::new(OpenReferencedRow),
+        "CopySelection" => Box::new(CopySelection),
+        "IncreaseEditorFontSize" => Box::new(IncreaseEditorFontSize),
+        "DecreaseEditorFontSize" => Box::new(DecreaseEditorFontSize),
+        "ResetEditorFontSize" => Box::new(ResetEditorFontSize),
+        "CancelQuery" => Box::new(CancelQuery),
+        "ImportTableData" => Box::new(ImportTableData),
+        "ExportTableData" => Box::new(ExportTableData),
+        "RefreshConnections" => Box::new(RefreshConnections),
+        "NewQueryTab" => Box::new(NewQueryTab),
+        "CloseActiveTab" => Box::new(CloseActiveTab),
+        "RenameSnippet" => Box::new(RenameSnippet),
+        "DuplicateSnippet" => Box::new(DuplicateSnippet),
+        "CloseOtherTabs" => Box::new(CloseOtherTabs),
+        "CloseTabsToTheLeft" => Box::new(CloseTabsToTheLeft),
+        "CloseTabsToTheRight" => Box::new(CloseTabsToTheRight),
+        "CloseAllTabs" => Box::new(CloseAllTabs),
+        "ActivateNextTab" => Box::new(ActivateNextTab),
+        "ActivatePreviousTab" => Box::new(ActivatePreviousTab),
+        "ToggleSidebar" => Box::new(ToggleSidebar),
+        "ToggleResults" => Box::new(ToggleResults),
         _ => return None,
     };
-    Some(binding)
+    let context = match context {
+        Some(context) => Some(
+            gpui::KeyBindingContextPredicate::parse(context)
+                .ok()?
+                .into(),
+        ),
+        None => None,
+    };
+    gpui::KeyBinding::load(keystrokes, action, context, false, None, cx).ok()
 }
 
-/// The actions whose shortcut is the same keystroke as `action`'s. Shortcuts
+/// A fixed shortcut that may use `secondary-`, which `KeyBinding::new` no
+/// longer accepts. Panics on an invalid shortcut or context, like `new`.
+pub fn host_key_binding<A: gpui::Action>(
+    keystrokes: &str,
+    action: A,
+    context: Option<&str>,
+    cx: &gpui::App,
+) -> gpui::KeyBinding {
+    let context = context.map(|context| {
+        gpui::KeyBindingContextPredicate::parse(context)
+            .expect("valid key context")
+            .into()
+    });
+    gpui::KeyBinding::load(keystrokes, Box::new(action), context, false, None, cx)
+        .expect("valid keystrokes")
+}
+
+/// The actions (by `BindingDef::action`) whose shortcut is the same keystroke as `action`'s. Shortcuts
 /// limited to different key contexts can still meet (an input sits inside the
 /// window), so any two with the same keystroke count as a conflict.
 pub fn conflicting_actions(settings: &Settings, action: &str) -> Vec<&'static str> {
@@ -450,7 +465,7 @@ pub fn conflicting_actions(settings: &Settings, action: &str) -> Vec<&'static st
         .iter()
         .filter(|other| other.action != action)
         .filter(|other| normalized(&effective_keystroke(settings, other.action)) == keystroke)
-        .map(|other| other.label)
+        .map(|other| other.action)
         .collect()
 }
 
@@ -465,7 +480,7 @@ fn normalized(keystrokes: &str) -> String {
     match parse_keystrokes(keystrokes) {
         Some(chords) => chords
             .iter()
-            .map(gpui::Keystroke::unparse)
+            .map(|keystroke| keystroke.unparse(HOST_OS))
             .collect::<Vec<_>>()
             .join(" "),
         None => keystrokes
@@ -478,14 +493,14 @@ fn normalized(keystrokes: &str) -> String {
 
 /// Build the customizable key bindings from settings, layering user overrides
 /// on top of the built-in defaults. Empty or invalid entries are skipped.
-pub fn customizable_key_bindings(settings: &Settings) -> Vec<gpui::KeyBinding> {
+pub fn customizable_key_bindings(settings: &Settings, cx: &gpui::App) -> Vec<gpui::KeyBinding> {
     CUSTOMIZABLE_BINDINGS
         .iter()
         .filter_map(|def| {
             let keystrokes = effective_keystroke(settings, def.action);
-            key_binding(def.action, &keystrokes, def.context)
+            key_binding(def.action, &keystrokes, def.context, cx)
         })
-        .chain(increase_font_size_alias(settings))
+        .chain(increase_font_size_alias(settings, cx))
         .collect()
 }
 
@@ -493,10 +508,10 @@ pub fn customizable_key_bindings(settings: &Settings) -> Vec<gpui::KeyBinding> {
 /// layout `+` needs shift, so the default binds the unshifted `=`, but layouts
 /// with a dedicated `+` key (Nordic, German) have no `=` to press. Follows the
 /// primary shortcut: rebinding or unbinding that one drops the alias.
-fn increase_font_size_alias(settings: &Settings) -> Option<gpui::KeyBinding> {
+fn increase_font_size_alias(settings: &Settings, cx: &gpui::App) -> Option<gpui::KeyBinding> {
     let action = "IncreaseEditorFontSize";
     (effective_keystroke(settings, action) == default_keystroke(action))
-        .then(|| key_binding(action, "secondary-+", Some(INPUT_CONTEXT)))
+        .then(|| key_binding(action, "secondary-+", Some(INPUT_CONTEXT), cx))
         .flatten()
 }
 
@@ -505,15 +520,35 @@ mod tests {
     use super::*;
     use crate::settings::Settings;
 
+    #[gpui::test]
+    fn every_binding_resolves_to_an_action(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            for def in CUSTOMIZABLE_BINDINGS {
+                assert!(
+                    key_binding(def.action, "ctrl-f12", def.context, cx).is_some(),
+                    "{} has no action",
+                    def.action
+                );
+                assert!(BINDING_GROUPS.contains(&def.group), "{}", def.action);
+            }
+        });
+    }
+
+    /// Action and group labels are looked up by a key built at run time,
+    /// which the locale test cannot see, so a new action needs its key here.
     #[test]
-    fn every_binding_resolves_to_an_action() {
-        for def in CUSTOMIZABLE_BINDINGS {
-            assert!(
-                key_binding(def.action, "ctrl-f12", def.context).is_some(),
-                "{} has no action",
-                def.action
+    fn every_action_and_group_has_a_label() {
+        let backend = crate::_rust_i18n_backend();
+        let keys = CUSTOMIZABLE_BINDINGS
+            .iter()
+            .map(|def| format!("settings.keybindings.actions.{}", def.action))
+            .chain(
+                BINDING_GROUPS
+                    .iter()
+                    .map(|group| format!("settings.keybindings.groups.{}", group.to_lowercase())),
             );
-            assert!(BINDING_GROUPS.contains(&def.group), "{}", def.action);
+        for key in keys {
+            assert!(backend.translate("en", &key).is_some(), "missing {key}");
         }
     }
 
@@ -532,7 +567,7 @@ mod tests {
             .insert("ToggleResults".to_string(), "Secondary-Enter".to_string());
         assert_eq!(
             conflicting_actions(&settings, "RunQuery"),
-            ["Toggle results pane"]
+            ["ToggleResults"]
         );
     }
 
@@ -601,8 +636,8 @@ mod tests {
         assert!(!keystrokes_valid("ctrl-a-b"));
     }
 
-    #[test]
-    fn empty_and_invalid_bindings_are_skipped() {
+    #[gpui::test]
+    fn empty_and_invalid_bindings_are_skipped(cx: &mut gpui::TestAppContext) {
         let mut settings = Settings::default();
         // Unbind RunQuery explicitly and give ExplainQuery a malformed
         // keystroke; both must be skipped rather than panic.
@@ -613,7 +648,7 @@ mod tests {
             .keybindings
             .insert("ExplainQuery".to_string(), "ctrl-a-b".to_string());
 
-        let bindings = customizable_key_bindings(&settings);
+        let bindings = cx.update(|cx| customizable_key_bindings(&settings, cx));
         // The font size alias adds one binding on top of the ones bound by
         // default.
         let bound_by_default = CUSTOMIZABLE_BINDINGS

@@ -118,11 +118,11 @@ impl From<&ConnectionData> for ExportedConnection {
 impl ExportedConnection {
     fn into_connection_data(self) -> anyhow::Result<ConnectionData> {
         let db_type = DatabaseType::from_db_type_str(&self.db_type).ok_or_else(|| {
-            anyhow::anyhow!(
-                "Connection \"{}\" has an unknown type \"{}\"",
-                self.name,
-                self.db_type
-            )
+            anyhow::anyhow!(t!(
+                "app_database.import_unknown_type",
+                name = self.name,
+                db_type = self.db_type
+            ))
         })?;
         // A tag is exported by name. One this machine does not have falls
         // back to the default.
@@ -171,13 +171,17 @@ pub fn export_connections(connections: &[ConnectionData]) -> String {
 
 /// The connections in an exported document. They have no id and no secrets.
 pub fn parse_connections(text: &str) -> anyhow::Result<Vec<ConnectionData>> {
-    let document: Document = serde_json::from_str(text)
-        .map_err(|error| anyhow::anyhow!("This is not a Blanco connections file: {error}"))?;
+    let document: Document = serde_json::from_str(text).map_err(|error| {
+        anyhow::anyhow!(t!(
+            "app_database.import_not_connections_file_because",
+            error = error
+        ))
+    })?;
     if document.format != FORMAT {
-        anyhow::bail!("This is not a Blanco connections file");
+        anyhow::bail!(t!("app_database.import_not_connections_file"));
     }
     if document.version > VERSION {
-        anyhow::bail!("This connections file was written by a newer Blanco");
+        anyhow::bail!(t!("app_database.import_newer_version"));
     }
     document
         .connections

@@ -485,9 +485,7 @@ impl ResultsPanel {
                                 window.push_notification(
                                     (
                                         NotificationType::Error,
-                                        SharedString::from(
-                                            "Could not load the full value: the row is no longer in the table",
-                                        ),
+                                        SharedString::from(t!("results.deferred.row_gone")),
                                     ),
                                     cx,
                                 );
@@ -505,8 +503,9 @@ impl ResultsPanel {
                             window.push_notification(
                                 (
                                     NotificationType::Error,
-                                    SharedString::from(format!(
-                                        "Could not load the full value: {error:#}"
+                                    SharedString::from(t!(
+                                        "results.deferred.load_failed",
+                                        error = format!("{error:#}")
                                     )),
                                 ),
                                 cx,

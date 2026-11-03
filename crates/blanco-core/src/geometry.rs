@@ -195,15 +195,17 @@ pub fn parse_ewkt(text: &str) -> Result<Geometry, String> {
     };
     let shape = parser.geometry()?;
     if let Some((_, position)) = parser.tokens.get(parser.index) {
-        return Err(format!(
-            "unexpected text after the geometry at character {}",
-            position + 1
-        ));
+        return Err(t!(
+            "blanco_core.geometry.text_after_geometry",
+            position = position + 1
+        )
+        .into_owned());
     }
     let dimensions = match (parser.declared, parser.coordinate_count) {
         (Some(declared), _) => declared,
-        (None, Some(count)) => Dimensions::from_count(count)
-            .ok_or_else(|| format!("a position has {count} coordinates"))?,
+        (None, Some(count)) => Dimensions::from_count(count).ok_or_else(|| {
+            t!("blanco_core.geometry.coordinate_count", count = count).into_owned()
+        })?,
         (None, None) => Dimensions::Xy,
     };
     Ok(Geometry {
@@ -282,11 +284,11 @@ fn split_srid(text: &str) -> Result<(Option<u32>, &str), String> {
     let rest = &text[SRID_PREFIX.len()..];
     let (srid, wkt) = rest
         .split_once(';')
-        .ok_or_else(|| "expected ';' after the SRID".to_string())?;
+        .ok_or_else(|| t!("blanco_core.geometry.semicolon_after_srid").into_owned())?;
     let srid = srid
         .trim()
         .parse::<u32>()
-        .map_err(|_| format!("the SRID '{}' is not a number", srid.trim()))?;
+        .map_err(|_| t!("blanco_core.geometry.srid_not_number", srid = srid.trim()).into_owned())?;
     Ok((Some(srid), wkt))
 }
 
@@ -692,15 +694,22 @@ fn tokenize(text: &str) -> Result<Vec<(Token, usize)>, String> {
                     chars.next();
                 }
                 let value = number.parse::<f64>().map_err(|_| {
-                    format!("'{number}' at character {} is not a number", position + 1)
+                    t!(
+                        "blanco_core.geometry.not_a_number",
+                        number = number,
+                        position = position + 1
+                    )
+                    .into_owned()
                 })?;
                 tokens.push((Token::Number(value), position));
             }
             _ => {
-                return Err(format!(
-                    "unexpected '{character}' at character {}",
-                    position + 1
-                ));
+                return Err(t!(
+                    "blanco_core.geometry.unexpected_character",
+                    character = character,
+                    position = position + 1
+                )
+                .into_owned());
             }
         }
     }
@@ -764,8 +773,13 @@ impl WktParser {
 
     fn expected(&self, what: &str) -> String {
         match self.tokens.get(self.index) {
-            Some((_, position)) => format!("expected {what} at character {}", position + 1),
-            None => format!("expected {what} at the end"),
+            Some((_, position)) => t!(
+                "blanco_core.geometry.expected_at",
+                what = what,
+                position = position + 1
+            )
+            .into_owned(),
+            None => t!("blanco_core.geometry.expected_at_end", what = what).into_owned(),
         }
     }
 
@@ -792,7 +806,7 @@ impl WktParser {
     /// (`POINTM`) or a word of its own (`POINT ZM`).
     fn type_name(&mut self) -> Result<ShapeName, String> {
         let Some(Token::Word(word)) = self.peek().cloned() else {
-            return Err(self.expected("a geometry type"));
+            return Err(self.expected(&t!("blanco_core.geometry.a_geometry_type")));
         };
         let position = self.position();
         let (shape, attached) = SHAPE_NAMES
@@ -805,7 +819,14 @@ impl WktParser {
                     tag_dimensions(rest).map(|dimensions| (*shape, Some(dimensions)))
                 }
             })
-            .ok_or_else(|| format!("unknown geometry type '{word}' at character {position}"))?;
+            .ok_or_else(|| {
+                t!(
+                    "blanco_core.geometry.unknown_type",
+                    word = word,
+                    position = position
+                )
+                .into_owned()
+            })?;
         self.index += 1;
         let tag = match (attached, self.peek()) {
             (None, Some(Token::Word(word))) => match tag_dimensions(word) {
@@ -819,10 +840,12 @@ impl WktParser {
         };
         if let Some(tag) = tag {
             if self.declared.is_some_and(|declared| declared != tag) {
-                return Err(format!(
-                    "{} does not match the dimensions before it at character {position}",
-                    tag.tag()
-                ));
+                return Err(t!(
+                    "blanco_core.geometry.dimensions_mismatch",
+                    tag = tag.tag(),
+                    position = position
+                )
+                .into_owned());
             }
             self.check_count(tag.count())?;
             self.declared = Some(tag);
@@ -832,10 +855,13 @@ impl WktParser {
 
     fn check_count(&mut self, count: usize) -> Result<(), String> {
         match self.coordinate_count {
-            Some(expected) if expected != count => Err(format!(
-                "expected {expected} coordinates per position, found {count} at character {}",
-                self.position()
-            )),
+            Some(expected) if expected != count => Err(t!(
+                "blanco_core.geometry.coordinate_count_mismatch",
+                expected = expected,
+                count = count,
+                position = self.position()
+            )
+            .into_owned()),
             _ => {
                 self.coordinate_count = Some(count);
                 Ok(())
@@ -850,14 +876,15 @@ impl WktParser {
             self.index += 1;
         }
         if position.len() < 2 {
-            return Err(self.expected("a coordinate"));
+            return Err(self.expected(&t!("blanco_core.geometry.a_coordinate")));
         }
         if position.len() > 4 {
-            return Err(format!(
-                "a position has {} coordinates at character {}",
-                position.len(),
-                self.position()
-            ));
+            return Err(t!(
+                "blanco_core.geometry.coordinate_count_at",
+                count = position.len(),
+                position = self.position()
+            )
+            .into_owned());
         }
         self.check_count(position.len())?;
         Ok(position)
@@ -874,7 +901,7 @@ impl WktParser {
             self.index += 1;
             items.push(item(self)?);
         }
-        self.expect(Token::Close, "',' or ')'")?;
+        self.expect(Token::Close, &t!("blanco_core.geometry.comma_or_close"))?;
         Ok(items)
     }
 
@@ -936,10 +963,12 @@ impl WktParser {
             ShapeName::GeometryCollection => {
                 self.depth += 1;
                 if self.depth > MAX_NESTING {
-                    return Err(format!(
-                        "collections nest more than {MAX_NESTING} deep at character {}",
-                        self.position()
-                    ));
+                    return Err(t!(
+                        "blanco_core.geometry.nested_too_deep",
+                        depth = MAX_NESTING,
+                        position = self.position()
+                    )
+                    .into_owned());
                 }
                 let members = self.list(Self::geometry)?;
                 self.depth -= 1;

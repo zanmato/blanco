@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use blanco_core::{ConnectionContext, ServerSession};
+use blanco_ui::table::{Column, DataTable, RowSet, TableDelegate, TableSelection, TableState};
 use database::DedicatedConnection;
 use gpui::{
     App, AppContext as _, ClipboardItem, Context, Entity, FocusHandle, Focusable,
@@ -19,7 +20,6 @@ use gpui_component::{
     menu::{PopupMenu, PopupMenuItem},
     notification::NotificationType,
     select::{Select, SelectEvent, SelectState},
-    table::{Column, DataTable, TableDelegate, TableSelection, TableState},
     v_flex,
 };
 
@@ -27,14 +27,27 @@ use crate::app::CopySelection;
 use crate::result_ext::ResultExt as _;
 use blanco_ui::IconName;
 
-/// The auto refresh choices, `None` for off.
-const REFRESH_INTERVALS: [(&str, Option<u64>); 5] = [
-    ("Off", None),
-    ("Every 2 s", Some(2)),
-    ("Every 5 s", Some(5)),
-    ("Every 10 s", Some(10)),
-    ("Every 30 s", Some(30)),
-];
+/// The auto refresh choices in seconds, `None` for off.
+const REFRESH_INTERVALS: [Option<u64>; 5] = [None, Some(2), Some(5), Some(10), Some(30)];
+
+/// The tab strip label for the sessions of `context`'s connection.
+fn tab_title(context: &ConnectionContext) -> String {
+    t!("process_list.title", connection = context.connection_name).into_owned()
+}
+
+fn refresh_interval_labels() -> Vec<String> {
+    REFRESH_INTERVALS
+        .iter()
+        .map(|seconds| refresh_interval_label(*seconds))
+        .collect()
+}
+
+fn refresh_interval_label(seconds: Option<u64>) -> String {
+    match seconds {
+        Some(seconds) => t!("process_list.refresh_every", seconds = seconds).into_owned(),
+        None => t!("process_list.refresh_off").into_owned(),
+    }
+}
 
 /// Query text shown in a cell is cut here; copying gives all of it.
 const SHOWN_QUERY_CHARACTERS: usize = 300;
@@ -60,7 +73,7 @@ pub struct ProcessListTab {
 
 impl ProcessListTab {
     pub fn new(context: ConnectionContext, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let title = format!("Processes: {}", context.connection_name);
+        let title = tab_title(&context);
         let tab = cx.entity().downgrade();
         let table_state = cx.new(|cx| {
             TableState::new(SessionsTableDelegate::new(tab), window, cx)
@@ -68,12 +81,14 @@ impl ProcessListTab {
                 .cell_selectable(true)
                 .col_selectable(false)
         });
-        let labels: Vec<String> = REFRESH_INTERVALS
-            .iter()
-            .map(|(label, _)| label.to_string())
-            .collect();
-        let interval_select =
-            cx.new(|cx| SelectState::new(labels, Some(IndexPath::new(0)), window, cx));
+        let interval_select = cx.new(|cx| {
+            SelectState::new(
+                refresh_interval_labels(),
+                Some(IndexPath::new(0)),
+                window,
+                cx,
+            )
+        });
         let interval_subscription = cx.subscribe_in(
             &interval_select,
             window,
@@ -83,8 +98,9 @@ impl ProcessListTab {
                 };
                 let seconds = REFRESH_INTERVALS
                     .iter()
-                    .find(|(choice, _)| choice == label)
-                    .and_then(|(_, seconds)| *seconds);
+                    .find(|seconds| refresh_interval_label(**seconds) == *label)
+                    .copied()
+                    .flatten();
                 this.set_refresh_interval(seconds.map(Duration::from_secs), window, cx);
             },
         );
@@ -101,8 +117,31 @@ impl ProcessListTab {
             refreshed_at: None,
             focus_handle: cx.focus_handle(),
             auto_refresh: None,
-            _subscriptions: vec![interval_subscription],
+            _subscriptions: vec![
+                interval_subscription,
+                cx.observe_global_in::<crate::i18n::Locale>(window, Self::on_locale_change),
+            ],
         }
+    }
+
+    /// Makes the title, the column headings and the refresh choices again in
+    /// the new language. They are made once, when the tab opens.
+    fn on_locale_change(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.title = tab_title(&self.context);
+        self.table_state.update(cx, |table, cx| {
+            for (column, name) in table.delegate_mut().columns.iter_mut().zip(column_titles()) {
+                column.name = name;
+            }
+            table.refresh_column_names(cx);
+        });
+        self.interval_select.update(cx, |select, cx| {
+            // The choices are matched by label, which the language changes,
+            // so the selection carries over by position.
+            let selected = select.selected_index(cx);
+            select.set_items(refresh_interval_labels(), window, cx);
+            select.set_selected_index(selected, window, cx);
+        });
+        cx.notify();
     }
 
     fn set_refresh_interval(
@@ -133,10 +172,8 @@ impl ProcessListTab {
     /// has none.
     pub fn refresh(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(query) = self.context.dialect().process_list_query() else {
-            self.error = Some(format!(
-                "{} has no process list in Blanco",
-                self.context.db_type
-            ));
+            self.error =
+                Some(t!("process_list.unsupported", backend = self.context.db_type).into_owned());
             cx.notify();
             return;
         };
@@ -198,27 +235,28 @@ impl ProcessListTab {
         .detach();
     }
 
-    /// Show `sessions`, keeping the selection on the same session when it
-    /// is still there.
+    /// Show `sessions`, keeping the selection on the same sessions where
+    /// they are still there.
     fn set_sessions(&mut self, sessions: Vec<ServerSession>, cx: &mut Context<Self>) {
-        let (selected_row, selected_col) = match self.table_state.read(cx).selection() {
-            TableSelection::Row(row) => (Some(row), None),
-            TableSelection::Cell(row, col) => (Some(row), Some(col)),
-            _ => (None, None),
-        };
-        let selected_id = selected_row
-            .and_then(|row| self.sessions.get(row))
-            .map(|session| session.id.clone());
+        let selection = self.table_state.read(cx).selection().clone();
+        let selected_ids: Vec<_> = selection
+            .rows()
+            .into_iter()
+            .filter_map(|row| self.sessions.get(row))
+            .map(|session| session.id.clone())
+            .collect();
         self.sessions = sessions.clone();
         self.table_state.update(cx, |table, cx| {
-            let row =
-                selected_id.and_then(|id| sessions.iter().position(|session| session.id == id));
+            let rows: RowSet = selected_ids
+                .iter()
+                .filter_map(|id| sessions.iter().position(|session| &session.id == id))
+                .collect();
             table.delegate_mut().sessions = sessions;
-            match (row, selected_col) {
-                (Some(row), Some(col)) => table.set_selection(TableSelection::Cell(row, col), cx),
-                (Some(row), None) => table.set_selection(TableSelection::Row(row), cx),
-                (None, _) => table.clear_selection(cx),
-            }
+            let selection = match (selection, rows.first()) {
+                (TableSelection::Cell(_, col), Some(row)) => TableSelection::Cell(row, col),
+                (_, _) => TableSelection::from_rows(rows),
+            };
+            table.set_selection(selection, cx);
             table.refresh(cx);
         });
     }
@@ -248,37 +286,44 @@ impl ProcessListTab {
         };
         let (title, description, label) = match action {
             SessionAction::CancelQuery => (
-                format!("Cancel the query of session {}?", session.id),
-                "The query stops with an error and the session stays open.",
-                "Cancel Query",
+                t!("process_list.confirm_cancel_title", session = session.id),
+                t!("process_list.confirm_cancel_description"),
+                t!("process_list.cancel_query"),
             ),
             SessionAction::KillSession => (
-                format!("Kill session {}?", session.id),
-                "The session is disconnected and its open transaction is rolled back.",
-                "Kill Session",
+                t!("process_list.confirm_kill_title", session = session.id),
+                t!("process_list.confirm_kill_description"),
+                t!("process_list.kill_session"),
             ),
         };
+        let title: SharedString = title.into();
+        let label: SharedString = label.into();
         let environment_note = match self.context.environment_type {
             Some(environment) if environment.confirms_writes() => {
-                format!(" This is a {environment} connection.")
+                t!("process_list.environment_note", environment = environment).into_owned()
             }
             _ => String::new(),
         };
         let details: Vec<String> = [
-            session.user.as_ref().map(|user| format!("User: {user}")),
             session
-                .database
+                .user
                 .as_ref()
-                .map(|database| format!("Database: {database}")),
-            session
-                .query
-                .as_ref()
-                .map(|query| format!("Query: {}", one_line(query, 200))),
+                .map(|user| t!("process_list.detail_user", user = user).into_owned()),
+            session.database.as_ref().map(|database| {
+                t!("process_list.detail_database", database = database).into_owned()
+            }),
+            session.query.as_ref().map(|query| {
+                t!("process_list.detail_query", query = one_line(query, 200)).into_owned()
+            }),
         ]
         .into_iter()
         .flatten()
         .collect();
-        let description = format!("{description}{environment_note}");
+        let description: SharedString = if environment_note.is_empty() {
+            description.into()
+        } else {
+            format!("{description} {environment_note}").into()
+        };
         let this = cx.entity().downgrade();
 
         window.open_dialog(cx, move |dialog, _, _| {
@@ -300,14 +345,17 @@ impl ProcessListTab {
                 .footer(
                     DialogFooter::new()
                         .child(
-                            DialogClose::new()
-                                .child(Button::new("session-action-back").label("Back").outline()),
+                            DialogClose::new().child(
+                                Button::new("session-action-back")
+                                    .label(t!("process_list.back"))
+                                    .outline(),
+                            ),
                         )
                         .child(
                             DialogAction::new().child(
                                 Button::new("session-action-confirm")
                                     .danger()
-                                    .label(label)
+                                    .label(label.clone())
                                     .on_click(move |_, window, cx| {
                                         this.update(cx, |this, cx| {
                                             this.run_action(
@@ -347,20 +395,25 @@ impl ProcessListTab {
             })
             .await;
             this.update_in(cx, |this, window, cx| {
-                let verb = match action {
-                    SessionAction::CancelQuery => "Cancelled the query of session",
-                    SessionAction::KillSession => "Killed session",
-                };
                 let notification = match result {
                     // PostgreSQL's functions answer false, not an error, for
                     // a session that is gone or not the user's to signal.
                     Ok(result) if returned_false(&result) => (
                         NotificationType::Warning,
-                        format!(
-                            "Session {session_id} was not signalled: it has ended, or the role may not signal it"
-                        ),
+                        t!("process_list.not_signalled", session = session_id).into_owned(),
                     ),
-                    Ok(_) => (NotificationType::Success, format!("{verb} {session_id}")),
+                    Ok(_) => (
+                        NotificationType::Success,
+                        match action {
+                            SessionAction::CancelQuery => {
+                                t!("process_list.cancelled_query", session = session_id)
+                            }
+                            SessionAction::KillSession => {
+                                t!("process_list.killed_session", session = session_id)
+                            }
+                        }
+                        .into_owned(),
+                    ),
                     Err(error) => (NotificationType::Error, format!("{error:#}")),
                 };
                 window.push_notification(notification, cx);
@@ -378,14 +431,13 @@ impl ProcessListTab {
         let text = match table.selection() {
             TableSelection::Cell(row, col) => self
                 .sessions
-                .get(row)
-                .map(|session| cell_value(session, col)),
-            TableSelection::Row(_) | TableSelection::None => {
-                let mut rows: Vec<usize> = table.selected_rows().iter().copied().collect();
-                rows.sort_unstable();
-                (!rows.is_empty()).then(|| rows_as_tsv(&self.sessions, &rows))
+                .get(*row)
+                .map(|session| cell_value(session, *col)),
+            TableSelection::Rows(rows) => {
+                let rows: Vec<usize> = rows.iter().collect();
+                Some(rows_as_tsv(&self.sessions, &rows))
             }
-            TableSelection::Column(_) => None,
+            TableSelection::Column(_) | TableSelection::None => None,
         };
         if let Some(text) = text {
             cx.write_to_clipboard(ClipboardItem::new_string(text));
@@ -414,7 +466,20 @@ fn returned_false(result: &blanco_core::QueryResult) -> bool {
     )
 }
 
+/// The header row of copied rows, which stays English like the rest of
+/// copied data.
 const COLUMN_NAMES: [&str; 6] = ["Session", "User", "Database", "State", "Duration", "Query"];
+
+fn column_titles() -> [SharedString; 6] {
+    [
+        t!("process_list.column.session").into(),
+        t!("process_list.column.user").into(),
+        t!("process_list.column.database").into(),
+        t!("process_list.column.state").into(),
+        t!("process_list.column.duration").into(),
+        t!("process_list.column.query").into(),
+    ]
+}
 
 /// A cell's full text, as it is copied.
 fn cell_value(session: &ServerSession, col: usize) -> String {
@@ -479,27 +544,37 @@ impl Render for ProcessListTab {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let dialect = self.context.dialect();
-        let selected = self.table_state.read(cx).selection();
-        let selected_row = match selected {
-            TableSelection::Row(row) | TableSelection::Cell(row, _) => Some(row),
-            _ => None,
-        };
+        let selected_row = self
+            .table_state
+            .read(cx)
+            .selection()
+            .rows()
+            .first()
+            .copied();
         let can_act = !self.read_only && selected_row.is_some();
         let status: SharedString = if let Some(error) = &self.error {
-            format!("Error: {error}").into()
+            t!("process_list.error", error = error).into()
         } else if self.loading && self.refreshed_at.is_none() {
-            "Loading…".into()
+            t!("process_list.loading").into()
         } else {
-            let count = match self.sessions.len() {
-                1 => "1 session".to_string(),
-                count => format!("{count} sessions"),
-            };
-            match &self.refreshed_at {
-                Some(at) => format!("{count}, refreshed {}", at.format("%H:%M:%S")).into(),
-                None => count.into(),
+            let count = self.sessions.len();
+            match (&self.refreshed_at, count) {
+                (Some(at), 1) => t!(
+                    "process_list.sessions_refreshed_one",
+                    time = at.format("%H:%M:%S")
+                )
+                .into(),
+                (Some(at), count) => t!(
+                    "process_list.sessions_refreshed_other",
+                    count = count,
+                    time = at.format("%H:%M:%S")
+                )
+                .into(),
+                (None, 1) => t!("process_list.sessions_one").into(),
+                (None, count) => t!("process_list.sessions_other", count = count).into(),
             }
         };
-        let action_button = |id: &'static str, label: &'static str, action: SessionAction| {
+        let action_button = |id: &'static str, label: SharedString, action: SessionAction| {
             Button::new(id)
                 .outline()
                 .small()
@@ -525,7 +600,7 @@ impl Render for ProcessListTab {
                             .outline()
                             .small()
                             .icon(IconName::RotateCcw)
-                            .label("Refresh")
+                            .label(t!("process_list.refresh"))
                             .loading(self.loading)
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.refresh(window, cx);
@@ -539,14 +614,14 @@ impl Render for ProcessListTab {
                     .when(dialect.can_cancel_queries(), |this| {
                         this.child(action_button(
                             "process-list-cancel",
-                            "Cancel Query",
+                            t!("process_list.cancel_query").into(),
                             SessionAction::CancelQuery,
                         ))
                     })
                     .when(dialect.can_kill_sessions(), |this| {
                         this.child(action_button(
                             "process-list-kill",
-                            "Kill Session",
+                            t!("process_list.kill_session").into(),
                             SessionAction::KillSession,
                         ))
                     })
@@ -556,7 +631,7 @@ impl Render for ProcessListTab {
                             div()
                                 .text_xs()
                                 .text_color(theme.muted_foreground)
-                                .child("Read-only connection"),
+                                .child(SharedString::from(t!("process_list.read_only_connection"))),
                         )
                     })
                     .child(
@@ -591,11 +666,11 @@ pub struct SessionsTableDelegate {
 impl SessionsTableDelegate {
     fn new(tab: WeakEntity<ProcessListTab>) -> Self {
         let widths = [90., 120., 120., 140., 90., 520.];
-        let columns = COLUMN_NAMES
-            .iter()
+        let columns = column_titles()
+            .into_iter()
             .zip(widths)
             .map(|(name, width)| Column {
-                name: (*name).into(),
+                name,
                 width: px(width),
                 ..Default::default()
             })
@@ -670,7 +745,7 @@ impl TableDelegate for SessionsTableDelegate {
             })
             .unzip();
         let read_only = read_only.unwrap_or(true);
-        let action_item = |label: &'static str, action: SessionAction| {
+        let action_item = |label: SharedString, action: SessionAction| {
             let tab = tab.clone();
             PopupMenuItem::new(label)
                 .disabled(read_only)
@@ -682,18 +757,28 @@ impl TableDelegate for SessionsTableDelegate {
         let value = cell_value(&session, col_ix);
         let row = rows_as_tsv(std::slice::from_ref(&session), &[0]);
         menu.when(dialect.is_some_and(|d| d.can_cancel_queries()), |menu| {
-            menu.item(action_item("Cancel Query", SessionAction::CancelQuery))
+            menu.item(action_item(
+                t!("process_list.cancel_query").into(),
+                SessionAction::CancelQuery,
+            ))
         })
         .when(dialect.is_some_and(|d| d.can_kill_sessions()), |menu| {
-            menu.item(action_item("Kill Session", SessionAction::KillSession))
+            menu.item(action_item(
+                t!("process_list.kill_session").into(),
+                SessionAction::KillSession,
+            ))
         })
         .separator()
-        .item(PopupMenuItem::new("Copy Value").on_click(move |_, _, cx| {
-            cx.write_to_clipboard(ClipboardItem::new_string(value.clone()));
-        }))
-        .item(PopupMenuItem::new("Copy Row").on_click(move |_, _, cx| {
-            cx.write_to_clipboard(ClipboardItem::new_string(row.clone()));
-        }))
+        .item(
+            PopupMenuItem::new(t!("process_list.copy_value")).on_click(move |_, _, cx| {
+                cx.write_to_clipboard(ClipboardItem::new_string(value.clone()));
+            }),
+        )
+        .item(
+            PopupMenuItem::new(t!("process_list.copy_row")).on_click(move |_, _, cx| {
+                cx.write_to_clipboard(ClipboardItem::new_string(row.clone()));
+            }),
+        )
     }
 }
 

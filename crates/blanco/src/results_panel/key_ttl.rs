@@ -25,7 +25,7 @@ impl ResultsPanel {
     ) {
         let input = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("Seconds")
+                .placeholder(t!("results.key_ttl.seconds_placeholder"))
                 .default_value(current.map(|ttl| ttl.to_string()).unwrap_or_default())
         });
         let panel = cx.entity().downgrade();
@@ -34,48 +34,54 @@ impl ResultsPanel {
             let panel = panel.clone();
             let key = key.clone();
             dialog
-                .title(format!("Set TTL of {key}"))
+                .title(t!("results.key_ttl.title", key = key))
                 .child(
                     v_flex()
                         .gap_2()
-                        .child("Seconds until the key expires.")
+                        .child(t!("results.key_ttl.description"))
                         .child(Input::new(&input)),
                 )
                 .footer(
                     DialogFooter::new()
                         .child(
-                            DialogClose::new()
-                                .child(Button::new("ttl-cancel").label("Cancel").outline()),
-                        )
-                        .child(DialogAction::new().child(
-                            Button::new("ttl-set").primary().label("Set TTL").on_click(
-                                move |_, window, cx| {
-                                    let value = input.read(cx).value();
-                                    // EXPIRE deletes the key at once for zero or less.
-                                    let Some(seconds) = value
-                                        .trim()
-                                        .parse::<i64>()
-                                        .ok()
-                                        .filter(|seconds| *seconds > 0)
-                                    else {
-                                        window.push_notification(
-                                            (
-                                                NotificationType::Error,
-                                                "The TTL must be a whole number of seconds above 0",
-                                            ),
-                                            cx,
-                                        );
-                                        return;
-                                    };
-                                    let key = key.clone();
-                                    panel
-                                        .update(cx, |panel, cx| {
-                                            panel.set_key_ttl(key, Some(seconds), window, cx)
-                                        })
-                                        .log_err();
-                                },
+                            DialogClose::new().child(
+                                Button::new("ttl-cancel")
+                                    .label(t!("results.key_ttl.cancel"))
+                                    .outline(),
                             ),
-                        )),
+                        )
+                        .child(
+                            DialogAction::new().child(
+                                Button::new("ttl-set")
+                                    .primary()
+                                    .label(t!("results.key_ttl.set"))
+                                    .on_click(move |_, window, cx| {
+                                        let value = input.read(cx).value();
+                                        // EXPIRE deletes the key at once for zero or less.
+                                        let Some(seconds) = value
+                                            .trim()
+                                            .parse::<i64>()
+                                            .ok()
+                                            .filter(|seconds| *seconds > 0)
+                                        else {
+                                            window.push_notification(
+                                                (
+                                                    NotificationType::Error,
+                                                    t!("results.key_ttl.invalid"),
+                                                ),
+                                                cx,
+                                            );
+                                            return;
+                                        };
+                                        let key = key.clone();
+                                        panel
+                                            .update(cx, |panel, cx| {
+                                                panel.set_key_ttl(key, Some(seconds), window, cx)
+                                            })
+                                            .log_err();
+                                    }),
+                            ),
+                        ),
                 )
         });
     }
@@ -113,7 +119,10 @@ impl ResultsPanel {
                     Err(error) => window.push_notification(
                         (
                             NotificationType::Error,
-                            SharedString::from(format!("Could not change the TTL: {error:#}")),
+                            SharedString::from(t!(
+                                "results.key_ttl.change_failed",
+                                error = format!("{error:#}")
+                            )),
                         ),
                         cx,
                     ),

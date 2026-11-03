@@ -1,7 +1,7 @@
-use std::collections::HashSet;
 use std::time::Duration;
 
 use blanco_ui::IconName;
+use blanco_ui::table::{DataTable, TableEvent, TableState};
 use gpui::{
     App, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement,
     ParentElement, Render, ScrollHandle, SharedString, StatefulInteractiveElement as _, Styled,
@@ -14,7 +14,6 @@ use gpui_component::{
     input::{Input, InputEvent, InputState},
     menu::DropdownMenu as _,
     scroll::Scrollbar,
-    table::{DataTable, TableEvent, TableState},
     tooltip::Tooltip,
     v_flex,
 };
@@ -96,8 +95,31 @@ pub struct TableOperationResponse {
 /// One materialized result-set rendered as a sub-tab inside `ResultsPanel`.
 /// A query script with N statements produces N `ResultTab`s; each owns its own
 /// `TableState` so edit state and selection stay isolated per tab.
+/// What a result tab is called. It keeps what the label names rather than
+/// the text, so the label follows the interface language.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ResultTabTitle {
+    /// The only result of a run.
+    Result,
+    /// One of several results of a run, counted from 1.
+    Numbered(usize),
+    /// A Redis key's value, named by the key.
+    Key(SharedString),
+}
+
+impl ResultTabTitle {
+    /// The label in the current language.
+    pub fn label(&self) -> SharedString {
+        match self {
+            Self::Result => t!("results.tab.result").into(),
+            Self::Numbered(number) => t!("results.tab.result_numbered", number = number).into(),
+            Self::Key(key) => key.clone(),
+        }
+    }
+}
+
 pub struct ResultTab {
-    pub title: SharedString,
+    pub title: ResultTabTitle,
     pub pinned: bool,
     pub table_state: Entity<TableState<ResultsTableDelegate>>,
     pub view_mode: ResultViewMode,
@@ -171,12 +193,14 @@ impl ResultsPanel {
             connection_id,
             database_name,
             db_type,
-            SharedString::from("Result"),
+            ResultTabTitle::Result,
             window,
             cx,
         );
         let table_state = initial_tab.table_state.clone();
-        let column_search = cx.new(|cx| InputState::new(window, cx).placeholder("Search columns"));
+        let column_search = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(t!("results.columns.search_placeholder"))
+        });
         // The Columns menu filters as the search changes.
         let column_search_subscription =
             cx.subscribe(&column_search, |_, _, event: &InputEvent, cx| {
@@ -209,6 +233,23 @@ impl ResultsPanel {
                 column_search_subscription,
                 // The row number setting applies to open grids at once.
                 cx.observe_global::<crate::app_settings::AppSettings>(|_, cx| cx.notify()),
+                // The search inputs keep their placeholders from when they
+                // were made.
+                cx.observe_global_in::<crate::i18n::Locale>(window, |this, window, cx| {
+                    this.column_search.update(cx, |input, cx| {
+                        input.set_placeholder(t!("results.columns.search_placeholder"), window, cx)
+                    });
+                    for tab in &this.result_tabs {
+                        tab.filter_input.update(cx, |input, cx| {
+                            input.set_placeholder(
+                                t!("results.tab.filter_rows_placeholder"),
+                                window,
+                                cx,
+                            )
+                        });
+                    }
+                    cx.notify();
+                }),
             ],
         }
     }
@@ -217,7 +258,7 @@ impl ResultsPanel {
         connection_id: i64,
         database_name: &str,
         db_type: database::DatabaseType,
-        title: SharedString,
+        title: ResultTabTitle,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> ResultTab {
@@ -282,7 +323,9 @@ impl ResultsPanel {
                 }
             });
 
-        let filter_input = cx.new(|cx| InputState::new(window, cx).placeholder("Filter rows"));
+        let filter_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(t!("results.tab.filter_rows_placeholder"))
+        });
         let filter_subscription = cx.subscribe_in(
             &filter_input,
             window,
@@ -522,7 +565,7 @@ impl ResultsPanel {
                     self.connection_id,
                     &self.database_name.clone(),
                     self.db_type,
-                    SharedString::from("Result"),
+                    ResultTabTitle::Result,
                     window,
                     cx,
                 );
@@ -538,11 +581,9 @@ impl ResultsPanel {
         let total = results.len();
         for (i, payload) in results.into_iter().enumerate() {
             let title = match &payload {
-                ResultPayload::KeyValue(kv) => SharedString::from(kv.key.clone()),
-                ResultPayload::Tabular(_) if total > 1 => {
-                    SharedString::from(format!("Result {}", i + 1))
-                }
-                ResultPayload::Tabular(_) => SharedString::from("Result"),
+                ResultPayload::KeyValue(kv) => ResultTabTitle::Key(kv.key.clone().into()),
+                ResultPayload::Tabular(_) if total > 1 => ResultTabTitle::Numbered(i + 1),
+                ResultPayload::Tabular(_) => ResultTabTitle::Result,
             };
             let mut tab = Self::build_result_tab(
                 self.connection_id,
@@ -620,7 +661,7 @@ impl ResultsPanel {
         cx: &mut Context<Self>,
     ) {
         let table_state = self.table_state.read(cx);
-        let request = table_state.selected_cell().and_then(|(row_ix, col_ix)| {
+        let request = table_state.selection().cell().and_then(|(row_ix, col_ix)| {
             table_state
                 .delegate()
                 .referenced_row_request(row_ix, col_ix)
@@ -656,7 +697,7 @@ impl ResultsPanel {
                 self.connection_id,
                 &self.database_name.clone(),
                 self.db_type,
-                SharedString::from("Result"),
+                ResultTabTitle::Result,
                 window,
                 cx,
             );
@@ -725,7 +766,7 @@ impl ResultsPanel {
         }
         // A read only grid opens the cell too, so its value can be expanded,
         // selected and copied.
-        let Some((row, col)) = self.table_state.read(cx).selected_cell() else {
+        let Some((row, col)) = self.table_state.read(cx).selection().cell() else {
             return;
         };
         self.table_state.update(cx, |state, _cx| {
@@ -833,7 +874,10 @@ impl ResultsPanel {
         match target {
             Some((next_row, next_col)) => {
                 self.table_state.update(cx, |state, cx| {
-                    state.set_selected_cell(next_row, next_col, cx);
+                    state.set_selection(
+                        blanco_ui::table::TableSelection::Cell(next_row, next_col),
+                        cx,
+                    );
                 });
                 self.start_cell_edit(next_row, next_col, window, cx);
             }
@@ -851,7 +895,7 @@ impl ResultsPanel {
     ) {
         self.table_state.update(cx, |state, cx| {
             state.delegate_mut().edit_state.stop_editing();
-            state.set_selected_cell(cell.0, cell.1, cx);
+            state.set_selection(blanco_ui::table::TableSelection::Cell(cell.0, cell.1), cx);
             state.refresh(cx);
         });
         self.table_state.focus_handle(cx).focus(window, cx);
@@ -1259,7 +1303,7 @@ impl ResultsPanel {
     /// Commit all pending changes to the database
     pub fn get_selected_data_for_rows(
         &self,
-        selected_rows: &HashSet<usize>,
+        selected_rows: &[usize],
         delegate: &ResultsTableDelegate,
     ) -> SelectedTableData {
         selected_table_data(selected_rows, delegate)
@@ -1291,7 +1335,7 @@ impl ResultsPanel {
             .track_scroll(&self.tab_strip_scroll_handle);
         for (idx, tab) in self.result_tabs.iter().enumerate() {
             let is_active = idx == active;
-            let label = tab.title.clone();
+            let label = tab.title.label();
             let pinned = tab.pinned;
             let is_last = idx == tab_count - 1;
             let read_only = !tab.table_state.read(cx).delegate().is_editable();
@@ -1308,12 +1352,8 @@ impl ResultsPanel {
                     .when(!is_last, |this| {
                         this.border_r_1().border_color(border_color)
                     })
-                    .when(is_active, |this| {
-                        this.bg(table_head).text_color(active_fg)
-                    })
-                    .when(!is_active, |this| {
-                        this.bg(title_bar).text_color(muted_fg)
-                    })
+                    .when(is_active, |this| this.bg(table_head).text_color(active_fg))
+                    .when(!is_active, |this| this.bg(title_bar).text_color(muted_fg))
                     .cursor_pointer()
                     .on_mouse_down(
                         gpui::MouseButton::Left,
@@ -1339,7 +1379,7 @@ impl ResultsPanel {
                                         )
                                         .tooltip(|window, cx| {
                                             Tooltip::new(
-                                                "Read-only: editing requires a complete primary key",
+                                                t!("results.tab.read_only_tooltip").into_owned(),
                                             )
                                             .build(window, cx)
                                         }),
@@ -1359,7 +1399,11 @@ impl ResultsPanel {
                                     } else {
                                         IconName::Pin
                                     })
-                                    .tooltip(if pinned { "Unpin" } else { "Pin" })
+                                    .tooltip(if pinned {
+                                        t!("results.tab.unpin")
+                                    } else {
+                                        t!("results.tab.pin")
+                                    })
                                     .on_click(cx.listener(move |this, _ev, _window, cx| {
                                         this.toggle_pin(idx, cx);
                                     })),
@@ -1370,7 +1414,7 @@ impl ResultsPanel {
                                         .ghost()
                                         .xsmall()
                                         .icon(IconName::Close)
-                                        .tooltip("Close result")
+                                        .tooltip(t!("results.tab.close"))
                                         .on_click(cx.listener(move |this, _ev, window, cx| {
                                             this.close_tab(idx, window, cx);
                                         })),
@@ -1436,7 +1480,11 @@ impl ResultsPanel {
                                         .text_xs()
                                         .text_color(muted_fg)
                                         .whitespace_nowrap()
-                                        .child(format!("{shown} of {total}")),
+                                        .child(t!(
+                                            "results.tab.filtered_count",
+                                            shown = shown,
+                                            total = total
+                                        )),
                                 )
                             })
                             .when(can_server_filter, |this| {
@@ -1447,7 +1495,7 @@ impl ResultsPanel {
                                         .label("WHERE")
                                         .selected(filter_bar_open)
                                         .tooltip_with_action(
-                                            "Filter on the Server",
+                                            t!("results.tab.filter_on_server"),
                                             &crate::app::ToggleFilterBar,
                                             None,
                                         )
@@ -1466,7 +1514,7 @@ impl ResultsPanel {
                                     .when(edits_pending, |this| {
                                         this.tooltip(|window, cx| {
                                             Tooltip::new(
-                                                "Commit or discard pending edits to filter",
+                                                t!("results.tab.pending_edits_filter").into_owned(),
                                             )
                                             .build(window, cx)
                                         })
@@ -1493,7 +1541,7 @@ impl ResultsPanel {
                                     .xsmall()
                                     .icon(IconName::ListTree)
                                     .selected(is_plan)
-                                    .tooltip("Query plan")
+                                    .tooltip(t!("results.tab.query_plan"))
                                     .on_click(cx.listener(|this, _ev, _window, cx| {
                                         this.set_view_mode(ResultViewMode::Plan, cx);
                                     })),
@@ -1505,7 +1553,7 @@ impl ResultsPanel {
                                 .xsmall()
                                 .icon(IconName::Sheet)
                                 .selected(is_table)
-                                .tooltip("Table view")
+                                .tooltip(t!("results.tab.table_view"))
                                 .on_click(cx.listener(|this, _ev, _window, cx| {
                                     this.set_view_mode(ResultViewMode::Table, cx);
                                 })),
@@ -1516,7 +1564,7 @@ impl ResultsPanel {
                                 .xsmall()
                                 .icon(IconName::ChartBar)
                                 .selected(!is_table && !is_plan)
-                                .tooltip("Chart view")
+                                .tooltip(t!("results.tab.chart_view"))
                                 .on_click(cx.listener(|this, _ev, _window, cx| {
                                     this.set_view_mode(ResultViewMode::Chart, cx);
                                 })),
@@ -1537,7 +1585,7 @@ impl ResultsPanel {
             .ghost()
             .xsmall()
             .icon(IconName::LayoutDashboard)
-            .tooltip("Add to Dashboard")
+            .tooltip(t!("results.dashboard.add"))
             .disabled(!available)
             .dropdown_menu(move |menu, _, _| {
                 let linked_panel = link.as_ref().and_then(|link| {
@@ -1550,7 +1598,11 @@ impl ResultsPanel {
                 let menu = match linked_panel {
                     Some((dashboard, panel)) => menu
                         .menu(
-                            format!("Save to \"{panel}\" on {dashboard}"),
+                            t!(
+                                "results.dashboard.save_to_panel",
+                                panel = panel,
+                                dashboard = dashboard
+                            ),
                             Box::new(UpdateDashboardPanel),
                         )
                         .separator(),
@@ -1564,18 +1616,21 @@ impl ResultsPanel {
                 } else {
                     dashboards
                         .iter()
-                        .fold(menu.label("Add to Dashboard"), |menu, dashboard| {
-                            menu.menu(
-                                dashboard.name.clone(),
-                                Box::new(AddToDashboard {
-                                    dashboard_id: Some(dashboard.id),
-                                }),
-                            )
-                        })
+                        .fold(
+                            menu.label(t!("results.dashboard.add")),
+                            |menu, dashboard| {
+                                menu.menu(
+                                    dashboard.name.clone(),
+                                    Box::new(AddToDashboard {
+                                        dashboard_id: Some(dashboard.id),
+                                    }),
+                                )
+                            },
+                        )
                         .separator()
                 };
                 menu.menu(
-                    "New Dashboard…",
+                    t!("results.dashboard.new"),
                     Box::new(AddToDashboard { dashboard_id: None }),
                 )
             })
@@ -1607,23 +1662,23 @@ impl ResultsPanel {
                 this.child(
                     h_flex()
                         .gap_1()
-                        .child(div().text_color(muted).child("planning:"))
-                        .child(format!("{time:.2} ms")),
+                        .child(div().text_color(muted).child(t!("results.plan.planning")))
+                        .child(t!("results.plan.milliseconds", time = format!("{time:.2}"))),
                 )
             })
             .when_some(plan.execution_time_ms, |this, time| {
                 this.child(
                     h_flex()
                         .gap_1()
-                        .child(div().text_color(muted).child("execution:"))
-                        .child(format!("{time:.2} ms")),
+                        .child(div().text_color(muted).child(t!("results.plan.execution")))
+                        .child(t!("results.plan.milliseconds", time = format!("{time:.2}"))),
                 )
             })
             .when(!plan.has_timings(), |this| {
                 this.child(
                     div()
                         .text_color(muted)
-                        .child("estimated plan (no timings for this statement)"),
+                        .child(t!("results.plan.estimated_only")),
                 )
             });
 
@@ -1657,17 +1712,33 @@ impl ResultsPanel {
             let mut stats: Vec<String> = Vec::new();
             match (node.estimated_rows, node.actual_rows) {
                 (Some(estimated), Some(actual)) => {
-                    stats.push(format!("rows {actual:.0} (est {estimated:.0})"));
+                    stats.push(
+                        t!(
+                            "results.plan.rows_with_estimate",
+                            actual = format!("{actual:.0}"),
+                            estimated = format!("{estimated:.0}")
+                        )
+                        .into_owned(),
+                    );
                 }
-                (Some(estimated), None) => stats.push(format!("est rows {estimated:.0}")),
-                (None, Some(actual)) => stats.push(format!("rows {actual:.0}")),
+                (Some(estimated), None) => stats.push(
+                    t!(
+                        "results.plan.estimated_rows",
+                        estimated = format!("{estimated:.0}")
+                    )
+                    .into_owned(),
+                ),
+                (None, Some(actual)) => stats
+                    .push(t!("results.plan.rows", actual = format!("{actual:.0}")).into_owned()),
                 (None, None) => {}
             }
             if let Some(time) = node.actual_time_ms {
-                stats.push(format!("{time:.2} ms"));
+                stats.push(
+                    t!("results.plan.milliseconds", time = format!("{time:.2}")).into_owned(),
+                );
             }
             if let Some(cost) = node.total_cost {
-                stats.push(format!("cost {cost:.1}"));
+                stats.push(t!("results.plan.cost", cost = format!("{cost:.1}")).into_owned());
             }
 
             let details = node.details.clone();
@@ -1785,7 +1856,7 @@ impl ResultsPanel {
         let border_color = cx.theme().border;
         let mono = cx.theme().mono_font_family.clone();
 
-        let badge = |label: &'static str, value: String| {
+        let badge = |label: SharedString, value: String| {
             h_flex()
                 .gap_1()
                 .items_center()
@@ -1794,7 +1865,7 @@ impl ResultsPanel {
         };
         let ttl_value = match kv.ttl {
             Some(seconds) => format!("{seconds}s"),
-            None => "none".to_string(),
+            None => t!("results.key_value.ttl_none").into_owned(),
         };
 
         let key = kv.key.clone();
@@ -1808,17 +1879,23 @@ impl ResultsPanel {
             .border_color(border_color)
             .font_family(mono.clone())
             .text_size(px(12.))
-            .child(badge("type:", kv.key_type.as_str().to_string()))
-            .child(badge("ttl:", ttl_value))
+            .child(badge(
+                t!("results.key_value.type_badge").into(),
+                kv.key_type.as_str().to_string(),
+            ))
+            .child(badge(t!("results.key_value.ttl_badge").into(), ttl_value))
             .when_some(kv.compression.clone(), |this, compression| {
-                this.child(badge("compressed:", compression))
+                this.child(badge(
+                    t!("results.key_value.compressed_badge").into(),
+                    compression,
+                ))
             })
             .child(div().flex_1())
             .child(
                 Button::new("key-set-ttl")
                     .ghost()
                     .xsmall()
-                    .label("Set TTL…")
+                    .label(t!("results.key_value.set_ttl"))
                     .on_click(cx.listener({
                         let key = key.clone();
                         move |panel, _, window, cx| {
@@ -1831,7 +1908,7 @@ impl ResultsPanel {
                     Button::new("key-remove-ttl")
                         .ghost()
                         .xsmall()
-                        .label("Remove TTL")
+                        .label(t!("results.key_value.remove_ttl"))
                         .on_click(cx.listener(move |panel, _, window, cx| {
                             panel.set_key_ttl(key.clone(), None, window, cx)
                         })),
@@ -1936,7 +2013,7 @@ impl ResultsPanel {
                         .px_3()
                         .py_2()
                         .text_color(muted)
-                        .child("(key does not exist)"),
+                        .child(t!("results.key_value.missing_key")),
                 );
             }
         }
@@ -2068,17 +2145,16 @@ fn is_explain_statement(text: &str) -> bool {
 }
 
 /// The rows of `delegate` in `selected_rows`, as copies and exports take them.
+/// The data of `selected_rows`, which come in grid order, as
+/// [`TableSelection::rows`](blanco_ui::table::TableSelection::rows) gives
+/// them: not every format sorts the rows it is handed.
 pub(crate) fn selected_table_data(
-    selected_rows: &HashSet<usize>,
+    selected_rows: &[usize],
     delegate: &ResultsTableDelegate,
 ) -> SelectedTableData {
     let mut selected_rows_data = Vec::new();
 
-    // In grid order: the selection is a set, and not every format sorts
-    // the rows it is handed.
-    let mut ordered_rows: Vec<usize> = selected_rows.iter().copied().collect();
-    ordered_rows.sort_unstable();
-    for row in ordered_rows {
+    for &row in selected_rows {
         if let Some(row_data) = delegate.rows.get(row) {
             // Hidden columns sit after the visible ones and stay out of
             // copies and exports.

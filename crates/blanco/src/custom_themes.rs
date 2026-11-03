@@ -124,10 +124,14 @@ fn load_theme_files(dir: &Path, registry: &mut ThemeRegistry) -> Vec<String> {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
         Err(error) => {
-            return vec![format!(
-                "Theme folder {} could not be read: {error}",
-                dir.display()
-            )];
+            return vec![
+                t!(
+                    "shell.themes.folder_unreadable",
+                    path = dir.display(),
+                    error = error
+                )
+                .into_owned(),
+            ];
         }
     };
     let mut paths: Vec<PathBuf> = entries
@@ -156,9 +160,10 @@ fn load_theme_files(dir: &Path, registry: &mut ThemeRegistry) -> Vec<String> {
                 warnings.push(unknown_keys_warning(&name, &keys));
             }
             Err(error) => {
-                let warning = format!("Theme file {name} could not be loaded: {error}");
-                tracing::warn!("{warning}");
-                warnings.push(warning);
+                tracing::warn!("Theme file {name} could not be loaded: {error}");
+                warnings.push(
+                    t!("shell.themes.file_unloadable", name = name, error = error).into_owned(),
+                );
             }
         }
     }
@@ -169,21 +174,23 @@ fn load_theme_files(dir: &Path, registry: &mut ThemeRegistry) -> Vec<String> {
 /// this version ignores, so the notification names a few and the log has all.
 fn unknown_keys_warning(name: &str, keys: &[String]) -> String {
     const SHOWN: usize = 5;
-    let mut warning = format!(
-        "Theme file {name} has keys Blanco does not know, which are ignored: {}",
-        keys.iter()
-            .take(SHOWN)
-            .cloned()
-            .collect::<Vec<_>>()
-            .join(", ")
-    );
+    let shown = keys
+        .iter()
+        .take(SHOWN)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ");
     if keys.len() > SHOWN {
-        warning.push_str(&format!(
-            " and {} more, listed in the log",
-            keys.len() - SHOWN
-        ));
+        t!(
+            "shell.themes.unknown_keys_more",
+            name = name,
+            keys = shown,
+            count = keys.len() - SHOWN
+        )
+        .into_owned()
+    } else {
+        t!("shell.themes.unknown_keys", name = name, keys = shown).into_owned()
     }
-    warning
 }
 
 /// Show the theme file warnings in `window`, once.

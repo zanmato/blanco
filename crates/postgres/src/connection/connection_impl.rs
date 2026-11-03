@@ -59,15 +59,17 @@ impl Connection for PostgresConnection {
             sqlx::postgres::PgConnection::connect_with(&options)
                 .await
                 .map_err(|e| {
-                    blanco_core::tag_sqlx(e).context(format!("Failed to connect to {backend}"))
+                    blanco_core::tag_sqlx(e)
+                        .context(t!("postgres.connect_failed", backend = backend))
                 })
         };
         let deadline = async {
             smol::Timer::after(timeout).await;
-            Err(anyhow::anyhow!(
-                "{backend} connection timed out after {}s",
-                timeout.as_secs()
-            ))
+            Err(anyhow::anyhow!(t!(
+                "postgres.connect_timed_out",
+                backend = backend,
+                seconds = timeout.as_secs()
+            )))
         };
 
         let mut conn = smol::future::or(connect, deadline).await?;
@@ -76,7 +78,8 @@ impl Connection for PostgresConnection {
             .execute(&mut conn)
             .await
             .map_err(|e| {
-                blanco_core::tag_sqlx(e).context(format!("{backend} connection check failed"))
+                blanco_core::tag_sqlx(e)
+                    .context(t!("postgres.connection_check_failed", backend = backend))
             });
 
         // Close best-effort; the validation result is what matters.
@@ -111,9 +114,7 @@ impl Connection for PostgresConnection {
         let pool = self
             .get_or_create_pool(database_name)
             .await
-            .with_context(|| {
-                format!("Failed to get connection pool for database '{database_name}'")
-            })?;
+            .with_context(|| t!("postgres.pool_failed", database = database_name))?;
 
         // Convert String parameters to QueryParam
         let params: Vec<QueryParam> = parameters
@@ -129,7 +130,7 @@ impl Connection for PostgresConnection {
             // tagged for the service rather than flattened into a string.
             .map_err(|e| {
                 blanco_core::tag_sqlx_error(e)
-                    .context(format!("{} query execution failed", self.backend_name()))
+                    .context(t!("postgres.query_failed", backend = self.backend_name()))
             })?;
 
         Ok(result)
@@ -144,12 +145,10 @@ impl Connection for PostgresConnection {
         let pool = self
             .get_or_create_pool(database_name)
             .await
-            .with_context(|| {
-                format!("Failed to get connection pool for database '{database_name}'")
-            })?;
+            .with_context(|| t!("postgres.pool_failed", database = database_name))?;
         self.execute_script_inner(&pool, query).await.map_err(|e| {
             blanco_core::tag_sqlx_error(e)
-                .context(format!("{} script execution failed", self.backend_name()))
+                .context(t!("postgres.script_failed", backend = self.backend_name()))
         })
     }
 
@@ -162,11 +161,12 @@ impl Connection for PostgresConnection {
         let pool = self
             .get_or_create_pool(database_name)
             .await
-            .with_context(|| {
-                format!("Failed to get connection pool for database '{database_name}'")
-            })?;
+            .with_context(|| t!("postgres.pool_failed", database = database_name))?;
         let description = pool.describe(query).await.map_err(|e| {
-            blanco_core::tag_sqlx(e).context(format!("{} describe failed", self.backend_name()))
+            blanco_core::tag_sqlx(e).context(t!(
+                "postgres.describe_failed",
+                backend = self.backend_name()
+            ))
         })?;
         let (columns, column_types) = description
             .columns()
@@ -191,9 +191,7 @@ impl Connection for PostgresConnection {
         let pool = self
             .get_or_create_pool(database_name)
             .await
-            .with_context(|| {
-                format!("Failed to get connection pool for database '{database_name}'")
-            })?;
+            .with_context(|| t!("postgres.pool_failed", database = database_name))?;
 
         let mut q = sqlx::query(query);
         for param in parameters {
@@ -203,7 +201,8 @@ impl Connection for PostgresConnection {
             };
         }
         let result = q.execute(&pool).await.map_err(|e| {
-            blanco_core::tag_sqlx(e).context(format!("{} write failed", self.backend_name()))
+            blanco_core::tag_sqlx(e)
+                .context(t!("postgres.write_failed", backend = self.backend_name()))
         })?;
         Ok(result.rows_affected())
     }
@@ -769,11 +768,10 @@ impl Connection for PostgresConnection {
             .execute_query(query, self.initial_database.as_deref(), Some(&params))
             .await?;
         let Some(row) = result.rows.into_iter().next() else {
-            return Err(anyhow::anyhow!(
-                "Table '{}.{}' not found",
-                params[0],
-                params[1]
-            ));
+            return Err(anyhow::anyhow!(t!(
+                "postgres.table_not_found",
+                table = format!("{}.{}", params[0], params[1])
+            )));
         };
         let get = |ix: usize| {
             row.get(ix)
@@ -791,7 +789,7 @@ impl Connection for PostgresConnection {
         };
         if let Some(options) = get(4) {
             info.options
-                .push(("Storage parameters".to_string(), options));
+                .push((t!("postgres.storage_parameters").into_owned(), options));
         }
         Ok(info)
     }
@@ -1166,11 +1164,11 @@ impl Connection for PostgresConnection {
 
         // Get connection pool
         let pool = self.get_or_create_pool(database_name).await.map_err(|e| {
-            anyhow::anyhow!(
-                "Failed to get connection pool for database '{}': {}",
-                database_name,
-                e
-            )
+            anyhow::anyhow!(t!(
+                "postgres.pool_failed_because",
+                database = database_name,
+                error = e
+            ))
         })?;
 
         // Use sqlx::query().fetch() for true streaming
@@ -1187,7 +1185,8 @@ impl Connection for PostgresConnection {
         // Process the first row to get column information
         let mut first_row_data = None;
         while let Some(row_result) = stream.next().await {
-            let row = row_result.map_err(|e| anyhow::anyhow!("Failed to fetch row: {}", e))?;
+            let row = row_result
+                .map_err(|e| anyhow::anyhow!(t!("postgres.fetch_row_failed", error = e)))?;
 
             if first_row_data.is_none() {
                 // Extract column names and types from the first row
@@ -1725,14 +1724,12 @@ impl PostgresConnection {
         let pool = self
             .get_or_create_pool(database_name)
             .await
-            .with_context(|| {
-                format!("Failed to get connection pool for database '{database_name}'")
-            })?;
+            .with_context(|| t!("postgres.pool_failed", database = database_name))?;
         self.execute_query_with_params(&pool, query, parameters)
             .await
             .map_err(|e| {
                 blanco_core::tag_sqlx_error(e)
-                    .context(format!("{} query execution failed", self.backend_name()))
+                    .context(t!("postgres.query_failed", backend = self.backend_name()))
             })
     }
 
@@ -1774,11 +1771,12 @@ impl PostgresConnection {
                 Some(&[schema_name.to_string(), table_name.to_string()]),
             )
             .await?;
-        let row = result
-            .rows
-            .into_iter()
-            .next()
-            .ok_or_else(|| anyhow::anyhow!("Table '{schema_name}.{table_name}' not found"))?;
+        let row = result.rows.into_iter().next().ok_or_else(|| {
+            anyhow::anyhow!(t!(
+                "postgres.table_not_found",
+                table = format!("{schema_name}.{table_name}")
+            ))
+        })?;
         let get = |index: usize| {
             row.get(index)
                 .cloned()

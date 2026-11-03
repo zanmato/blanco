@@ -1,0 +1,295 @@
+_version: 2
+backup:
+  format:
+    plain:
+      en: "Plain SQL"
+      sv: "Ren SQL"
+    custom:
+      en: "Custom archive"
+      sv: "Anpassat arkiv"
+    directory:
+      en: "Directory archive"
+      sv: "Mapparkiv"
+  compression:
+    none:
+      en: "None"
+      sv: "Ingen"
+    fast:
+      en: "Fast"
+      sv: "Snabb"
+    default:
+      en: "Default"
+      sv: "Standard"
+    smallest:
+      en: "Smallest"
+      sv: "Minsta"
+  dump:
+    sql_script:
+      en: "SQL script"
+      sv: "SQL-skript"
+    custom_archive:
+      en: "pg_dump custom archive"
+      sv: "Anpassat arkiv från pg_dump"
+    directory_archive:
+      en: "pg_dump directory archive"
+      sv: "Mapparkiv från pg_dump"
+    gzip_compressed:
+      en: "%{format}, gzip compressed"
+      sv: "%{format}, gzip-komprimerat"
+  errors:
+    no_tables_chosen:
+      en: "Choose at least one table to back up"
+      sv: "Välj minst en tabell att säkerhetskopiera"
+    plain_only:
+      en: "%{program} only writes plain SQL"
+      sv: "%{program} skriver bara ren SQL"
+    cannot_restore:
+      en: "%{program} cannot restore"
+      sv: "%{program} kan inte återställa"
+    pg_archive_needs_postgres:
+      en: "This is a pg_dump archive. Only a PostgreSQL connection can restore it."
+      sv: "Det här är ett pg_dump-arkiv. Bara en PostgreSQL-anslutning kan återställa det."
+    cannot_read:
+      en: "Cannot read %{path}"
+      sv: "Kan inte läsa %{path}"
+    cannot_open:
+      en: "Cannot open %{path}"
+      sv: "Kan inte öppna %{path}"
+    not_directory_archive:
+      en: "%{path} is a folder but not a pg_dump directory archive"
+      sv: "%{path} är en mapp men inte ett mapparkiv från pg_dump"
+    not_gzip:
+      en: "%{path} is not a readable gzip file"
+      sv: "%{path} är ingen läsbar gzip-fil"
+    verify_full_through_tunnel:
+      en: "verify-full cannot check the server's name through an SSH tunnel with %{program}. Use verify-ca for this connection to back up or restore it."
+      sv: "verify-full kan inte kontrollera serverns namn genom en SSH-tunnel med %{program}. Använd verify-ca för den här anslutningen för att säkerhetskopiera eller återställa den."
+    unclosed_quote:
+      en: "The extra arguments have an unclosed quote"
+      sv: "De extra argumenten har ett citattecken som inte avslutas"
+    empty_file_name:
+      en: "The file name is empty"
+      sv: "Filnamnet är tomt"
+    no_server_version:
+      en: "The server did not report its version"
+      sv: "Servern rapporterade inte sin version"
+    unexpected_server_version:
+      en: "The server reported an unexpected version: %{version}"
+      sv: "Servern rapporterade en oväntad version: %{version}"
+    could_not_connect:
+      en: "Could not connect: %{error}"
+      sv: "Kunde inte ansluta: %{error}"
+    choose_folder:
+      en: "Choose a folder for the backup"
+      sv: "Välj en mapp för säkerhetskopian"
+    not_a_folder:
+      en: "%{path} is not a folder"
+      sv: "%{path} är ingen mapp"
+  tools:
+    pg_dump_too_old:
+      en: "%{program} %{tool_release} is older than the PostgreSQL %{server_release} server. pg_dump refuses to dump a newer server; install the PostgreSQL %{server_release} client tools or set the path to a newer pg_dump in Settings."
+      sv: "%{program} %{tool_release} är äldre än servern, PostgreSQL %{server_release}. pg_dump vägrar dumpa en nyare server. Installera klientverktygen för PostgreSQL %{server_release} eller ange sökvägen till en nyare pg_dump i Inställningar."
+    restore_tool_older:
+      en: "%{program} %{tool_release} is older than the PostgreSQL %{server_release} server. It may not understand everything in a dump made by a newer pg_dump."
+      sv: "%{program} %{tool_release} är äldre än servern, PostgreSQL %{server_release}. Det kan hända att den inte förstår allt i en dump från en nyare pg_dump."
+    product_mismatch:
+      en: "%{program} comes from %{tool_product} %{tool_release} but the server is %{server_product} %{server_release}. Most dumps work across the two, but server specific features may be left out."
+      sv: "%{program} kommer från %{tool_product} %{tool_release} men servern är %{server_product} %{server_release}. De flesta dumpar fungerar mellan de två, men serverspecifika funktioner kan utelämnas."
+    mysql_tool_older:
+      en: "%{program} %{tool_release} is older than the %{server_product} %{server_release} server. Install newer client tools if the dump misses newer features."
+      sv: "%{program} %{tool_release} är äldre än servern, %{server_product} %{server_release}. Installera nyare klientverktyg om dumpen saknar nyare funktioner."
+    configured_path_broken:
+      en: "The %{program} path in Settings, %{path}, does not work"
+      sv: "Sökvägen till %{program} i Inställningar, %{path}, fungerar inte"
+    not_found_postgres:
+      en: "%{program} was not found. Install the PostgreSQL client tools or set the path to %{program} in Settings."
+      sv: "%{program} hittades inte. Installera klientverktygen för PostgreSQL eller ange sökvägen till %{program} i Inställningar."
+    not_found_mysql:
+      en: "%{program} was not found. Install the MySQL or MariaDB client tools or set the path to %{program} in Settings."
+      sv: "%{program} hittades inte. Installera klientverktygen för MySQL eller MariaDB eller ange sökvägen till %{program} i Inställningar."
+    version_no_answer:
+      en: "%{path} --version did not answer"
+      sv: "%{path} --version svarade inte"
+    unexpected_version:
+      en: "%{path} printed an unexpected version: %{output}"
+      sv: "%{path} skrev ut en oväntad version: %{output}"
+  run:
+    lines_done:
+      en: "%{done} of %{total} done"
+      sv: "%{done} av %{total} klara"
+    bytes_read:
+      en: "%{read} of %{total} read"
+      sv: "%{read} av %{total} lästa"
+    running_for:
+      en: "Running for %{clock}"
+      sv: "Har kört i %{clock}"
+    stopping:
+      en: "Stopping…"
+      sv: "Stoppar…"
+    finished_in:
+      en: "%{message} in %{clock}"
+      sv: "%{message} på %{clock}"
+    stopped:
+      en: "Stopped"
+      sv: "Stoppad"
+    failed_after:
+      en: "Failed after %{clock}"
+      sv: "Misslyckades efter %{clock}"
+    looking_for:
+      en: "Looking for %{program}…"
+      sv: "Letar efter %{program}…"
+    tool_found:
+      en: "%{program} %{version} at %{path}"
+      sv: "%{program} %{version} i %{path}"
+  dialog:
+    backup_title:
+      en: "Back Up \"%{database}\""
+      sv: "Säkerhetskopiera \"%{database}\""
+    restore_title:
+      en: "Restore \"%{database}\""
+      sv: "Återställ \"%{database}\""
+    close:
+      en: "Close"
+      sv: "Stäng"
+    stop:
+      en: "Stop"
+      sv: "Stoppa"
+    done:
+      en: "Done"
+      sv: "Klar"
+    cancel:
+      en: "Cancel"
+      sv: "Avbryt"
+    back:
+      en: "Back"
+      sv: "Tillbaka"
+    back_up:
+      en: "Back Up"
+      sv: "Säkerhetskopiera"
+    restore:
+      en: "Restore"
+      sv: "Återställ"
+    restore_confirm:
+      en: "Restore…"
+      sv: "Återställ…"
+    restore_to_prod:
+      en: "Restore to PROD"
+      sv: "Återställ till PROD"
+    format:
+      en: "Format"
+      sv: "Format"
+    compression:
+      en: "Compression"
+      sv: "Komprimering"
+    folder:
+      en: "Folder"
+      sv: "Mapp"
+    browse:
+      en: "Browse…"
+      sv: "Bläddra…"
+    choose:
+      en: "Choose"
+      sv: "Välj"
+    file_name:
+      en: "File name"
+      sv: "Filnamn"
+    saved_as:
+      en: "Saved as %{name}. {database}, {connection}, {date} and {time} are filled in."
+      sv: "Sparas som %{name}. {database}, {connection}, {date} och {time} fylls i."
+    tables:
+      en: "Tables"
+      sv: "Tabeller"
+    extra_arguments:
+      en: "Extra arguments"
+      sv: "Extra argument"
+    passed_as_is:
+      en: "Passed to the tool as is"
+      sv: "Skickas oförändrat till verktyget"
+    loading_tables:
+      en: "Loading tables…"
+      sv: "Läser in tabeller…"
+    tables_not_listed:
+      en: "Tables could not be listed, the whole database is backed up: %{error}"
+      sv: "Tabellerna kunde inte listas, hela databasen säkerhetskopieras: %{error}"
+    no_tables:
+      en: "The database has no tables"
+      sv: "Databasen har inga tabeller"
+    tables_selected:
+      en: "%{selected} of %{total} tables"
+      sv: "%{selected} av %{total} tabeller"
+    structure_only:
+      en: "Structure only"
+      sv: "Bara struktur"
+    backed_up:
+      en: "Backed up %{database} to %{path}"
+      sv: "Säkerhetskopierade %{database} till %{path}"
+    backup_stopped:
+      en: "Backup of %{database} stopped"
+      sv: "Säkerhetskopieringen av %{database} stoppades"
+    backup_failed:
+      en: "Backup of %{database} failed"
+      sv: "Säkerhetskopieringen av %{database} misslyckades"
+    restored:
+      en: "Restored %{file} into %{database}"
+      sv: "Återställde %{file} till %{database}"
+    restore_stopped:
+      en: "Restore into %{database} stopped, the database may be partly restored"
+      sv: "Återställningen till %{database} stoppades, databasen kan vara delvis återställd"
+    restore_failed:
+      en: "Restore into %{database} failed"
+      sv: "Återställningen till %{database} misslyckades"
+    dump:
+      en: "Dump"
+      sv: "Dump"
+    dump_placeholder:
+      en: "A .sql, .sql.gz or .dump file"
+      sv: "En .sql-, .sql.gz- eller .dump-fil"
+    restore_intro:
+      en: "The dump runs against database \"%{database}\" on \"%{connection}\". Objects it creates replace or collide with the ones already there."
+      sv: "Dumpen körs mot databasen \"%{database}\" på \"%{connection}\". Objekt som den skapar ersätter eller krockar med dem som redan finns."
+    confirm_title:
+      en: "Restore into PROD?"
+      sv: "Återställa till PROD?"
+    confirm_body:
+      en: "\"%{connection}\" is tagged as a production connection. The statements in %{file} will run against database \"%{database}\" and can overwrite or drop its objects."
+      sv: "\"%{connection}\" är märkt som en produktionsanslutning. Satserna i %{file} körs mot databasen \"%{database}\" och kan skriva över eller ta bort dess objekt."
+    confirm_note:
+      en: "A backup of the database first is the only way back."
+      sv: "Det enda sättet att ångra är att säkerhetskopiera databasen först."
+  runner:
+    could_not_write_backup:
+      en: "Could not write the backup"
+      sv: "Det gick inte att skriva säkerhetskopian"
+    could_not_start:
+      en: "Could not start %{program}"
+      sv: "Det gick inte att starta %{program}"
+    no_output_pipe:
+      en: "%{program} has no output pipe"
+      sv: "%{program} saknar utdatarör"
+    no_error_pipe:
+      en: "%{program} has no error pipe"
+      sv: "%{program} saknar felrör"
+    did_not_exit:
+      en: "%{program} did not exit"
+      sv: "%{program} avslutades inte"
+    exited_with_code:
+      en: "%{program} exited with code %{code}"
+      sv: "%{program} avslutades med kod %{code}"
+    exited_with_code_output:
+      en: "%{program} exited with code %{code}: %{output}"
+      sv: "%{program} avslutades med kod %{code}: %{output}"
+    stopped:
+      en: "%{program} was stopped"
+      sv: "%{program} stoppades"
+    stopped_output:
+      en: "%{program} was stopped: %{output}"
+      sv: "%{program} stoppades: %{output}"
+    could_not_read_dump:
+      en: "Could not read the dump"
+      sv: "Det gick inte att läsa dumpen"
+    failed:
+      en: "%{program} failed: %{output}"
+      sv: "%{program} misslyckades: %{output}"
+    cannot_create:
+      en: "Cannot create %{path}"
+      sv: "Kan inte skapa %{path}"

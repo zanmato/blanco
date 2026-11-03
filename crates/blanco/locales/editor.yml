@@ -1,0 +1,522 @@
+_version: 2
+# The editor panel, query and script tabs, and completion. Terms follow the
+# glossary at the top of app.yml.
+editor:
+  cancel:
+    en: "Cancel"
+    sv: "Avbryt"
+  settings_tab_title:
+    en: "Settings"
+    sv: "Inställningar"
+  tab_group_other:
+    en: "Other"
+    sv: "Övrigt"
+  tab_copy_title:
+    en: "%{title} copy"
+    sv: "%{title} kopia"
+  cursor_position:
+    en: "Ln %{line}, Col %{column}"
+    sv: "Rad %{line}, kol %{column}"
+  format:
+    en: "Format"
+    sv: "Formatera"
+  format_tooltip:
+    en: "Format (%{keystroke})"
+    sv: "Formatera (%{keystroke})"
+  format_failed:
+    en: "Format failed: %{error}"
+    sv: "Formateringen misslyckades: %{error}"
+  format_no_query_tab:
+    en: "No query tab active"
+    sv: "Ingen frågeflik är aktiv"
+  query_formatted:
+    en: "Query formatted"
+    sv: "Frågan har formaterats"
+  no_query_at_cursor:
+    en: "No query found at cursor"
+    sv: "Ingen fråga vid markören"
+  stop:
+    en: "Stop"
+    sv: "Stoppa"
+  stop_query_tooltip:
+    en: "Abort the running query"
+    sv: "Avbryt den pågående frågan"
+  stop_script_tooltip:
+    en: "Stop the running script"
+    sv: "Stoppa det pågående skriptet"
+  explain:
+    en: "Explain"
+    sv: "Förklara"
+  explain_analyze:
+    en: "Explain Analyze"
+    sv: "Förklara och analysera"
+  explain_tooltip:
+    en: "Show the estimated plan of the statement at the cursor"
+    sv: "Visa den uppskattade planen för satsen vid markören"
+  explain_analyze_unsupported:
+    en: "%{database} has no Explain Analyze"
+    sv: "%{database} saknar Förklara och analysera"
+  explain_no_query:
+    en: "No query to explain"
+    sv: "Ingen fråga att förklara"
+  explain_failed:
+    en: "Could not explain: %{error}"
+    sv: "Kunde inte förklara: %{error}"
+  explain_analyze_confirm:
+    title:
+      en: "Run the statement to analyze it?"
+      sv: "Köra satsen för att analysera den?"
+    message:
+      en: "Explain Analyze executes the statement to measure it, so its changes are made."
+      sv: "Förklara och analysera kör satsen för att mäta den, så dess ändringar görs."
+    message_tagged:
+      en: "Explain Analyze executes the statement to measure it, so its changes are made. \"%{connection}\" is tagged %{environment}."
+      sv: "Förklara och analysera kör satsen för att mäta den, så dess ändringar görs. \"%{connection}\" är märkt %{environment}."
+    confirm:
+      en: "Run and Analyze"
+      sv: "Kör och analysera"
+  run_current:
+    en: "Run Current"
+    sv: "Kör aktuell"
+  run_current_tooltip:
+    en: "Run Current (%{keystroke})"
+    sv: "Kör aktuell (%{keystroke})"
+  run_script:
+    en: "Run Script"
+    sv: "Kör skript"
+  run_script_tooltip:
+    en: "Run Script (%{keystroke})"
+    sv: "Kör skript (%{keystroke})"
+  toggle_sql_log:
+    en: "Toggle SQL Log"
+    sv: "Visa eller dölj SQL-logg"
+  toggle_terminal:
+    en: "Toggle Terminal"
+    sv: "Visa eller dölj terminal"
+  toggle_console_log:
+    en: "Toggle console log"
+    sv: "Visa eller dölj konsollogg"
+  terminal_start_failed:
+    en: "Could not start a terminal: %{error}"
+    sv: "Kunde inte starta en terminal: %{error}"
+  large_result:
+    en: "Large result loaded: %{rows} rows, %{megabytes} MB of cell data"
+    sv: "Stort resultat inläst: %{rows} rader, %{megabytes} MB celldata"
+  run:
+    no_command:
+      en: "No command to run"
+      sv: "Inget kommando att köra"
+    no_query:
+      en: "No query to execute"
+      sv: "Ingen fråga att köra"
+    timeout:
+      en: "Query exceeded the configured %{seconds}s timeout"
+      sv: "Frågan överskred den inställda tidsgränsen på %{seconds} s"
+  activity:
+    executing_query:
+      en: "%{connection}: executing query"
+      sv: "%{connection}: kör fråga"
+    query_ok_one:
+      en: "Query OK · 1 rows · %{duration}"
+      sv: "Fråga OK · 1 rad · %{duration}"
+    query_ok_other:
+      en: "Query OK · %{rows} rows · %{duration}"
+      sv: "Fråga OK · %{rows} rader · %{duration}"
+    query_failed:
+      en: "query execution failed"
+      sv: "frågan misslyckades"
+    running_script:
+      en: "%{connection}: running script"
+      sv: "%{connection}: kör skript"
+    script_ok:
+      en: "Script OK · %{duration}"
+      sv: "Skript OK · %{duration}"
+    script_cancelled:
+      en: "script cancelled"
+      sv: "skriptet avbröts"
+    script_timed_out:
+      en: "script timed out"
+      sv: "skriptet överskred tidsgränsen"
+    script_failed:
+      en: "script failed"
+      sv: "skriptet misslyckades"
+    running_file:
+      en: "%{connection}: running %{file}"
+      sv: "%{connection}: kör %{file}"
+    linting:
+      en: "linting"
+      sv: "granskar"
+  log:
+    truncated_query:
+      en: "%{query}... (truncated)"
+      sv: "%{query}... (avkortad)"
+    query_cancelled:
+      en: "query cancelled by user"
+      sv: "frågan avbröts av användaren"
+    query_finished_one:
+      en: "%{timestamp}, 1 rows in %{duration}"
+      sv: "%{timestamp}, 1 rad på %{duration}"
+    query_finished_other:
+      en: "%{timestamp}, %{rows} rows in %{duration}"
+      sv: "%{timestamp}, %{rows} rader på %{duration}"
+    query_failed:
+      en: "query execution failed: %{error}"
+      sv: "frågan misslyckades: %{error}"
+  script:
+    no_script:
+      en: "No script to run"
+      sv: "Inget skript att köra"
+    already_running:
+      en: "A script is already running"
+      sv: "Ett skript körs redan"
+    running:
+      en: "running script…"
+      sv: "kör skript…"
+    finished:
+      en: "%{timestamp}, script finished in %{duration}"
+      sv: "%{timestamp}, skriptet klart på %{duration}"
+    failed:
+      en: "script failed: %{error}"
+      sv: "skriptet misslyckades: %{error}"
+    missing_token:
+      en: "missing %{token}"
+      sv: "%{token} saknas"
+    syntax_error:
+      en: "syntax error"
+      sv: "syntaxfel"
+  prod_write:
+    commit_title:
+      en: "Commit edits to %{environment}?"
+      sv: "Spara ändringar i %{environment}?"
+    commit_message:
+      en: "\"%{connection}\" is tagged %{environment}. The pending grid edits will be written to it."
+      sv: "\"%{connection}\" är märkt %{environment}. De väntande ändringarna i rutnätet skrivs dit."
+    commit_confirm:
+      en: "Commit to %{environment}"
+      sv: "Spara i %{environment}"
+    script_title:
+      en: "Run script on %{environment}?"
+      sv: "Köra skript i %{environment}?"
+    script_message:
+      en: "\"%{connection}\" is tagged %{environment}. Scripts can modify data through `db.execute` and `db.transaction`."
+      sv: "\"%{connection}\" är märkt %{environment}. Skript kan ändra data via `db.execute` och `db.transaction`."
+    statement_title:
+      en: "Run write statement on %{environment}?"
+      sv: "Köra skrivande sats i %{environment}?"
+    statement_message:
+      en: "\"%{connection}\" is tagged %{environment} and this statement modifies data."
+      sv: "\"%{connection}\" är märkt %{environment} och den här satsen ändrar data."
+    file_title:
+      en: "Run SQL file on %{environment}?"
+      sv: "Köra SQL-fil i %{environment}?"
+    file_message:
+      en: "Every statement in %{file} runs on \"%{connection}\", which is tagged %{environment}."
+      sv: "Varje sats i %{file} körs på \"%{connection}\", som är märkt %{environment}."
+    run_confirm:
+      en: "Run on %{environment}"
+      sv: "Kör i %{environment}"
+    dont_ask_again:
+      en: "Don't ask again for this tab"
+      sv: "Fråga inte igen för den här fliken"
+  grid:
+    add_row:
+      en: "Add"
+      sv: "Lägg till"
+    duplicate_row:
+      en: "Duplicate"
+      sv: "Duplicera"
+    delete_row:
+      en: "Delete"
+      sv: "Ta bort"
+    discard_edits:
+      en: "Discard edits"
+      sv: "Ångra ändringar"
+    discard_edits_tooltip:
+      en: "Discard pending cell edits"
+      sv: "Ångra väntande celländringar"
+    apply_edits:
+      en: "Apply edits"
+      sv: "Spara ändringar"
+    apply_edits_tooltip:
+      en: "Apply pending cell edits to the database"
+      sv: "Skriv väntande celländringar till databasen"
+    no_statements_to_apply:
+      en: "no statements to apply"
+      sv: "inga satser att köra"
+    preview_sql:
+      en: "Preview SQL"
+      sv: "Förhandsgranska SQL"
+    confirm:
+      en: "Confirm"
+      sv: "Bekräfta"
+    no_changes_to_commit:
+      en: "No changes to commit"
+      sv: "Inga ändringar att spara"
+    committing_changes_one:
+      en: "Committing 1 changes"
+      sv: "Sparar 1 ändring"
+    committing_changes_other:
+      en: "Committing %{count} changes"
+      sv: "Sparar %{count} ändringar"
+    changes_rolled_back:
+      en: "Changes rolled back"
+      sv: "Ändringarna har ångrats"
+  parameters:
+    title:
+      en: "Query Parameters"
+      sv: "Frågeparametrar"
+    clear:
+      en: "Clear"
+      sv: "Rensa"
+    run:
+      en: "Run"
+      sv: "Kör"
+    empty_string:
+      en: "Empty string"
+      sv: "Tom sträng"
+  rename_tab:
+    title:
+      en: "Rename Tab"
+      sv: "Byt namn på flik"
+    name:
+      en: "Name"
+      sv: "Namn"
+    rename:
+      en: "Rename"
+      sv: "Byt namn"
+  tab_menu:
+    duplicate:
+      en: "Duplicate"
+      sv: "Duplicera"
+    pin:
+      en: "Pin"
+      sv: "Fäst"
+    unpin:
+      en: "Unpin"
+      sv: "Lossa"
+    move_to_new_window:
+      en: "Move to New Window"
+      sv: "Flytta till nytt fönster"
+    close:
+      en: "Close"
+      sv: "Stäng"
+    close_others:
+      en: "Close Others"
+      sv: "Stäng andra"
+    close_to_the_left:
+      en: "Close to the Left"
+      sv: "Stäng till vänster"
+    close_to_the_right:
+      en: "Close to the Right"
+      sv: "Stäng till höger"
+    close_all:
+      en: "Close All"
+      sv: "Stäng alla"
+  unsaved:
+    save_changes_to:
+      en: "Save changes to %{name}?"
+      sv: "Spara ändringarna i %{name}?"
+    save_changes_to_tabs:
+      en: "Save changes to %{count} tabs?"
+      sv: "Spara ändringarna i %{count} flikar?"
+    tab_message:
+      en: "Your changes are lost if you close the tab without saving."
+      sv: "Dina ändringar går förlorade om du stänger fliken utan att spara."
+    tabs_message:
+      en: "Your changes are lost if you close without saving."
+      sv: "Dina ändringar går förlorade om du stänger utan att spara."
+    structure_stays_open:
+      en: "Tables with structure changes not yet applied stay open when you save."
+      sv: "Tabeller med strukturändringar som inte har körts än förblir öppna när du sparar."
+    save:
+      en: "Save"
+      sv: "Spara"
+    save_all:
+      en: "Save All"
+      sv: "Spara alla"
+    dont_save:
+      en: "Don't Save"
+      sv: "Spara inte"
+    discard_structure_title:
+      en: "Discard changes to %{table}?"
+      sv: "Släng ändringarna i %{table}?"
+    discard_structure_message:
+      en: "The structure changes you have not applied are lost if you close the tab."
+      sv: "Strukturändringarna som du inte har kört går förlorade om du stänger fliken."
+    discard_and_close:
+      en: "Discard and Close"
+      sv: "Släng och stäng"
+  files:
+    prompt_open:
+      en: "Open"
+      sv: "Öppna"
+    not_utf8:
+      en: "the file is not UTF-8 text"
+      sv: "filen är inte UTF-8-text"
+    drop_needs_connection:
+      en: "Open a query tab on a connection first: a dropped SQL file opens on the active tab's connection"
+      sv: "Öppna först en frågeflik på en anslutning. En släppt SQL-fil öppnas på den aktiva flikens anslutning"
+    too_large:
+      en: "%{file} is %{megabytes} MB, too large to edit. Use Run SQL File to run it without opening it."
+      sv: "%{file} är %{megabytes} MB, för stor för att redigera. Använd Kör SQL-fil för att köra den utan att öppna den."
+    open_failed:
+      en: "Could not open %{path}: %{error}"
+      sv: "Kunde inte öppna %{path}: %{error}"
+    open_in_other_tab:
+      en: "%{file} is open in another tab. Close that tab before saving over the file."
+      sv: "%{file} är öppen i en annan flik. Stäng den fliken innan du sparar över filen."
+    save_failed:
+      en: "Could not save %{path}: %{error}"
+      sv: "Kunde inte spara %{path}: %{error}"
+    default_file_name:
+      en: "query"
+      sv: "fråga"
+  file_run:
+    needs_sql_connection:
+      en: "Run SQL File needs a SQL connection"
+      sv: "Kör SQL-fil kräver en SQL-anslutning"
+    already_running:
+      en: "A file is already running"
+      sv: "En fil körs redan"
+    prompt_run:
+      en: "Run"
+      sv: "Kör"
+    read_failed:
+      en: "Could not read the file: %{error}"
+      sv: "Kunde inte läsa filen: %{error}"
+    not_utf8:
+      en: "The file is not UTF-8 text"
+      sv: "Filen är inte UTF-8-text"
+    open_failed:
+      en: "Could not open %{path}: %{error}"
+      sv: "Kunde inte öppna %{path}: %{error}"
+    started:
+      en: "Running %{file} (%{size}) statement by statement"
+      sv: "Kör %{file} (%{size}) sats för sats"
+    status_running:
+      en: "Running %{file} · %{statements} · %{percent}%"
+      sv: "Kör %{file} · %{statements} · %{percent} %"
+    status_stopping:
+      en: "Stopping %{file} · %{statements} · %{percent}%"
+      sv: "Stoppar %{file} · %{statements} · %{percent} %"
+    stop_tooltip:
+      en: "Stop after the statement in flight"
+      sv: "Stoppa efter den sats som körs"
+    statements_one:
+      en: "1 statement"
+      sv: "1 sats"
+    statements_other:
+      en: "%{count} statements"
+      sv: "%{count} satser"
+    bytes:
+      en: "%{count} bytes"
+      sv: "%{count} byte"
+    completed:
+      en: "✓ Ran %{statements} from %{file} in %{seconds}s"
+      sv: "✓ Körde %{statements} från %{file} på %{seconds} s"
+    stopped:
+      en: "Stopped %{file} after %{statements} in %{seconds}s"
+      sv: "Stoppade %{file} efter %{statements} på %{seconds} s"
+    statement_failed:
+      en: "✗ %{file}: statement %{number} failed after %{statements} ran: %{error}\n%{statement}"
+      sv: "✗ %{file}: sats %{number} misslyckades efter att %{statements} hade körts: %{error}\n%{statement}"
+  snippet:
+    trigger_placeholder:
+      en: "Trigger word"
+      sv: "Utlösarord"
+    trigger_single_word:
+      en: "A trigger is a single word, without spaces."
+      sv: "Ett utlösarord är ett enda ord utan mellanslag."
+    kind_query:
+      en: "Query"
+      sv: "Fråga"
+    kind_script:
+      en: "Script"
+      sv: "Skript"
+    new_snippet:
+      en: "New Snippet"
+      sv: "Ny kodsnutt"
+    new_script_snippet:
+      en: "New Script Snippet"
+      sv: "Ny skriptkodsnutt"
+    save:
+      en: "Save Snippet"
+      sv: "Spara kodsnutt"
+completion:
+  column_from:
+    en: "Column from %{table}"
+    sv: "Kolumn från %{table}"
+  query_columns:
+    en: "query columns"
+    sv: "frågans kolumner"
+  cte:
+    en: "CTE"
+    sv: "CTE"
+  schema:
+    en: "Schema"
+    sv: "Schema"
+  join_condition:
+    en: "Join condition"
+    sv: "Join-villkor"
+  enum_label:
+    en: "enum label"
+    sv: "enum-värde"
+  sql_keyword:
+    en: "SQL Keyword"
+    sv: "SQL-nyckelord"
+  more_overloads_one:
+    en: "(+1 overloads)"
+    sv: "(+1 variant)"
+  more_overloads_other:
+    en: "(+%{count} overloads)"
+    sv: "(+%{count} varianter)"
+  user_defined_function:
+    en: "*User-defined function in `%{schema}`*"
+    sv: "*Användardefinierad funktion i `%{schema}`*"
+  expand_star:
+    en: "Expand * into columns"
+    sv: "Ersätt * med kolumner"
+  redis_command:
+    en: "Redis command"
+    sv: "Redis-kommando"
+  redis_subcommand:
+    en: "%{command} subcommand"
+    sv: "Underkommando till %{command}"
+  entity:
+    table:
+      en: "Table"
+      sv: "Tabell"
+    view:
+      en: "View"
+      sv: "Vy"
+    materialized_view:
+      en: "Materialized View"
+      sv: "Materialiserad vy"
+  script:
+    query:
+      en: "Run a statement and return its rows.\n\nReturns `{ columns, rows, rowsAffected, executionTimeMs }`, where each row is an object keyed by column name whose values are strings or `null`.\n\nBlocks until the database answers."
+      sv: "Kör en sats och returnerar dess rader.\n\nReturnerar `{ columns, rows, rowsAffected, executionTimeMs }`, där varje rad är ett objekt med kolumnnamn som nycklar och strängar eller `null` som värden.\n\nVäntar tills databasen svarar."
+    execute:
+      en: "Run a statement and return the number of affected rows.\n\nUse this for INSERT/UPDATE/DELETE/DDL where the rows themselves don't matter."
+      sv: "Kör en sats och returnerar antalet påverkade rader.\n\nAnvänd den för INSERT/UPDATE/DELETE/DDL när raderna i sig inte spelar någon roll."
+    transaction:
+      en: "Run an array of statements as one atomic unit.\n\nBackends with transactional DML roll the whole batch back on failure; those without (Redis, ClickHouse) report how many statements were applied before the error. Statements that cannot run inside a transaction (e.g. Postgres `DROP DATABASE`) belong in separate `db.execute` calls."
+      sv: "Kör en array av satser som en atomär enhet.\n\nDatabaser med transaktionell DML rullar tillbaka hela omgången vid fel. De utan (Redis, ClickHouse) rapporterar hur många satser som kördes före felet. Satser som inte kan köras i en transaktion (t.ex. Postgres `DROP DATABASE`) hör hemma i egna `db.execute`-anrop."
+    display:
+      en: "Render a value in the results grid.\n\nA result from `db.query` keeps its original column types. Anything else is converted: an array of objects becomes rows and columns, an object becomes a single row, a scalar becomes a single cell."
+      sv: "Visar ett värde i resultatrutnätet.\n\nEtt resultat från `db.query` behåller sina ursprungliga kolumntyper. Allt annat konverteras: en array av objekt blir rader och kolumner, ett objekt blir en enda rad och ett skalärt värde blir en enda cell."
+    rows:
+      en: "The returned rows, each an object keyed by column name. SQL NULL arrives as `null`; every other value is a string."
+      sv: "De returnerade raderna, var och en ett objekt med kolumnnamn som nycklar. SQL NULL kommer som `null`, alla andra värden är strängar."
+    columns:
+      en: "Column names in order. Unlike the row objects this preserves duplicate column names."
+      sv: "Kolumnnamnen i ordning. Till skillnad från radobjekten behålls dubbletter av kolumnnamn."
+    rows_affected:
+      en: "Rows affected by the statement, as reported by the driver."
+      sv: "Rader som satsen påverkade, enligt drivrutinen."
+    execution_time_ms:
+      en: "Server-side execution time in milliseconds, when the driver reports one."
+      sv: "Körtiden på servern i millisekunder, när drivrutinen rapporterar en."
+    no_bind_parameters:
+      en: "This connection has no bind parameters: pass the command fully formed and omit `params`."
+      sv: "Den här anslutningen saknar bindningsparametrar. Skicka kommandot färdigt och utelämna `params`."

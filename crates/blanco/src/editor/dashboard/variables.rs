@@ -5,8 +5,8 @@ use std::time::Duration;
 
 use database::DatabaseService;
 use gpui::{
-    App, AppContext as _, Context, Entity, IntoElement, ParentElement, Render, Styled, Window, div,
-    prelude::FluentBuilder as _, px,
+    App, AppContext as _, Context, Entity, IntoElement, ParentElement, Render, SharedString,
+    Styled, Window, div, prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
     ActiveTheme as _, IndexPath, Sizable as _, WindowExt as _,
@@ -66,8 +66,10 @@ impl DashboardTab {
 
         let service = DatabaseService::global(cx).clone();
         let timeout = query_timeout(cx);
-        let activity = crate::status_bar::ActivityReporter::global(cx)
-            .begin(format!("{}: loading variable choices", self.title));
+        let activity = crate::status_bar::ActivityReporter::global(cx).begin(t!(
+            "dashboard.variables.loading_choices",
+            dashboard = self.title
+        ));
         // A variable query may filter on the time range, though not on
         // another variable.
         let parameters = DashboardParameters::new(self.time_range, Vec::new());
@@ -235,7 +237,7 @@ impl DashboardTab {
                     .filter_map(|panel| panel.read(cx).context())
                     .find(|context| context.connection_id == *connection_id)
                     .map(|context| context.connection_name)
-                    .unwrap_or_else(|| "its connection".to_string());
+                    .unwrap_or_else(|| t!("dashboard.variables.its_connection").into_owned());
                 Some((*connection_id, database_name.clone(), name))
             }
             _ => self.query_variable_connection(cx),
@@ -259,20 +261,24 @@ impl DashboardTab {
                 .and_then(|variable| variable.current.clone());
             dialog
                 .title(if editing.is_some() {
-                    "Edit Variable"
+                    t!("dashboard.variables.edit_title")
                 } else {
-                    "Add Variable"
+                    t!("dashboard.variables.add_title")
                 })
                 .w(px(460.))
                 .child(form.clone())
                 .footer(
                     DialogFooter::new()
                         .child(
-                            DialogClose::new()
-                                .child(Button::new("cancel").label("Cancel").outline()),
+                            DialogClose::new().child(
+                                Button::new("cancel")
+                                    .label(t!("dashboard.cancel"))
+                                    .outline(),
+                            ),
                         )
                         .child(
-                            DialogAction::new().child(Button::new("ok").primary().label("Save")),
+                            DialogAction::new()
+                                .child(Button::new("ok").primary().label(t!("dashboard.save"))),
                         ),
                 )
                 .on_ok(move |_, window, cx| {
@@ -347,23 +353,27 @@ impl DashboardTab {
                             .dropdown_menu(move |menu, _, _| {
                                 let edit = (tab.clone(), name.clone());
                                 let remove = (tab.clone(), name.clone());
-                                menu.item(PopupMenuItem::new("Edit…").on_click(
-                                    move |_, window, cx| {
-                                        let (tab, name) = edit.clone();
-                                        tab.update(cx, |tab, cx| {
-                                            tab.open_variable_dialog(Some(name), window, cx)
-                                        })
-                                        .log_err();
-                                    },
-                                ))
+                                menu.item(
+                                    PopupMenuItem::new(t!("dashboard.variables.edit")).on_click(
+                                        move |_, window, cx| {
+                                            let (tab, name) = edit.clone();
+                                            tab.update(cx, |tab, cx| {
+                                                tab.open_variable_dialog(Some(name), window, cx)
+                                            })
+                                            .log_err();
+                                        },
+                                    ),
+                                )
                                 .item(
-                                    PopupMenuItem::new("Remove").on_click(move |_, window, cx| {
-                                        let (tab, name) = remove.clone();
-                                        tab.update(cx, |tab, cx| {
-                                            tab.remove_variable(&name, window, cx)
-                                        })
-                                        .log_err();
-                                    }),
+                                    PopupMenuItem::new(t!("dashboard.variables.remove")).on_click(
+                                        move |_, window, cx| {
+                                            let (tab, name) = remove.clone();
+                                            tab.update(cx, |tab, cx| {
+                                                tab.remove_variable(&name, window, cx)
+                                            })
+                                            .log_err();
+                                        },
+                                    ),
                                 )
                             }),
                     )
@@ -422,7 +432,7 @@ async fn group_options(
     let Some(config) = service.get_connection_config(group.connection_id).await else {
         return fail_all(
             group.queries,
-            "The variable's connection was deleted.".to_string(),
+            t!("dashboard.variables.connection_deleted").into_owned(),
         );
     };
     let dialect = config.db_type.dialect();
@@ -432,7 +442,16 @@ async fn group_options(
         .await
     {
         Ok(connection) => connection,
-        Err(error) => return fail_all(group.queries, format!("Could not connect: {error:#}")),
+        Err(error) => {
+            return fail_all(
+                group.queries,
+                t!(
+                    "dashboard.variables.could_not_connect",
+                    error = format!("{error:#}")
+                )
+                .into_owned(),
+            );
+        }
     };
     let mut resolved = Vec::with_capacity(group.queries.len());
     for (name, query) in group.queries {
@@ -476,8 +495,8 @@ pub(super) struct VariableForm {
     connection: Option<(i64, String, String)>,
 }
 
-const KIND_VALUES: &str = "Values";
-const KIND_QUERY: &str = "Query";
+/// The rows of the choices select, a query variable's second.
+const KIND_QUERY_ROW: usize = 1;
 
 impl VariableForm {
     fn new(
@@ -502,7 +521,10 @@ impl VariableForm {
         });
         let kind = cx.new(|cx| {
             SelectState::new(
-                vec![KIND_VALUES.to_string(), KIND_QUERY.to_string()],
+                vec![
+                    t!("dashboard.variables.values").into_owned(),
+                    t!("dashboard.variables.query").into_owned(),
+                ],
                 Some(IndexPath::new(usize::from(is_query))),
                 window,
                 cx,
@@ -526,8 +548,8 @@ impl VariableForm {
     fn is_query(&self, cx: &App) -> bool {
         self.kind
             .read(cx)
-            .selected_value()
-            .is_some_and(|kind| kind == KIND_QUERY)
+            .selected_index(cx)
+            .is_some_and(|index| index.row == KIND_QUERY_ROW)
     }
 
     /// The variable the fields describe, or what is wrong with them.
@@ -540,23 +562,19 @@ impl VariableForm {
             .trim_start_matches('$')
             .to_string();
         if !is_variable_name(&name) {
-            return Err(
-                "A name is letters, digits and underscores, and starts with a letter.".to_string(),
-            );
+            return Err(t!("dashboard.variables.invalid_name").into_owned());
         }
         if taken.contains(&name) {
-            return Err(format!("The dashboard already has a ${name}."));
+            return Err(t!("dashboard.variables.name_taken", name = name).into_owned());
         }
         let text = self.text.read(cx).value().to_string();
         let source = if self.is_query(cx) {
             let query = text.trim().to_string();
             if query.is_empty() {
-                return Err("Write the query whose first column gives the choices.".to_string());
+                return Err(t!("dashboard.variables.query_missing").into_owned());
             }
             let Some((connection_id, database_name, _)) = self.connection.clone() else {
-                return Err(
-                    "Add a panel first: a query variable runs on a panel's connection.".to_string(),
-                );
+                return Err(t!("dashboard.variables.add_panel_first").into_owned());
             };
             VariableSource::Query {
                 connection_id,
@@ -571,7 +589,7 @@ impl VariableForm {
                 .map(str::to_string)
                 .collect();
             if values.is_empty() {
-                return Err("List at least one value, one per line.".to_string());
+                return Err(t!("dashboard.variables.values_missing").into_owned());
             }
             VariableSource::Values { values }
         };
@@ -589,33 +607,47 @@ impl Render for VariableForm {
         let muted = cx.theme().muted_foreground;
         let hint = if is_query {
             match &self.connection {
-                Some((_, _, name)) => format!(
-                    "The first column of the rows is the choices. Runs read only on {name}, and may use $__timeFilter."
-                ),
-                None => "A query variable runs on a panel's connection, and this dashboard has no panel yet.".to_string(),
+                Some((_, _, name)) => t!("dashboard.variables.query_hint", connection = name),
+                None => t!("dashboard.variables.query_hint_no_panel"),
             }
         } else {
-            "One value per line.".to_string()
+            t!("dashboard.variables.values_hint")
         };
         v_flex()
             .gap_3()
             .child(
                 field()
-                    .label("Name")
+                    .label(t!("dashboard.variables.name").into_owned())
                     .child(Input::new(&self.name).w_full()),
             )
-            .child(field().label("Choices").child(Select::new(&self.kind).small()))
             .child(
                 field()
-                    .label(if is_query { "Query" } else { "Values" })
+                    .label(t!("dashboard.variables.choices").into_owned())
+                    .child(Select::new(&self.kind).small()),
+            )
+            .child(
+                field()
+                    .label(
+                        if is_query {
+                            t!("dashboard.variables.query")
+                        } else {
+                            t!("dashboard.variables.values")
+                        }
+                        .into_owned(),
+                    )
                     .child(Textarea::new(&self.text).h(px(140.))),
             )
-            .child(div().text_xs().text_color(muted).child(hint))
             .child(
                 div()
                     .text_xs()
                     .text_color(muted)
-                    .child("Panels write $name or ${name} for the value as a string, ${name:raw} for it as it is."),
+                    .child(SharedString::from(hint)),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(muted)
+                    .child(SharedString::from(t!("dashboard.variables.syntax_hint"))),
             )
     }
 }

@@ -8,6 +8,8 @@ publish.workspace = true
 path = "src/app_database.rs"
 
 [dependencies]
+# The interface language, a process global the app sets at startup.
+rust-i18n = "4.2"
 blanco-core = { path = "../blanco-core" }
 database = { path = "../database" }
 gpui = { workspace = true }

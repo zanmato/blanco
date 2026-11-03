@@ -65,12 +65,19 @@ impl ConnectionPicker {
             .into_iter()
             .filter(|connection| connection.db_type.supports_sql() && connection.id.is_some())
             .collect();
-        let filter_input = cx.new(|cx| InputState::new(window, cx).placeholder("Filter"));
+        let filter_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder(t!("dashboard.picker.filter")));
         let filter = cx.subscribe(&filter_input, |_, _, event: &InputEvent, cx| {
             if let InputEvent::Change = event {
                 cx.notify();
             }
         });
+        let placeholder_subscription = crate::i18n::placeholder_follows_locale(
+            &filter_input,
+            "dashboard.picker.filter",
+            window,
+            cx,
+        );
         let mut this = Self {
             connections,
             filter_input,
@@ -79,7 +86,7 @@ impl ConnectionPicker {
             selected: None,
             scroll_handle: ScrollHandle::new(),
             on_confirm: None,
-            _subscriptions: vec![filter],
+            _subscriptions: vec![filter, placeholder_subscription],
         };
         let preferred = preferred.or_else(|| this.connections.first().and_then(connection_context));
         if let Some(context) = preferred {
@@ -141,8 +148,10 @@ impl ConnectionPicker {
             .connection(connection_id)
             .map(|connection| connection.name.clone())
             .unwrap_or_default();
-        let activity = crate::status_bar::ActivityReporter::global(cx)
-            .begin(format!("{connection_name}: listing databases"));
+        let activity = crate::status_bar::ActivityReporter::global(cx).begin(t!(
+            "dashboard.picker.listing_databases",
+            connection = connection_name
+        ));
         let task = gpui_tokio::Tokio::spawn_result(cx, async move {
             // Dropped once the databases are listed.
             let _activity = activity;
@@ -204,10 +213,12 @@ impl ConnectionPicker {
                 continue;
             }
             match self.databases.get(&id) {
-                Some(Databases::Loading) => rows.push(Row::Note(ix, "Connecting…".into())),
+                Some(Databases::Loading) => {
+                    rows.push(Row::Note(ix, t!("dashboard.picker.connecting").into()))
+                }
                 Some(Databases::Failed(error)) => rows.push(Row::Note(ix, error.clone().into())),
                 Some(Databases::Loaded(_)) if matching.is_empty() => {
-                    rows.push(Row::Note(ix, "No databases".into()))
+                    rows.push(Row::Note(ix, t!("dashboard.picker.no_databases").into()))
                 }
                 Some(Databases::Loaded(_)) => rows.extend(
                     matching
@@ -333,15 +344,21 @@ impl Render for ConnectionPicker {
             .map(|(ix, row)| self.render_row(ix, row, cx))
             .collect();
         let muted = cx.theme().muted_foreground;
-        let picked = match &self.selected {
+        let picked_note = match &self.selected {
             Some(context)
                 if context.database_name.is_empty()
                     || !self.has_databases(context.connection_id) =>
             {
-                context.connection_name.clone()
+                t!(
+                    "dashboard.picker.runs_read_only_on",
+                    target = context.connection_name
+                )
             }
-            Some(context) => format!("{} / {}", context.connection_name, context.database_name),
-            None => "Pick a connection".to_string(),
+            Some(context) => t!(
+                "dashboard.picker.runs_read_only_on",
+                target = format!("{} / {}", context.connection_name, context.database_name)
+            ),
+            None => t!("dashboard.picker.runs_read_only_unpicked"),
         };
         v_flex()
             .gap_2()
@@ -364,12 +381,7 @@ impl Render for ConnectionPicker {
                     )
                     .vertical_scrollbar(&self.scroll_handle),
             )
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(muted)
-                    .child(format!("Runs read only on {picked}")),
-            )
+            .child(div().text_xs().text_color(muted).child(picked_note))
     }
 }
 

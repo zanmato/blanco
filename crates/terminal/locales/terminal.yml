@@ -1,0 +1,10 @@
+_version: 2
+# Error text the app shows after "Could not start a terminal:".
+terminal:
+  errors:
+    open_pseudo_terminal:
+      en: "opening a pseudo terminal"
+      sv: "pseudoterminalen kunde inte öppnas"
+    start_reader:
+      en: "starting the terminal reader"
+      sv: "terminalens läsare kunde inte startas"

@@ -88,7 +88,8 @@ impl NewConnectionModal {
             };
 
         let name_input = cx.new(|cx| {
-            let mut input = InputState::new(window, cx).placeholder("Connection Name");
+            let mut input =
+                InputState::new(window, cx).placeholder(t!("connection_dialog.connection_name"));
             if !initial_name.is_empty() {
                 input.set_value(initial_name, window, cx);
             }
@@ -129,9 +130,13 @@ impl NewConnectionModal {
             .database
             .idle_disconnect_minutes;
         let idle_placeholder = if global_idle_minutes == 0 {
-            "Default (never)".to_string()
+            t!("connection_dialog.idle_default_never").into_owned()
         } else {
-            format!("Default ({global_idle_minutes})")
+            t!(
+                "connection_dialog.idle_default_minutes",
+                minutes = global_idle_minutes
+            )
+            .into_owned()
         };
         let idle_timeout_input = shared::make_input(
             window,
@@ -202,7 +207,7 @@ impl NewConnectionModal {
 
     fn validate(&self, connector_type: &ConnectorType, cx: &App) -> Option<String> {
         if self.idle_timeout_minutes(cx).is_err() {
-            return Some("Disconnect when idle must be a whole number of minutes.".to_string());
+            return Some(t!("connection_dialog.errors.idle_timeout_not_number").into_owned());
         }
         match connector_type {
             ConnectorType::SQLite => self.sqlite_form.validate(cx),
@@ -299,7 +304,7 @@ impl NewConnectionModal {
                     window.push_notification(
                         (
                             NotificationType::Error,
-                            "Please fill in all required fields",
+                            t!("connection_dialog.errors.required_fields"),
                         ),
                         cx,
                     );
@@ -316,7 +321,7 @@ impl NewConnectionModal {
                 window.push_notification(
                     (
                         NotificationType::Error,
-                        "Failed to build connection configuration",
+                        t!("connection_dialog.errors.config_failed"),
                     ),
                     cx,
                 );
@@ -351,13 +356,16 @@ impl NewConnectionModal {
 
                 match result {
                     Ok(()) => window.push_notification(
-                        (NotificationType::Success, "Connection successful"),
+                        (
+                            NotificationType::Success,
+                            t!("connection_dialog.test_succeeded"),
+                        ),
                         cx,
                     ),
                     Err(err) => window.push_notification(
                         (
                             NotificationType::Error,
-                            format!("Connection failed: {err:#}"),
+                            t!("connection_dialog.test_failed", error = format!("{err:#}")),
                         ),
                         cx,
                     ),
@@ -668,7 +676,11 @@ impl Render for NewConnectionModal {
                 .child(
                     v_flex()
                         .gap_2()
-                        .child(div().text_sm().child("Connection Name"))
+                        .child(
+                            div()
+                                .text_sm()
+                                .child(t!("connection_dialog.connection_name")),
+                        )
                         .child(Input::new(&self.name_input)),
                 )
                 .child(
@@ -678,7 +690,7 @@ impl Render for NewConnectionModal {
                             v_flex()
                                 .flex_1()
                                 .gap_2()
-                                .child(div().text_sm().child("Type"))
+                                .child(div().text_sm().child(t!("connection_dialog.type")))
                                 .child(
                                     Select::new(&self.db_type_select).disabled(self.db_type_locked),
                                 ),
@@ -687,14 +699,14 @@ impl Render for NewConnectionModal {
                             v_flex()
                                 .flex_1()
                                 .gap_2()
-                                .child(div().text_sm().child("Environment"))
+                                .child(div().text_sm().child(t!("connection_dialog.environment")))
                                 .child(Select::new(&self.environment_type_select)),
                         ),
                 )
                 .child(
                     Switch::new("connection-read-only-switch")
                         .checked(self.read_only)
-                        .label("Read-only (reject statements that modify data)")
+                        .label(t!("connection_dialog.read_only").into_owned())
                         .on_click(cx.listener(|modal, checked, _window, cx| {
                             modal.read_only = *checked;
                             cx.notify();
@@ -708,7 +720,9 @@ impl Render for NewConnectionModal {
                         this.child(
                             Switch::new("connection-only-configured-database-switch")
                                 .checked(self.only_configured_database)
-                                .label("Only show the database entered below")
+                                .label(
+                                    t!("connection_dialog.only_configured_database").into_owned(),
+                                )
                                 .on_click(cx.listener(|modal, checked, _window, cx| {
                                     modal.only_configured_database = *checked;
                                     cx.notify();
@@ -725,7 +739,7 @@ impl Render for NewConnectionModal {
                         this.child(
                             Switch::new("connection-open-default-schema-switch")
                                 .checked(self.open_default_schema)
-                                .label("Open the default database and schema on connect")
+                                .label(t!("connection_dialog.open_default_schema").into_owned())
                                 .on_click(cx.listener(|modal, checked, _window, cx| {
                                     modal.open_default_schema = *checked;
                                     cx.notify();
@@ -768,9 +782,9 @@ impl Render for NewConnectionModal {
                         .ghost()
                         .xsmall()
                         .child(if self.advanced_expanded {
-                            "Hide Advanced Options"
+                            t!("connection_dialog.hide_advanced")
                         } else {
-                            "Show Advanced Options"
+                            t!("connection_dialog.show_advanced")
                         })
                         .icon(if self.advanced_expanded {
                             IconName::ChevronUp
@@ -786,13 +800,13 @@ impl Render for NewConnectionModal {
                     this.child(
                         v_flex()
                             .gap_2()
-                            .child(div().text_sm().child("Disconnect When Idle (minutes)"))
+                            .child(div().text_sm().child(t!("connection_dialog.idle_timeout")))
                             .child(Input::new(&self.idle_timeout_input))
                             .child(
                                 div()
                                     .text_xs()
                                     .text_color(cx.theme().muted_foreground)
-                                    .child("Empty follows the Database setting. 0 keeps this connection open."),
+                                    .child(t!("connection_dialog.idle_timeout_help")),
                             ),
                     )
                 })
@@ -806,7 +820,7 @@ impl Render for NewConnectionModal {
                             .bg(cx.theme().blue.opacity(0.1))
                             .text_color(cx.theme().blue)
                             .child(Icon::new(IconName::LoaderCircle).size_4())
-                            .child(div().text_sm().child("Testing connection…")),
+                            .child(div().text_sm().child(t!("connection_dialog.testing"))),
                     )
                 }),
         )

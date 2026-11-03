@@ -1,0 +1,858 @@
+_version: 2
+# The table structure tab, object DDL tabs, the schema graph and the process
+# list. Terms follow the glossary at the top of app.yml. Data type names,
+# index methods and referential actions (CASCADE, NO ACTION) stay SQL.
+structure:
+  loading:
+    en: "Loading…"
+    sv: "Läser in…"
+  error:
+    en: "Error: %{error}"
+    sv: "Fel: %{error}"
+  answer_yes:
+    en: "Yes"
+    sv: "Ja"
+  answer_no:
+    en: "No"
+    sv: "Nej"
+  cancel:
+    en: "Cancel"
+    sv: "Avbryt"
+  filter_columns:
+    en: "Filter columns"
+    sv: "Filtrera kolumner"
+  no_comment:
+    en: "No comment"
+    sv: "Ingen kommentar"
+  new_table_title:
+    en: "New table"
+    sv: "Ny tabell"
+  table_name_placeholder:
+    en: "Table name"
+    sv: "Tabellnamn"
+  activity_loading:
+    en: "%{connection}: loading structure"
+    sv: "%{connection}: läser in struktur"
+  activity_creating:
+    en: "%{connection}: creating a table"
+    sv: "%{connection}: skapar en tabell"
+  activity_applying:
+    en: "%{connection}: applying structure changes"
+    sv: "%{connection}: verkställer strukturändringar"
+  change_refused:
+    en: "%{change}: %{reason}"
+    sv: "%{change}: %{reason}"
+  change_with_reason:
+    en: "%{change} (%{reason})"
+    sv: "%{change} (%{reason})"
+  new_table_error:
+    en: "New table: %{error}"
+    sv: "Ny tabell: %{error}"
+  undid_changes:
+    en: "Undid changes that no longer apply: %{changes}"
+    sv: "Ångrade ändringar som inte längre går att göra: %{changes}"
+  undid_change:
+    en: "Undid a change that no longer applies: %{change} (%{reason})"
+    sv: "Ångrade en ändring som inte längre går att göra: %{change} (%{reason})"
+  undo_change:
+    en: "Undo %{change}"
+    sv: "Ångra %{change}"
+  virtual_key_error:
+    en: "Virtual key: %{error}"
+    sv: "Virtuell nyckel: %{error}"
+  virtual_key_exists:
+    en: "The table already has a virtual key named \"%{name}\""
+    sv: "Tabellen har redan en virtuell nyckel som heter \"%{name}\""
+  virtual_key_save_failed:
+    en: "Saving the virtual key failed: %{error}"
+    sv: "Det gick inte att spara den virtuella nyckeln: %{error}"
+  virtual_key_delete_failed:
+    en: "Deleting the virtual key failed: %{error}"
+    sv: "Det gick inte att ta bort den virtuella nyckeln: %{error}"
+  name_table_to_see_statement:
+    en: "Name the table to see its statement"
+    sv: "Namnge tabellen för att se dess sats"
+  name_table_first:
+    en: "Name the table first"
+    sv: "Namnge tabellen först"
+  confirm_create_title:
+    en: "Create the table %{table} on %{environment}?"
+    sv: "Skapa tabellen %{table} i %{environment}?"
+  confirm_create_button:
+    en: "Create on %{environment}"
+    sv: "Skapa i %{environment}"
+  confirm_apply_title:
+    en: "Apply %{changes} on %{environment}?"
+    sv: "Verkställ %{changes} i %{environment}?"
+  statements_run_in_order:
+    en: "The statements run in this order."
+    sv: "Satserna körs i den här ordningen."
+  apply:
+    en: "Apply"
+    sv: "Verkställ"
+  apply_on:
+    en: "Apply on %{environment}"
+    sv: "Verkställ i %{environment}"
+  create_table:
+    en: "Create Table"
+    sv: "Skapa tabell"
+  create_table_on:
+    en: "Create Table on %{environment}"
+    sv: "Skapa tabell i %{environment}"
+  created:
+    en: "Created %{table}"
+    sv: "Skapade %{table}"
+  applied:
+    en: "Applied %{changes} to %{table}"
+    sv: "Verkställde %{changes} på %{table}"
+  create_failed:
+    en: "Creating %{table} failed: %{error}"
+    sv: "Det gick inte att skapa %{table}: %{error}"
+  apply_failed:
+    en: "Applying changes to %{table} failed: %{error}"
+    sv: "Det gick inte att verkställa ändringarna på %{table}: %{error}"
+  ddl_tab_title:
+    en: "%{table} DDL"
+    sv: "DDL för %{table}"
+  changes_one:
+    en: "1 change"
+    sv: "1 ändring"
+  changes_other:
+    en: "%{count} changes"
+    sv: "%{count} ändringar"
+  read_only_connection:
+    en: "Read-only connection"
+    sv: "Skrivskyddad anslutning"
+  reload_tooltip:
+    en: "Reload the structure from the server"
+    sv: "Läs in strukturen från servern igen"
+  add_column_button:
+    en: "Column"
+    sv: "Kolumn"
+  add_index_button:
+    en: "Index"
+    sv: "Index"
+  add_virtual_key_button:
+    en: "Virtual Key"
+    sv: "Virtuell nyckel"
+  add_foreign_key_button:
+    en: "Foreign Key"
+    sv: "Främmande nyckel"
+  virtual_key_needs_saved_connection:
+    en: "Save the connection to give its tables virtual keys"
+    sv: "Spara anslutningen för att ge dess tabeller virtuella nycklar"
+  virtual_key_tooltip:
+    en: "A foreign key kept in Blanco, for the grid and the schema graph"
+    sv: "En främmande nyckel som sparas i Blanco, för resultattabellen och schemagrafen"
+  open_in_query_tab:
+    en: "Open in Query Tab"
+    sv: "Öppna i frågeflik"
+  partial_apply_note:
+    en: "%{backend} cannot roll back DDL, so a failing statement leaves the ones before it applied."
+    sv: "%{backend} kan inte rulla tillbaka DDL, så om en sats misslyckas ligger satserna före den kvar."
+  new_table_headline:
+    en: "New table, %{parts}"
+    sv: "Ny tabell, %{parts}"
+  pending_headline:
+    en: "%{changes} pending"
+    sv: "%{changes} väntande"
+  hide_sql:
+    en: "Hide SQL"
+    sv: "Dölj SQL"
+  show_sql:
+    en: "Show SQL"
+    sv: "Visa SQL"
+  discard:
+    en: "Discard"
+    sv: "Förkasta"
+  count:
+    columns_one:
+      en: "1 column"
+      sv: "1 kolumn"
+    columns_other:
+      en: "%{count} columns"
+      sv: "%{count} kolumner"
+    indexes_one:
+      en: "1 index"
+      sv: "1 index"
+    indexes_other:
+      en: "%{count} indexes"
+      sv: "%{count} index"
+    foreign_keys_one:
+      en: "1 foreign key"
+      sv: "1 främmande nyckel"
+    foreign_keys_other:
+      en: "%{count} foreign keys"
+      sv: "%{count} främmande nycklar"
+  section:
+    columns:
+      en: "Columns"
+      sv: "Kolumner"
+    indexes:
+      en: "Indexes"
+      sv: "Index"
+    foreign_keys:
+      en: "Foreign keys"
+      sv: "Främmande nycklar"
+    table:
+      en: "Table"
+      sv: "Tabell"
+    create_statement:
+      en: "Create statement"
+      sv: "CREATE-sats"
+  info:
+    rows:
+      en: "Rows"
+      sv: "Rader"
+    about:
+      en: "about %{value}"
+      sv: "cirka %{value}"
+    data_size:
+      en: "Data size"
+      sv: "Datastorlek"
+    index_size:
+      en: "Index size"
+      sv: "Indexstorlek"
+    total_size:
+      en: "Total size"
+      sv: "Total storlek"
+    created:
+      en: "Created"
+      sv: "Skapad"
+    last_modified:
+      en: "Last modified"
+      sv: "Senast ändrad"
+    comment:
+      en: "Comment"
+      sv: "Kommentar"
+    save_comment:
+      en: "Save Comment"
+      sv: "Spara kommentar"
+    information:
+      en: "Information"
+      sv: "Information"
+    no_statistics:
+      en: "%{backend} records no size or change times for tables."
+      sv: "%{backend} sparar ingen storlek eller ändringstid för tabeller."
+    estimates:
+      en: "Rows and sizes are the server's estimates."
+      sv: "Rader och storlekar är serverns uppskattningar."
+  panel:
+    new_column:
+      en: "New column"
+      sv: "Ny kolumn"
+    add_column:
+      en: "Add Column"
+      sv: "Lägg till kolumn"
+    column_title:
+      en: "Column %{name}"
+      sv: "Kolumnen %{name}"
+    new_index:
+      en: "New index"
+      sv: "Nytt index"
+    add_index:
+      en: "Add Index"
+      sv: "Lägg till index"
+    index_title:
+      en: "Index %{name}"
+      sv: "Indexet %{name}"
+    new_foreign_key:
+      en: "New foreign key"
+      sv: "Ny främmande nyckel"
+    add_foreign_key:
+      en: "Add Foreign Key"
+      sv: "Lägg till främmande nyckel"
+    foreign_key_title:
+      en: "Foreign key %{name}"
+      sv: "Främmande nyckeln %{name}"
+    new_virtual_key:
+      en: "New virtual key"
+      sv: "Ny virtuell nyckel"
+    add_virtual_key:
+      en: "Add Virtual Key"
+      sv: "Lägg till virtuell nyckel"
+    virtual_key_title:
+      en: "Virtual key %{name}"
+      sv: "Virtuella nyckeln %{name}"
+    type:
+      en: "Type"
+      sv: "Typ"
+    nullable:
+      en: "Nullable"
+      sv: "Tillåter NULL"
+    default:
+      en: "Default"
+      sv: "Standardvärde"
+    comment:
+      en: "Comment"
+      sv: "Kommentar"
+    columns:
+      en: "Columns"
+      sv: "Kolumner"
+    unique:
+      en: "Unique"
+      sv: "Unik"
+    unique_nulls_not_distinct:
+      en: "Yes, NULLs not distinct"
+      sv: "Ja, NULL räknas som lika"
+    method:
+      en: "Method"
+      sv: "Metod"
+    condition:
+      en: "Condition"
+      sv: "Villkor"
+    references:
+      en: "References"
+      sv: "Refererar till"
+    on_update:
+      en: "On update"
+      sv: "Vid uppdatering"
+    on_delete:
+      en: "On delete"
+      sv: "Vid borttagning"
+    drop:
+      en: "Drop"
+      sv: "Ta bort"
+    drop_index:
+      en: "Drop Index"
+      sv: "Ta bort index"
+    drop_foreign_key:
+      en: "Drop Foreign Key"
+      sv: "Ta bort främmande nyckel"
+    delete:
+      en: "Delete"
+      sv: "Ta bort"
+    save:
+      en: "Save"
+      sv: "Spara"
+    remove:
+      en: "Remove"
+      sv: "Ta bort"
+    undo_drop:
+      en: "Undo Drop"
+      sv: "Ångra borttagning"
+    undo_changes:
+      en: "Undo Changes"
+      sv: "Ångra ändringar"
+    badge_new:
+      en: "new"
+      sv: "ny"
+    badge_changed:
+      en: "changed"
+      sv: "ändrad"
+    badge_dropped:
+      en: "dropped"
+      sv: "borttagen"
+    close:
+      en: "Close"
+      sv: "Stäng"
+  form:
+    name:
+      en: "Name"
+      sv: "Namn"
+    type:
+      en: "Type"
+      sv: "Typ"
+    column_name_placeholder:
+      en: "Column name"
+      sv: "Kolumnnamn"
+    none:
+      en: "None"
+      sv: "Inget"
+    type_placeholder:
+      en: "Type, e.g. integer or varchar(120)"
+      sv: "Typ, t.ex. integer eller varchar(120)"
+    position_end:
+      en: "At the end"
+      sv: "Sist"
+    position_first:
+      en: "First"
+      sv: "Först"
+    position_after:
+      en: "After %{column}"
+      sv: "Efter %{column}"
+    primary_key:
+      en: "Primary key"
+      sv: "Primärnyckel"
+    nullable:
+      en: "Nullable"
+      sv: "Tillåter NULL"
+    default:
+      en: "Default"
+      sv: "Standardvärde"
+    default_as_text:
+      en: "Write the default as text"
+      sv: "Skriv standardvärdet som text"
+    comment:
+      en: "Comment"
+      sv: "Kommentar"
+    position:
+      en: "Position"
+      sv: "Placering"
+    index_name_placeholder:
+      en: "Index name"
+      sv: "Indexnamn"
+    index_columns:
+      en: "Columns, in table order"
+      sv: "Kolumner, i tabellens ordning"
+    unique:
+      en: "Unique"
+      sv: "Unik"
+    nulls_not_distinct:
+      en: "NULLs not distinct"
+      sv: "NULL räknas som lika"
+    nulls_not_distinct_note:
+      en: "Only one row may leave the columns NULL."
+      sv: "Bara en rad får lämna kolumnerna som NULL."
+    nulls_not_distinct_needs_version:
+      en: "Needs PostgreSQL 15 or later."
+      sv: "Kräver PostgreSQL 15 eller senare."
+    index_type:
+      en: "Index type"
+      sv: "Indextyp"
+    method:
+      en: "Method"
+      sv: "Metod"
+    condition:
+      en: "Condition (partial index)"
+      sv: "Villkor (partiellt index)"
+    virtual_key_name_placeholder:
+      en: "Required"
+      sv: "Obligatoriskt"
+    foreign_key_name_placeholder:
+      en: "Generated by the server"
+      sv: "Skapas av servern"
+    not_new_foreign_key:
+      en: "Not a new foreign key"
+      sv: "Inte en ny främmande nyckel"
+    virtual_key_needs_name:
+      en: "A virtual key needs a name"
+      sv: "En virtuell nyckel måste ha ett namn"
+    choose_referenced_table:
+      en: "Choose the referenced table"
+      sv: "Välj tabellen som refereras"
+    choose_column_pairs:
+      en: "Choose a column and a referenced column in every row"
+      sv: "Välj en kolumn och en refererad kolumn på varje rad"
+    referenced_table_or_view:
+      en: "Referenced table or view"
+      sv: "Refererad tabell eller vy"
+    referenced_table:
+      en: "Referenced table"
+      sv: "Refererad tabell"
+    choose_table:
+      en: "Choose a table"
+      sv: "Välj en tabell"
+    column:
+      en: "Column"
+      sv: "Kolumn"
+    referenced_column:
+      en: "Referenced column"
+      sv: "Refererad kolumn"
+    remove_column:
+      en: "Remove Column"
+      sv: "Ta bort kolumn"
+    add_column:
+      en: "Add Column"
+      sv: "Lägg till kolumn"
+    virtual_key_note:
+      en: "Saved in Blanco for this connection, database and schema. The server never sees it, so it is saved at once and enforces nothing."
+      sv: "Sparas i Blanco för den här anslutningen, databasen och schemat. Servern ser den aldrig, så den sparas direkt och upprätthåller ingenting."
+    on_update:
+      en: "On update"
+      sv: "Vid uppdatering"
+    on_delete:
+      en: "On delete"
+      sv: "Vid borttagning"
+    user_type_description:
+      en: "type in this database"
+      sv: "typ i den här databasen"
+  columns_list:
+    name:
+      en: "Name"
+      sv: "Namn"
+    type:
+      en: "Type"
+      sv: "Typ"
+    nullable:
+      en: "Nullable"
+      sv: "Tillåter NULL"
+    default:
+      en: "Default"
+      sv: "Standardvärde"
+    key:
+      en: "Key"
+      sv: "Nyckel"
+    comment:
+      en: "Comment"
+      sv: "Kommentar"
+    primary_key:
+      en: "PK"
+      sv: "PK"
+    primary_key_and:
+      en: "PK, %{reference}"
+      sv: "PK, %{reference}"
+    foreign_key_reference:
+      en: "FK %{table}(%{column})"
+      sv: "FK %{table}(%{column})"
+    edit_column:
+      en: "Edit Column"
+      sv: "Redigera kolumn"
+    drop_column:
+      en: "Drop Column"
+      sv: "Ta bort kolumn"
+  indexes_list:
+    name:
+      en: "Name"
+      sv: "Namn"
+    columns:
+      en: "Columns"
+      sv: "Kolumner"
+    unique:
+      en: "Unique"
+      sv: "Unik"
+    nulls:
+      en: "NULLs"
+      sv: "NULL"
+    nulls_not_distinct:
+      en: "Not distinct"
+      sv: "Lika"
+    nulls_distinct:
+      en: "Distinct"
+      sv: "Olika"
+    method:
+      en: "Method"
+      sv: "Metod"
+    condition:
+      en: "Condition"
+      sv: "Villkor"
+    comment:
+      en: "Comment"
+      sv: "Kommentar"
+    drop_index:
+      en: "Drop Index"
+      sv: "Ta bort index"
+  foreign_keys_list:
+    name:
+      en: "Name"
+      sv: "Namn"
+    kind:
+      en: "Kind"
+      sv: "Sort"
+    columns:
+      en: "Columns"
+      sv: "Kolumner"
+    references:
+      en: "References"
+      sv: "Refererar till"
+    on_update:
+      en: "On Update"
+      sv: "Vid uppdatering"
+    on_delete:
+      en: "On Delete"
+      sv: "Vid borttagning"
+    virtual:
+      en: "Virtual"
+      sv: "Virtuell"
+    declared:
+      en: "Declared"
+      sv: "Deklarerad"
+    generated:
+      en: "(generated)"
+      sv: "(genereras)"
+    edit_virtual_key:
+      en: "Edit Virtual Key"
+      sv: "Redigera virtuell nyckel"
+    delete_virtual_key:
+      en: "Delete Virtual Key"
+      sv: "Ta bort virtuell nyckel"
+    drop_foreign_key:
+      en: "Drop Foreign Key"
+      sv: "Ta bort främmande nyckel"
+  change:
+    label:
+      add_column:
+        en: "Add column"
+        sv: "Lägg till kolumn"
+      move_column:
+        en: "Move column"
+        sv: "Flytta kolumn"
+      rename_column:
+        en: "Rename column"
+        sv: "Byt namn på kolumn"
+      drop_column:
+        en: "Drop column"
+        sv: "Ta bort kolumn"
+      alter_column:
+        en: "Alter column"
+        sv: "Ändra kolumn"
+      create_index:
+        en: "Create index"
+        sv: "Skapa index"
+      drop_index:
+        en: "Drop index"
+        sv: "Ta bort index"
+      create_foreign_key:
+        en: "Create foreign key"
+        sv: "Skapa främmande nyckel"
+      drop_foreign_key:
+        en: "Drop foreign key"
+        sv: "Ta bort främmande nyckel"
+      table_comment:
+        en: "Change table comment"
+        sv: "Ändra tabellkommentar"
+    describe:
+      add_column:
+        en: "Add column \"%{name}\""
+        sv: "Lägg till kolumnen \"%{name}\""
+      move_column:
+        en: "Move column \"%{name}\""
+        sv: "Flytta kolumnen \"%{name}\""
+      rename_column:
+        en: "Rename column \"%{from}\" to \"%{to}\""
+        sv: "Byt namn på kolumnen \"%{from}\" till \"%{to}\""
+      alter_column:
+        en: "Alter column \"%{name}\""
+        sv: "Ändra kolumnen \"%{name}\""
+      drop_column:
+        en: "Drop column \"%{name}\""
+        sv: "Ta bort kolumnen \"%{name}\""
+      create_index:
+        en: "Create index \"%{name}\""
+        sv: "Skapa indexet \"%{name}\""
+      drop_index:
+        en: "Drop index \"%{name}\""
+        sv: "Ta bort indexet \"%{name}\""
+      create_foreign_key:
+        en: "Create foreign key \"%{name}\""
+        sv: "Skapa främmande nyckeln \"%{name}\""
+      create_foreign_key_on:
+        en: "Create foreign key on (%{columns})"
+        sv: "Skapa främmande nyckel på (%{columns})"
+      drop_foreign_key:
+        en: "Drop foreign key \"%{name}\""
+        sv: "Ta bort främmande nyckeln \"%{name}\""
+  staging:
+    no_column:
+      en: "No column named \"%{name}\""
+      sv: "Det finns ingen kolumn som heter \"%{name}\""
+    column_exists:
+      en: "Column \"%{name}\" already exists"
+      sv: "Kolumnen \"%{name}\" finns redan"
+    column_follows_itself:
+      en: "A column cannot follow itself"
+      sv: "En kolumn kan inte placeras efter sig själv"
+    new_column:
+      en: "\"%{name}\" is a new column, undo adding it instead"
+      sv: "\"%{name}\" är en ny kolumn, ångra tillägget i stället"
+    index_exists:
+      en: "Index \"%{name}\" already exists"
+      sv: "Indexet \"%{name}\" finns redan"
+    no_index:
+      en: "No index named \"%{name}\""
+      sv: "Det finns inget index som heter \"%{name}\""
+    new_index:
+      en: "\"%{name}\" is a new index, undo creating it instead"
+      sv: "\"%{name}\" är ett nytt index, ångra att det skapas i stället"
+    foreign_key_exists:
+      en: "Foreign key \"%{name}\" already exists"
+      sv: "Främmande nyckeln \"%{name}\" finns redan"
+    no_foreign_key:
+      en: "No foreign key named \"%{name}\""
+      sv: "Det finns ingen främmande nyckel som heter \"%{name}\""
+    new_foreign_key:
+      en: "\"%{name}\" is a new foreign key, undo creating it instead"
+      sv: "\"%{name}\" är en ny främmande nyckel, ångra att den skapas i stället"
+  object_ddl:
+    title:
+      en: "%{kind}: %{name}"
+      sv: "%{kind}: %{name}"
+    kind:
+      procedure:
+        en: "Procedure"
+        sv: "Procedur"
+      function:
+        en: "Function"
+        sv: "Funktion"
+      trigger:
+        en: "Trigger"
+        sv: "Trigger"
+      enum:
+        en: "Enum"
+        sv: "Enum"
+      composite_type:
+        en: "Composite type"
+        sv: "Sammansatt typ"
+      domain:
+        en: "Domain"
+        sv: "Domän"
+      sequence:
+        en: "Sequence"
+        sv: "Sekvens"
+    header:
+      procedure:
+        en: "Procedure DDL"
+        sv: "Procedurens DDL"
+      function:
+        en: "Function DDL"
+        sv: "Funktionens DDL"
+      trigger:
+        en: "Trigger DDL"
+        sv: "Triggerns DDL"
+      enum:
+        en: "Enum DDL"
+        sv: "Enumtypens DDL"
+      composite_type:
+        en: "Composite type DDL"
+        sv: "Den sammansatta typens DDL"
+      domain:
+        en: "Domain DDL"
+        sv: "Domänens DDL"
+      sequence:
+        en: "Sequence DDL"
+        sv: "Sekvensens DDL"
+schema_graph:
+  title:
+    en: "Schema: %{schema}"
+    sv: "Schema: %{schema}"
+  saved:
+    en: "Saved the graph to %{path}."
+    sv: "Sparade grafen i %{path}."
+  save_failed:
+    en: "Saving the graph failed: %{error}"
+    sv: "Det gick inte att spara grafen: %{error}"
+  read_failed:
+    en: "Failed to read the schema: %{error}"
+    sv: "Det gick inte att läsa schemat: %{error}"
+  connect_failed:
+    en: "Failed to connect: %{error}"
+    sv: "Det gick inte att ansluta: %{error}"
+  no_tables:
+    en: "No tables found in schema"
+    sv: "Inga tabeller hittades i schemat"
+  step:
+    connecting:
+      en: "Connecting…"
+      sv: "Ansluter…"
+    foreign_keys:
+      en: "Reading foreign keys…"
+      sv: "Läser främmande nycklar…"
+    columns:
+      en: "Reading columns…"
+      sv: "Läser kolumner…"
+    columns_elsewhere_one:
+      en: "Reading columns, with 1 table of other schemas…"
+      sv: "Läser kolumner, med 1 tabell från andra scheman…"
+    columns_elsewhere_other:
+      en: "Reading columns, with %{count} tables of other schemas…"
+      sv: "Läser kolumner, med %{count} tabeller från andra scheman…"
+    layout_one:
+      en: "Laying out 1 table…"
+      sv: "Placerar ut 1 tabell…"
+    layout_other:
+      en: "Laying out %{count} tables…"
+      sv: "Placerar ut %{count} tabeller…"
+process_list:
+  title:
+    en: "Processes: %{connection}"
+    sv: "Processer: %{connection}"
+  unsupported:
+    en: "%{backend} has no process list in Blanco"
+    sv: "%{backend} har ingen processlista i Blanco"
+  refresh_off:
+    en: "Off"
+    sv: "Av"
+  refresh_every:
+    en: "Every %{seconds} s"
+    sv: "Var %{seconds} s"
+  refresh:
+    en: "Refresh"
+    sv: "Uppdatera"
+  cancel_query:
+    en: "Cancel Query"
+    sv: "Avbryt fråga"
+  kill_session:
+    en: "Kill Session"
+    sv: "Avsluta session"
+  confirm_cancel_title:
+    en: "Cancel the query of session %{session}?"
+    sv: "Avbryt frågan i session %{session}?"
+  confirm_cancel_description:
+    en: "The query stops with an error and the session stays open."
+    sv: "Frågan stoppas med ett fel och sessionen förblir öppen."
+  confirm_kill_title:
+    en: "Kill session %{session}?"
+    sv: "Avsluta session %{session}?"
+  confirm_kill_description:
+    en: "The session is disconnected and its open transaction is rolled back."
+    sv: "Sessionen kopplas från och dess öppna transaktion rullas tillbaka."
+  environment_note:
+    en: "This is a %{environment} connection."
+    sv: "Anslutningen hör till miljön %{environment}."
+  detail_user:
+    en: "User: %{user}"
+    sv: "Användare: %{user}"
+  detail_database:
+    en: "Database: %{database}"
+    sv: "Databas: %{database}"
+  detail_query:
+    en: "Query: %{query}"
+    sv: "Fråga: %{query}"
+  back:
+    en: "Back"
+    sv: "Tillbaka"
+  not_signalled:
+    en: "Session %{session} was not signalled: it has ended, or the role may not signal it"
+    sv: "Session %{session} fick ingen signal. Den har avslutats, eller så får rollen inte signalera den"
+  cancelled_query:
+    en: "Cancelled the query of session %{session}"
+    sv: "Avbröt frågan i session %{session}"
+  killed_session:
+    en: "Killed session %{session}"
+    sv: "Avslutade session %{session}"
+  error:
+    en: "Error: %{error}"
+    sv: "Fel: %{error}"
+  loading:
+    en: "Loading…"
+    sv: "Läser in…"
+  sessions_one:
+    en: "1 session"
+    sv: "1 session"
+  sessions_other:
+    en: "%{count} sessions"
+    sv: "%{count} sessioner"
+  sessions_refreshed_one:
+    en: "1 session, refreshed %{time}"
+    sv: "1 session, uppdaterad %{time}"
+  sessions_refreshed_other:
+    en: "%{count} sessions, refreshed %{time}"
+    sv: "%{count} sessioner, uppdaterad %{time}"
+  read_only_connection:
+    en: "Read-only connection"
+    sv: "Skrivskyddad anslutning"
+  copy_value:
+    en: "Copy Value"
+    sv: "Kopiera värde"
+  copy_row:
+    en: "Copy Row"
+    sv: "Kopiera rad"
+  column:
+    session:
+      en: "Session"
+      sv: "Session"
+    user:
+      en: "User"
+      sv: "Användare"
+    database:
+      en: "Database"
+      sv: "Databas"
+    state:
+      en: "State"
+      sv: "Tillstånd"
+    duration:
+      en: "Duration"
+      sv: "Varaktighet"
+    query:
+      en: "Query"
+      sv: "Fråga"

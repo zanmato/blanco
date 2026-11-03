@@ -109,7 +109,7 @@ impl Render for ForeignKeyPopover {
                     v_flex().items_center().justify_center().p_4().child(
                         div()
                             .text_color(cx.theme().muted_foreground)
-                            .child("Loading…"),
+                            .child(t!("results.foreign_key.loading")),
                     ),
                 )
             })
@@ -133,7 +133,7 @@ impl Render for ForeignKeyPopover {
                                 div()
                                     .p_3()
                                     .text_color(cx.theme().muted_foreground)
-                                    .child("No results found"),
+                                    .child(t!("results.foreign_key.no_results")),
                             )
                         })
                         .when(!result.rows.is_empty(), |this| {
@@ -147,7 +147,7 @@ impl Render for ForeignKeyPopover {
                 this.child(
                     v_flex().font_family(cx.theme().font_family.clone()).child(
                         Button::new("fk-open-referenced-row")
-                            .label("Open Referenced Row")
+                            .label(t!("results.foreign_key.open_referenced_row"))
                             .small()
                             .outline()
                             .on_click(move |_, window, cx| {

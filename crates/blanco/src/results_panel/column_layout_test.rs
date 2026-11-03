@@ -97,7 +97,7 @@ async fn a_whole_table_layout_is_kept_across_reruns_and_saved(cx: &mut TestAppCo
     // Copies leave the hidden column out and follow the order.
     let copied = results.read_with(&cx, |panel, cx| {
         let delegate = panel.table_state().read(cx).delegate();
-        panel.get_selected_data_for_rows(&[0].into_iter().collect(), delegate)
+        panel.get_selected_data_for_rows(&[0], delegate)
     });
     assert_eq!(copied.columns, ["email", "id", "name"]);
     assert_eq!(

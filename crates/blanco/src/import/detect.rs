@@ -31,7 +31,8 @@ pub fn detect_file(path: &Path) -> Result<DetectedFile> {
     let encoding = detect_encoding(&raw);
     let decoded = decode_sample(&raw, encoding);
     if looks_like_json(path, &decoded) {
-        let mut detected = read_json_sample(&decoded).context("failed to read JSON sample")?;
+        let mut detected =
+            read_json_sample(&decoded).context(t!("import.errors.read_json_sample"))?;
         detected.encoding = encoding;
         return Ok(detected);
     }
@@ -42,7 +43,7 @@ pub fn detect_file(path: &Path) -> Result<DetectedFile> {
             detected.delimiter = delimiter;
             detected
         })
-        .context("failed to read CSV sample")
+        .context(t!("import.errors.read_csv_sample"))
 }
 
 fn looks_like_json(path: &Path, decoded: &str) -> bool {
@@ -106,7 +107,7 @@ pub fn parse_json_objects(
                     objects.push(object);
                     rest = &rest[element.byte_offset()..];
                 }
-                Some(Ok(_)) => anyhow::bail!("JSON array elements must be objects"),
+                Some(Ok(_)) => anyhow::bail!(t!("import.errors.json_elements_not_objects")),
                 Some(Err(_)) | None => break,
             }
             if limit.is_some_and(|limit| objects.len() >= limit) {
@@ -121,7 +122,7 @@ pub fn parse_json_objects(
             }
             match serde_json::from_str::<serde_json::Value>(line) {
                 Ok(serde_json::Value::Object(object)) => objects.push(object),
-                Ok(_) => anyhow::bail!("each JSON line must be an object"),
+                Ok(_) => anyhow::bail!(t!("import.errors.json_line_not_object")),
                 Err(_) => break,
             }
             if limit.is_some_and(|limit| objects.len() >= limit) {
@@ -135,7 +136,7 @@ pub fn parse_json_objects(
 fn read_json_sample(decoded: &str) -> Result<DetectedFile> {
     let objects = parse_json_objects(decoded, Some(SAMPLE_ROWS))?;
     if objects.is_empty() {
-        anyhow::bail!("no JSON objects found");
+        anyhow::bail!(t!("import.errors.no_json_objects"));
     }
     let headers = json_headers(&objects);
     let sample_rows = objects
@@ -172,7 +173,7 @@ pub fn read_sample_with(
 
 fn read_sample_bytes(path: &Path) -> Result<Vec<u8>> {
     let mut file =
-        File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
+        File::open(path).with_context(|| t!("import.errors.open_failed", path = path.display()))?;
     let mut buffer = vec![0u8; SAMPLE_BYTES];
     let n = file.read(&mut buffer)?;
     buffer.truncate(n);

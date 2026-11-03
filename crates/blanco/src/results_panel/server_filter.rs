@@ -123,7 +123,7 @@ impl ResultsPanel {
     /// in place, keeping the table identity so the rows stay editable.
     fn run_server_filter(
         &mut self,
-        table_state: &Entity<gpui_component::table::TableState<super::ResultsTableDelegate>>,
+        table_state: &Entity<blanco_ui::table::TableState<super::ResultsTableDelegate>>,
         bar: &Entity<FilterBar>,
         predicate: Option<String>,
         window: &mut Window,
@@ -149,10 +149,7 @@ impl ResultsPanel {
         };
         if pending_edits {
             bar.update(cx, |bar, cx| {
-                bar.finish(
-                    Err("Commit or discard pending edits before filtering".to_string()),
-                    cx,
-                )
+                bar.finish(Err(t!("results.filter.pending_edits").into_owned()), cx)
             });
             return;
         }

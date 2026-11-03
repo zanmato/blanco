@@ -1,0 +1,566 @@
+_version: 2
+# Messages blanco-core writes for the user. See the glossary at the top of
+# crates/blanco/locales/app.yml. Backend names stay as they are.
+blanco_core:
+  connection_lost:
+    en: "database connection lost"
+    sv: "anslutningen till databasen bröts"
+  ddl:
+    column_name_empty:
+      en: "column name must not be empty"
+      sv: "kolumnnamnet får inte vara tomt"
+    preceding_column_name_empty:
+      en: "preceding column name must not be empty"
+      sv: "namnet på föregående kolumn får inte vara tomt"
+    new_column_name_empty:
+      en: "new column name must not be empty"
+      sv: "det nya kolumnnamnet får inte vara tomt"
+    index_name_empty:
+      en: "index name must not be empty"
+      sv: "indexnamnet får inte vara tomt"
+    referenced_table_name_empty:
+      en: "referenced table name must not be empty"
+      sv: "namnet på den refererade tabellen får inte vara tomt"
+    table_name_empty:
+      en: "table name must not be empty"
+      sv: "tabellnamnet får inte vara tomt"
+    foreign_key_name_empty:
+      en: "foreign key name must not be empty"
+      sv: "namnet på den främmande nyckeln får inte vara tomt"
+    column_type_empty:
+      en: "column type must not be empty"
+      sv: "kolumntypen får inte vara tom"
+    cannot_move_columns:
+      en: "%{backend} adds columns only after the others and cannot move them"
+      sv: "%{backend} lägger bara till kolumner efter de andra och kan inte flytta dem"
+    no_comments:
+      en: "%{backend} has no comments"
+      sv: "%{backend} har inga kommentarer"
+    no_column_ddl:
+      en: "%{backend} has no column DDL"
+      sv: "%{backend} har ingen DDL för kolumner"
+    no_indexes:
+      en: "%{backend} has no indexes"
+      sv: "%{backend} har inga index"
+    no_tables:
+      en: "%{backend} has no tables to create"
+      sv: "%{backend} har inga tabeller att skapa"
+    no_foreign_keys:
+      en: "%{backend} has no foreign keys"
+      sv: "%{backend} har inga främmande nycklar"
+    no_nulls_not_distinct:
+      en: "%{backend} has no NULLS NOT DISTINCT"
+      sv: "%{backend} har inte NULLS NOT DISTINCT"
+    no_partial_indexes:
+      en: "%{backend} has no partial indexes"
+      sv: "%{backend} har inga partiella index"
+    no_index_method:
+      en: "%{backend} takes no index method"
+      sv: "%{backend} tar ingen indexmetod"
+    foreign_keys_need_rebuild:
+      en: "%{backend} cannot add or drop a foreign key in place; recreate the table in a query"
+      sv: "%{backend} kan inte lägga till eller ta bort en främmande nyckel direkt. Skapa om tabellen i en fråga."
+    column_listed_twice:
+      en: "column \"%{column}\" is listed twice"
+      sv: "kolumnen \"%{column}\" står med två gånger"
+    column_follows_itself:
+      en: "a column cannot follow itself"
+      sv: "en kolumn kan inte följa efter sig själv"
+    mysql_move_generated:
+      en: "MySQL moves a generated column only with its expression; move it in a query"
+      sv: "MySQL flyttar en genererad kolumn bara tillsammans med dess uttryck. Flytta den i en fråga."
+    column_unchanged:
+      en: "the column is unchanged"
+      sv: "kolumnen är oförändrad"
+    mysql_alter_generated:
+      en: "MySQL changes a generated column only with its expression; change it in a query"
+      sv: "MySQL ändrar en genererad kolumn bara tillsammans med dess uttryck. Ändra den i en fråga."
+    mssql_default_constraint:
+      en: "SQL Server stores defaults as named constraints; change the default in a query instead"
+      sv: "SQL Server lagrar standardvärden som namngivna begränsningar. Ändra standardvärdet i en fråga i stället."
+    sqlite_alter_column:
+      en: "SQLite cannot change a column's type, nullability or default in place; recreate the table in a query"
+      sv: "SQLite kan inte ändra en kolumns typ, NULL-tillåtelse eller standardvärde direkt. Skapa om tabellen i en fråga."
+    redis_no_columns:
+      en: "Redis has no columns"
+      sv: "Redis har inga kolumner"
+    index_needs_column:
+      en: "an index needs at least one column"
+      sv: "ett index behöver minst en kolumn"
+    nulls_not_distinct_unique_only:
+      en: "NULLS NOT DISTINCT applies to unique indexes only"
+      sv: "NULLS NOT DISTINCT gäller bara unika index"
+    clickhouse_no_unique_indexes:
+      en: "ClickHouse has no unique indexes"
+      sv: "ClickHouse har inga unika index"
+    redis_no_indexes:
+      en: "Redis has no indexes"
+      sv: "Redis har inga index"
+    not_a_new_foreign_key:
+      en: "not a new foreign key"
+      sv: "inte en ny främmande nyckel"
+    foreign_key_needs_column:
+      en: "a foreign key needs at least one column"
+      sv: "en främmande nyckel behöver minst en kolumn"
+    foreign_key_column_count:
+      en: "each column needs one referenced column"
+      sv: "varje kolumn behöver en refererad kolumn"
+    mssql_no_restrict:
+      en: "SQL Server has no RESTRICT; NO ACTION refuses the change the same way"
+      sv: "SQL Server har inte RESTRICT. NO ACTION nekar ändringen på samma sätt."
+    table_needs_column:
+      en: "a table needs at least one column"
+      sv: "en tabell behöver minst en kolumn"
+  filter:
+    contains:
+      en: "contains"
+      sv: "innehåller"
+    does_not_contain:
+      en: "does not contain"
+      sv: "innehåller inte"
+    starts_with:
+      en: "starts with"
+      sv: "börjar med"
+    ends_with:
+      en: "ends with"
+      sv: "slutar med"
+    query_not_filterable:
+      en: "The query cannot be filtered: %{error}"
+      sv: "Frågan kan inte filtreras: %{error}"
+    single_select_only:
+      en: "Only a single SELECT can be filtered"
+      sv: "Bara en enskild SELECT kan filtreras"
+    select_only:
+      en: "Only a SELECT can be filtered"
+      sv: "Bara en SELECT kan filtreras"
+    plain_select_only:
+      en: "Only a plain SELECT can be filtered"
+      sv: "Bara en enkel SELECT kan filtreras"
+    invalid:
+      en: "Invalid filter: %{error}"
+      sv: "Ogiltigt filter: %{error}"
+    unexpected_after_condition:
+      en: "Invalid filter: unexpected %{token} after the condition"
+      sv: "Ogiltigt filter: oväntat %{token} efter villkoret"
+  geometry:
+    text_after_geometry:
+      en: "unexpected text after the geometry at character %{position}"
+      sv: "oväntad text efter geometrin vid tecken %{position}"
+    coordinate_count:
+      en: "a position has %{count} coordinates"
+      sv: "en position har %{count} koordinater"
+    semicolon_after_srid:
+      en: "expected ';' after the SRID"
+      sv: "förväntade ';' efter SRID"
+    srid_not_number:
+      en: "the SRID '%{srid}' is not a number"
+      sv: "SRID '%{srid}' är inte ett tal"
+    not_a_number:
+      en: "'%{number}' at character %{position} is not a number"
+      sv: "'%{number}' vid tecken %{position} är inte ett tal"
+    unexpected_character:
+      en: "unexpected '%{character}' at character %{position}"
+      sv: "oväntat '%{character}' vid tecken %{position}"
+    expected_at:
+      en: "expected %{what} at character %{position}"
+      sv: "förväntade %{what} vid tecken %{position}"
+    expected_at_end:
+      en: "expected %{what} at the end"
+      sv: "förväntade %{what} i slutet"
+    a_geometry_type:
+      en: "a geometry type"
+      sv: "en geometrityp"
+    a_coordinate:
+      en: "a coordinate"
+      sv: "en koordinat"
+    comma_or_close:
+      en: "',' or ')'"
+      sv: "',' eller ')'"
+    unknown_type:
+      en: "unknown geometry type '%{word}' at character %{position}"
+      sv: "okänd geometrityp '%{word}' vid tecken %{position}"
+    dimensions_mismatch:
+      en: "%{tag} does not match the dimensions before it at character %{position}"
+      sv: "%{tag} stämmer inte med dimensionerna före den vid tecken %{position}"
+    coordinate_count_mismatch:
+      en: "expected %{expected} coordinates per position, found %{count} at character %{position}"
+      sv: "förväntade %{expected} koordinater per position, hittade %{count} vid tecken %{position}"
+    coordinate_count_at:
+      en: "a position has %{count} coordinates at character %{position}"
+      sv: "en position har %{count} koordinater vid tecken %{position}"
+    nested_too_deep:
+      en: "collections nest more than %{depth} deep at character %{position}"
+      sv: "samlingar är nästlade djupare än %{depth} nivåer vid tecken %{position}"
+  data_type:
+    any_of_a_list:
+      en: "any of a list"
+      sv: "valfria värden ur en lista"
+    auto_increment_bigint:
+      en: "auto increment bigint"
+      sv: "bigint med automatisk uppräkning"
+    auto_increment_integer:
+      en: "auto increment integer"
+      sv: "integer med automatisk uppräkning"
+    auto_increment_smallint:
+      en: "auto increment smallint"
+      sv: "smallint med automatisk uppräkning"
+    binary_data:
+      en: "binary data"
+      sv: "binärdata"
+    binary_json:
+      en: "binary JSON"
+      sv: "binär JSON"
+    bit_field:
+      en: "bit field"
+      sv: "bitfält"
+    bit_string:
+      en: "bit string"
+      sv: "bitsträng"
+    bit_string_up_to_n_bits:
+      en: "bit string up to n bits"
+      sv: "bitsträng på upp till n bitar"
+    bytes_of_any_length:
+      en: "bytes of any length"
+      sv: "byte av valfri längd"
+    bytes_up_to_16_mb:
+      en: "bytes up to 16 MB"
+      sv: "upp till 16 MB byte"
+    bytes_up_to_255:
+      en: "bytes up to 255"
+      sv: "upp till 255 byte"
+    bytes_up_to_2_gb:
+      en: "bytes up to 2 GB"
+      sv: "upp till 2 GB byte"
+    bytes_up_to_4_gb:
+      en: "bytes up to 4 GB"
+      sv: "upp till 4 GB byte"
+    bytes_up_to_64_kb:
+      en: "bytes up to 64 KB"
+      sv: "upp till 64 KB byte"
+    bytes_up_to_n:
+      en: "bytes up to n"
+      sv: "upp till n byte"
+    calendar_date:
+      en: "calendar date"
+      sv: "kalenderdatum"
+    calendar_date_wider_range:
+      en: "calendar date, wider range"
+      sv: "kalenderdatum, större omfång"
+    circle:
+      en: "circle"
+      sv: "cirkel"
+    closed_path:
+      en: "closed path"
+      sv: "sluten bana"
+    currency_amount:
+      en: "currency amount"
+      sv: "valutabelopp"
+    date_and_time:
+      en: "date and time"
+      sv: "datum och tid"
+    date_and_time_finer_precision:
+      en: "date and time, finer precision"
+      sv: "datum och tid, högre precision"
+    date_and_time_stored_as_utc:
+      en: "date and time, stored as UTC"
+      sv: "datum och tid, lagras som UTC"
+    date_and_time_to_the_millisecond:
+      en: "date and time to the millisecond"
+      sv: "datum och tid på millisekunden"
+    date_and_time_to_the_minute:
+      en: "date and time to the minute"
+      sv: "datum och tid på minuten"
+    date_and_time_to_the_nanosecond:
+      en: "date and time to the nanosecond"
+      sv: "datum och tid på nanosekunden"
+    date_and_time_to_the_second:
+      en: "date and time to the second"
+      sv: "datum och tid på sekunden"
+    date_and_time_with_offset:
+      en: "date and time with offset"
+      sv: "datum och tid med tidsförskjutning"
+    date_and_time_with_sub_seconds:
+      en: "date and time with sub seconds"
+      sv: "datum och tid med delar av sekunder"
+    date_and_time_with_time_zone:
+      en: "date and time with time zone"
+      sv: "datum och tid med tidszon"
+    dictionary_encoded_t:
+      en: "dictionary encoded T"
+      sv: "ordlistekodad T"
+    exact_number:
+      en: "exact number"
+      sv: "exakt tal"
+    exactly_n_bytes:
+      en: "exactly N bytes"
+      sv: "exakt N byte"
+    fixed_length_bit_string:
+      en: "fixed length bit string"
+      sv: "bitsträng med fast längd"
+    fixed_length_bytes:
+      en: "fixed length bytes"
+      sv: "byte med fast längd"
+    fixed_length_text:
+      en: "fixed length text"
+      sv: "text med fast längd"
+    fixed_length_unicode_text:
+      en: "fixed length Unicode text"
+      sv: "Unicode-text med fast längd"
+    fixed_list_of_values:
+      en: "fixed list of values"
+      sv: "fast lista av värden"
+    float_affinity:
+      en: "float affinity"
+      sv: "flyttalsaffinitet"
+    geometric_path:
+      en: "geometric path"
+      sv: "geometrisk bana"
+    geometric_point:
+      en: "geometric point"
+      sv: "geometrisk punkt"
+    guid:
+      en: "GUID"
+      sv: "GUID"
+    infinite_line:
+      en: "infinite line"
+      sv: "oändlig linje"
+    integer_affinity:
+      en: "integer affinity"
+      sv: "heltalsaffinitet"
+    ip_address:
+      en: "IP address"
+      sv: "IP-adress"
+    ip_network:
+      en: "IP network"
+      sv: "IP-nätverk"
+    ipv4_address:
+      en: "IPv4 address"
+      sv: "IPv4-adress"
+    ipv4_address_mariadb:
+      en: "IPv4 address (MariaDB)"
+      sv: "IPv4-adress (MariaDB)"
+    ipv6_address:
+      en: "IPv6 address"
+      sv: "IPv6-adress"
+    ipv6_address_mariadb:
+      en: "IPv6 address (MariaDB)"
+      sv: "IPv6-adress (MariaDB)"
+    json_document:
+      en: "JSON document"
+      sv: "JSON-dokument"
+    json_object:
+      en: "JSON object"
+      sv: "JSON-objekt"
+    json_text:
+      en: "JSON text"
+      sv: "JSON-text"
+    keys_of_k_to_values_of_v:
+      en: "keys of K to values of V"
+      sv: "nycklar av K till värden av V"
+    line_segment:
+      en: "line segment"
+      sv: "linjesegment"
+    list_of_t:
+      en: "list of T"
+      sv: "lista av T"
+    mac_address:
+      en: "MAC address"
+      sv: "MAC-adress"
+    mac_address_eui_64:
+      en: "MAC address, EUI-64"
+      sv: "MAC-adress, EUI-64"
+    n0_or_1:
+      en: "0 or 1"
+      sv: "0 eller 1"
+    n16_byte_integer:
+      en: "16 byte integer"
+      sv: "heltal på 16 byte"
+    n16_byte_unsigned_integer:
+      en: "16 byte unsigned integer"
+      sv: "teckenlöst heltal på 16 byte"
+    n1_byte_integer:
+      en: "1 byte integer"
+      sv: "heltal på 1 byte"
+    n1_byte_unsigned_integer:
+      en: "1 byte unsigned integer"
+      sv: "teckenlöst heltal på 1 byte"
+    n2_byte_integer:
+      en: "2 byte integer"
+      sv: "heltal på 2 byte"
+    n2_byte_unsigned_integer:
+      en: "2 byte unsigned integer"
+      sv: "teckenlöst heltal på 2 byte"
+    n32_byte_integer:
+      en: "32 byte integer"
+      sv: "heltal på 32 byte"
+    n32_byte_unsigned_integer:
+      en: "32 byte unsigned integer"
+      sv: "teckenlöst heltal på 32 byte"
+    n3_byte_integer:
+      en: "3 byte integer"
+      sv: "heltal på 3 byte"
+    n4_byte_float:
+      en: "4 byte float"
+      sv: "flyttal på 4 byte"
+    n4_byte_integer:
+      en: "4 byte integer"
+      sv: "heltal på 4 byte"
+    n4_byte_unsigned_integer:
+      en: "4 byte unsigned integer"
+      sv: "teckenlöst heltal på 4 byte"
+    n4_digit_year:
+      en: "4 digit year"
+      sv: "årtal med 4 siffror"
+    n8_byte_float:
+      en: "8 byte float"
+      sv: "flyttal på 8 byte"
+    n8_byte_integer:
+      en: "8 byte integer"
+      sv: "heltal på 8 byte"
+    n8_byte_unsigned_integer:
+      en: "8 byte unsigned integer"
+      sv: "teckenlöst heltal på 8 byte"
+    named_fields:
+      en: "named fields"
+      sv: "namngivna fält"
+    numeric_affinity:
+      en: "numeric affinity"
+      sv: "numerisk affinitet"
+    object_identifier:
+      en: "object identifier"
+      sv: "objektidentifierare"
+    one_of_a_list:
+      en: "one of a list"
+      sv: "ett värde ur en lista"
+    one_of_several_types:
+      en: "one of several types"
+      sv: "en av flera typer"
+    one_of_up_to_256_values:
+      en: "one of up to 256 values"
+      sv: "ett av upp till 256 värden"
+    one_of_up_to_65536_values:
+      en: "one of up to 65536 values"
+      sv: "ett av upp till 65536 värden"
+    position_in_a_hierarchy:
+      en: "position in a hierarchy"
+      sv: "position i en hierarki"
+    range_of_bigint:
+      en: "range of bigint"
+      sv: "intervall av bigint"
+    range_of_date:
+      en: "range of date"
+      sv: "intervall av date"
+    range_of_integer:
+      en: "range of integer"
+      sv: "intervall av integer"
+    range_of_numeric:
+      en: "range of numeric"
+      sv: "intervall av numeric"
+    range_of_timestamp:
+      en: "range of timestamp"
+      sv: "intervall av timestamp"
+    range_of_timestamptz:
+      en: "range of timestamptz"
+      sv: "intervall av timestamptz"
+    rectangle:
+      en: "rectangle"
+      sv: "rektangel"
+    row_change_counter:
+      en: "row change counter"
+      sv: "räknare för radändringar"
+    small_currency_amount:
+      en: "small currency amount"
+      sv: "litet valutabelopp"
+    spatial_line:
+      en: "spatial line"
+      sv: "geometrisk linje"
+    spatial_point:
+      en: "spatial point"
+      sv: "geometrisk punkt"
+    spatial_polygon:
+      en: "spatial polygon"
+      sv: "geometrisk polygon"
+    spatial_shape:
+      en: "spatial shape"
+      sv: "geometrisk form"
+    spatial_shape_on_the_globe:
+      en: "spatial shape on the globe"
+      sv: "geometrisk form på jordklotet"
+    stored_as_given:
+      en: "stored as given"
+      sv: "lagras som det anges"
+    t_or_null:
+      en: "T or NULL"
+      sv: "T eller NULL"
+    text:
+      en: "text"
+      sv: "text"
+    text_affinity:
+      en: "text affinity"
+      sv: "textaffinitet"
+    text_affinity_length_not_enforced:
+      en: "text affinity, length not enforced"
+      sv: "textaffinitet, längden kontrolleras inte"
+    text_search_document:
+      en: "text search document"
+      sv: "dokument för textsökning"
+    text_search_query:
+      en: "text search query"
+      sv: "fråga för textsökning"
+    text_up_to_16_mb:
+      en: "text up to 16 MB"
+      sv: "text på upp till 16 MB"
+    text_up_to_255_bytes:
+      en: "text up to 255 bytes"
+      sv: "text på upp till 255 byte"
+    text_up_to_2_gb:
+      en: "text up to 2 GB"
+      sv: "text på upp till 2 GB"
+    text_up_to_4_gb:
+      en: "text up to 4 GB"
+      sv: "text på upp till 4 GB"
+    text_up_to_64_kb:
+      en: "text up to 64 KB"
+      sv: "text på upp till 64 KB"
+    text_up_to_n_characters:
+      en: "text up to n characters"
+      sv: "text på upp till n tecken"
+    time_of_day:
+      en: "time of day"
+      sv: "tid på dygnet"
+    time_of_day_with_time_zone:
+      en: "time of day with time zone"
+      sv: "tid på dygnet med tidszon"
+    time_span:
+      en: "time span"
+      sv: "tidsrymd"
+    tinyint_1:
+      en: "tinyint(1)"
+      sv: "tinyint(1)"
+    true_or_false:
+      en: "true or false"
+      sv: "sant eller falskt"
+    unbounded_text:
+      en: "unbounded text"
+      sv: "text utan längdgräns"
+    unicode_text_up_to_2_gb:
+      en: "Unicode text up to 2 GB"
+      sv: "Unicode-text på upp till 2 GB"
+    unicode_text_up_to_n_characters:
+      en: "Unicode text up to n characters"
+      sv: "Unicode-text på upp till n tecken"
+    unique_row_id:
+      en: "unique row id"
+      sv: "unikt rad-id"
+    universally_unique_identifier:
+      en: "universally unique identifier"
+      sv: "universellt unik identifierare"
+    uuid_mariadb:
+      en: "UUID (MariaDB)"
+      sv: "UUID (MariaDB)"
+    value_of_any_type:
+      en: "value of any type"
+      sv: "värde av valfri typ"
+    xml_document:
+      en: "XML document"
+      sv: "XML-dokument"

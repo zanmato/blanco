@@ -1,0 +1,130 @@
+_version: 2
+palette:
+  placeholder:
+    en: "Type a command or search"
+    sv: "Skriv ett kommando eller sök"
+  search_actions:
+    en: "Search actions"
+    sv: "Sök åtgärder"
+  search_databases:
+    en: "Search databases"
+    sv: "Sök databaser"
+  connecting:
+    en: "Connecting…"
+    sv: "Ansluter…"
+  root_crumb:
+    en: "Commands"
+    sv: "Kommandon"
+  groups:
+    query:
+      en: "Query"
+      sv: "Fråga"
+    results:
+      en: "Results"
+      sv: "Resultat"
+    file:
+      en: "File"
+      sv: "Arkiv"
+    appearance:
+      en: "Appearance"
+      sv: "Utseende"
+    tab:
+      en: "Tab"
+      sv: "Flik"
+    connection:
+      en: "Connection"
+      sv: "Anslutning"
+    view:
+      en: "View"
+      sv: "Visa"
+    edit:
+      en: "Edit"
+      sv: "Redigera"
+    window:
+      en: "Window"
+      sv: "Fönster"
+    dashboard:
+      en: "Dashboard"
+      sv: "Instrumentpanel"
+    action:
+      en: "Action"
+      sv: "Åtgärd"
+    database:
+      en: "Database"
+      sv: "Databas"
+  commands:
+    open_themes_folder:
+      en: "Open themes folder"
+      sv: "Öppna temamappen"
+    new_snippet:
+      en: "New snippet"
+      sv: "Ny kodsnutt"
+    new_connection:
+      en: "New connection"
+      sv: "Ny anslutning"
+    import_connections:
+      en: "Import connections…"
+      sv: "Importera anslutningar…"
+    export_connections:
+      en: "Export connections…"
+      sv: "Exportera anslutningar…"
+    open_database_file:
+      en: "Open database file…"
+      sv: "Öppna databasfil…"
+    new_sqlite_database:
+      en: "New SQLite database…"
+      sv: "Ny SQLite-databas…"
+    new_duckdb_database:
+      en: "New DuckDB database…"
+      sv: "Ny DuckDB-databas…"
+    clear_comparison_selection:
+      en: "Clear comparison selection"
+      sv: "Rensa markeringen för jämförelse"
+    copy_as:
+      en: "Copy as %{format}"
+      sv: "Kopiera som %{format}"
+    export_as:
+      en: "Export as %{format}"
+      sv: "Exportera som %{format}"
+    render_whitespace:
+      en: "Render whitespace"
+      sv: "Visa blanksteg"
+    word_wrap:
+      en: "Word wrap"
+      sv: "Radbrytning"
+    move_tab_to_new_window:
+      en: "Move tab to new window"
+      sv: "Flytta fliken till ett nytt fönster"
+    new_dashboard:
+      en: "New dashboard…"
+      sv: "Ny instrumentpanel…"
+    open_dashboard:
+      en: "Open dashboard: %{name}"
+      sv: "Öppna instrumentpanel: %{name}"
+    go_to_tab:
+      en: "Go to tab: %{title}"
+      sv: "Gå till flik: %{title}"
+    theme:
+      en: "Theme: %{name}"
+      sv: "Tema: %{name}"
+    new_query:
+      en: "New query"
+      sv: "Ny fråga"
+    new_script:
+      en: "New script"
+      sv: "Nytt skript"
+    open_sql_file:
+      en: "Open SQL file…"
+      sv: "Öppna SQL-fil…"
+    run_sql_file:
+      en: "Run SQL file…"
+      sv: "Kör SQL-fil…"
+    back_up:
+      en: "Back up…"
+      sv: "Säkerhetskopiera…"
+    restore:
+      en: "Restore…"
+      sv: "Återställ…"
+    process_list:
+      en: "Process list"
+      sv: "Processlista"

@@ -467,14 +467,15 @@ impl SidebarTab {
         Self::History,
     ];
 
-    fn label(self) -> &'static str {
+    fn label(self) -> SharedString {
         match self {
-            Self::Connections => "Connections",
-            Self::Snippets => "Snippets",
-            Self::History => "History",
-            Self::OpenTabs => "Open Tabs",
-            Self::Dashboards => "Dashboards",
+            Self::Connections => t!("shell.sidebar.connections"),
+            Self::Snippets => t!("shell.sidebar.snippets"),
+            Self::History => t!("shell.sidebar.history"),
+            Self::OpenTabs => t!("shell.sidebar.open_tabs"),
+            Self::Dashboards => t!("shell.sidebar.dashboards"),
         }
+        .into()
     }
 
     fn icon(self) -> BlancoIcon {
@@ -575,6 +576,15 @@ impl BlancoApp {
             cx,
         );
         subscriptions.push(Self::wire_window_activation(saved.id, window, cx));
+        // The app menu bar copies the menus when it is made, so it takes
+        // them again in the new language.
+        subscriptions.push(
+            cx.observe_global::<crate::i18n::Locale>(|this: &mut Self, cx| {
+                if let Some(app_menu_bar) = &this.app_menu_bar {
+                    app_menu_bar.update(cx, |app_menu_bar, cx| app_menu_bar.reload(cx));
+                }
+            }),
+        );
         if let Some(update_manager) = UpdateManager::try_global(cx) {
             let update_state = update_manager.state.clone();
             subscriptions.push(cx.observe(&update_state, |_, _, cx| cx.notify()));
@@ -616,7 +626,10 @@ impl BlancoApp {
         window.defer(cx, move |window, cx| {
             window.push_notification(
                 Notification::new()
-                    .message(format!("Updated to v{version}, click to view changelog"))
+                    .message(SharedString::from(t!(
+                        "shell.update.updated",
+                        version = version
+                    )))
                     .with_type(NotificationType::Success)
                     .on_click(move |_, _, cx| {
                         cx.open_url(&UpdateManager::changelog_url(&format!("v{version}")));
@@ -871,15 +884,17 @@ impl BlancoApp {
             view
         });
         let remember_label = (!confirmation.rememberable_kinds.is_empty()).then(|| {
-            format!(
-                "Don't ask again for {}",
-                confirmation.rememberable_kinds.join(", ")
+            t!(
+                "shell.mcp_write.remember",
+                kinds = confirmation.rememberable_kinds.join(", ")
             )
+            .into_owned()
         });
-        let remember_tooltip = format!(
-            "Run it, and let this agent run these statements on {} without asking until it disconnects",
-            confirmation.connection_name
-        );
+        let remember_tooltip = t!(
+            "shell.mcp_write.remember_tooltip",
+            connection = confirmation.connection_name
+        )
+        .into_owned();
         window.open_dialog(cx, move |dialog, _, cx| {
             let reply_on_run = reply.clone();
             let reply_on_remember = reply.clone();
@@ -896,9 +911,10 @@ impl BlancoApp {
                             div()
                                 .text_sm()
                                 .text_color(cx.theme().muted_foreground)
-                                .child(format!(
-                                    "Connected through the MCP server, against {target}."
-                                )),
+                                .child(SharedString::from(t!(
+                                    "shell.mcp_write.connected_through",
+                                    target = target
+                                ))),
                         )
                         .child(
                             div()
@@ -911,28 +927,34 @@ impl BlancoApp {
                                 .child(sql_view.clone()),
                         )
                         .when(abandoned, |this| {
-                            this.child(div().text_sm().text_color(cx.theme().danger).child(
-                                "The agent stopped waiting for an answer. The statement will not run.",
-                            ))
+                            this.child(
+                                div()
+                                    .text_sm()
+                                    .text_color(cx.theme().danger)
+                                    .child(SharedString::from(t!("shell.mcp_write.abandoned"))),
+                            )
                         })
                         .when(waiting_count > 0, |this| {
                             this.child(
                                 div()
                                     .text_sm()
                                     .text_color(cx.theme().muted_foreground)
-                                    .child(if waiting_count == 1 {
-                                        "1 more request is waiting.".to_string()
+                                    .child(SharedString::from(if waiting_count == 1 {
+                                        t!("shell.mcp_write.waiting_one")
                                     } else {
-                                        format!("{waiting_count} more requests are waiting.")
-                                    }),
+                                        t!("shell.mcp_write.waiting_other", count = waiting_count)
+                                    })),
                             )
                         }),
                 )
                 .footer(
                     DialogFooter::new()
                         .child(
-                            DialogClose::new()
-                                .child(Button::new("mcp-write-cancel").label("Cancel").outline()),
+                            DialogClose::new().child(
+                                Button::new("mcp-write-cancel")
+                                    .label(t!("shell.common.cancel"))
+                                    .outline(),
+                            ),
                         )
                         .when_some(remember_label.clone(), |footer, label| {
                             footer.child(
@@ -952,7 +974,11 @@ impl BlancoApp {
                             DialogAction::new().child(
                                 Button::new("mcp-write-run")
                                     .danger()
-                                    .label(if is_prod { "Run on PROD" } else { "Run" })
+                                    .label(if is_prod {
+                                        t!("shell.mcp_write.run_on_prod")
+                                    } else {
+                                        t!("shell.mcp_write.run")
+                                    })
                                     .disabled(abandoned)
                                     .on_click(move |_, _, _| reply_on_run.answer(WriteAnswer::Run)),
                             ),
@@ -976,9 +1002,9 @@ impl BlancoApp {
             window.push_notification(
                 (
                     NotificationType::Error,
-                    SharedString::from(format!(
-                        "{} is not a SQLite or DuckDB database.",
-                        path.display()
+                    SharedString::from(t!(
+                        "shell.database_file.not_a_database",
+                        path = path.display()
                     )),
                 ),
                 cx,
@@ -1020,9 +1046,9 @@ impl BlancoApp {
                     window.push_notification(
                         (
                             NotificationType::Error,
-                            SharedString::from(format!(
-                                "{} already exists. Open it with File, Open instead.",
-                                path.display()
+                            SharedString::from(t!(
+                                "shell.database_file.already_exists",
+                                path = path.display()
                             )),
                         ),
                         cx,
@@ -1085,7 +1111,10 @@ impl BlancoApp {
                     window.push_notification(
                         (
                             NotificationType::Error,
-                            SharedString::from(format!("Could not create the database: {error:#}")),
+                            SharedString::from(t!(
+                                "shell.database_file.create_failed",
+                                error = format!("{error:#}")
+                            )),
                         ),
                         cx,
                     );
@@ -1340,30 +1369,33 @@ impl BlancoApp {
             return true;
         }
         let message = match unsaved.as_slice() {
-            [name] => format!("Your changes to {name} are lost if you close the window."),
-            names => format!(
-                "Your changes in {} tabs are lost if you close the window: {}.",
-                names.len(),
-                names.join(", ")
-            ),
+            [name] => t!("shell.close_window.unsaved_one", name = name).into_owned(),
+            names => t!(
+                "shell.close_window.unsaved_other",
+                count = names.len(),
+                names = names.join(", ")
+            )
+            .into_owned(),
         };
         let app = cx.entity().downgrade();
         window.open_dialog(cx, move |dialog, _, _| {
             let app = app.clone();
             dialog
-                .title("Close the window without saving?")
+                .title(SharedString::from(t!("shell.close_window.title")))
                 .child(message.clone())
                 .footer(
                     DialogFooter::new()
                         .child(
                             DialogClose::new().child(
-                                Button::new("close-window-cancel").label("Cancel").outline(),
+                                Button::new("close-window-cancel")
+                                    .label(t!("shell.common.cancel"))
+                                    .outline(),
                             ),
                         )
                         .child(
                             Button::new("close-window-discard")
                                 .danger()
-                                .label("Close Window")
+                                .label(t!("shell.close_window.close"))
                                 .on_click(move |_, window, cx| {
                                     app.update(cx, |app, _| app.close_confirmed = true)
                                         .log_err();
@@ -1538,7 +1570,7 @@ impl BlancoApp {
                     .items_center()
                     .gap_2()
                     .child(Icon::new(IconName::Search).size(px(14.)))
-                    .child("Search commands"),
+                    .child(SharedString::from(t!("shell.title_bar.search_commands"))),
             )
             .when_some(shortcut, |this, kbd| this.child(kbd))
     }
@@ -1552,8 +1584,11 @@ impl BlancoApp {
             UpdateState::UpToDate => None,
             UpdateState::Available(version) => Some(
                 button
-                    .label("Update")
-                    .tooltip(format!("Download Blanco {version}"))
+                    .label(t!("shell.update.update"))
+                    .tooltip(SharedString::from(t!(
+                        "shell.update.download_tooltip",
+                        version = version
+                    )))
                     .on_click(|_, window, cx| {
                         let download = UpdateManager::download_update(cx);
                         window
@@ -1566,8 +1601,9 @@ impl BlancoApp {
                                     window.push_notification(
                                         (
                                             NotificationType::Error,
-                                            SharedString::from(format!(
-                                                "Failed to download update: {error:#}"
+                                            SharedString::from(t!(
+                                                "shell.update.download_failed",
+                                                error = format!("{error:#}")
                                             )),
                                         ),
                                         cx,
@@ -1580,25 +1616,34 @@ impl BlancoApp {
             ),
             UpdateState::Manual(version) => Some(
                 button
-                    .label("Update")
-                    .tooltip(format!("Open the Blanco {version} release page"))
+                    .label(t!("shell.update.update"))
+                    .tooltip(SharedString::from(t!(
+                        "shell.update.release_page_tooltip",
+                        version = version
+                    )))
                     .on_click(move |_, _, cx| {
                         cx.open_url(&UpdateManager::changelog_url(&format!("v{version}")));
                     }),
             ),
-            UpdateState::Downloading(_) => Some(button.label("Downloading").loading(true)),
+            UpdateState::Downloading(_) => {
+                Some(button.label(t!("shell.update.downloading")).loading(true))
+            }
             UpdateState::Ready(version) => Some(
                 button
-                    .label("Restart")
-                    .tooltip(format!("Restart to update to Blanco {version}"))
+                    .label(t!("shell.update.restart"))
+                    .tooltip(SharedString::from(t!(
+                        "shell.update.restart_tooltip",
+                        version = version
+                    )))
                     .on_click(|_, window, cx| {
                         if let Err(error) = UpdateManager::apply_pending_update(cx) {
                             tracing::error!("Failed to apply update: {error:#}");
                             window.push_notification(
                                 (
                                     NotificationType::Error,
-                                    SharedString::from(format!(
-                                        "Failed to apply update: {error:#}"
+                                    SharedString::from(t!(
+                                        "shell.update.apply_failed",
+                                        error = format!("{error:#}")
                                     )),
                                 ),
                                 cx,
@@ -1618,7 +1663,7 @@ impl BlancoApp {
             } else {
                 Icon::new(IconName::PanelLeftClose).size_4()
             })
-            .tooltip("Toggle Sidebar")
+            .tooltip(SharedString::from(t!("shell.title_bar.toggle_sidebar")))
             .on_click(|_, window, cx| {
                 window.dispatch_action(Box::new(ToggleSidebar), cx);
             })
@@ -1682,7 +1727,7 @@ impl BlancoApp {
                             .size_6()
                             .text_color(inactive),
                     )
-                    .tooltip("Settings")
+                    .tooltip(SharedString::from(t!("shell.sidebar.settings")))
                     .on_click(|_, window, cx| {
                         window.dispatch_action(Box::new(OpenSettings), cx);
                     }),
@@ -2019,7 +2064,7 @@ impl BlancoApp {
                 None => window.push_notification(
                     (
                         NotificationType::Info,
-                        "Select a table in the sidebar to import into.",
+                        SharedString::from(t!("shell.sidebar.select_table_to_import")),
                     ),
                     cx,
                 ),
@@ -2041,7 +2086,7 @@ impl BlancoApp {
                 None => window.push_notification(
                     (
                         NotificationType::Info,
-                        "Select a table in the sidebar to export.",
+                        SharedString::from(t!("shell.sidebar.select_table_to_export")),
                     ),
                     cx,
                 ),
@@ -2110,7 +2155,7 @@ impl BlancoApp {
             files: true,
             directories: false,
             multiple: true,
-            prompt: Some("Open database".into()),
+            prompt: Some(t!("shell.database_file.open_prompt").into()),
         });
         cx.spawn_in(window, async move |app, cx| {
             let Ok(Ok(Some(paths))) = paths.await else {
@@ -2267,8 +2312,12 @@ impl BlancoApp {
     ) {
         let context = &action.context;
         let title = match &context.schema_name {
-            Some(schema) => format!("{}.{} script", context.database_name, schema),
-            None => format!("{} script", context.database_name),
+            Some(schema) => t!(
+                "shell.tabs.script_title",
+                name = format!("{}.{}", context.database_name, schema)
+            )
+            .into_owned(),
+            None => t!("shell.tabs.script_title", name = context.database_name).into_owned(),
         };
 
         self.editor_panel.update(cx, |panel, cx| {
@@ -2398,8 +2447,13 @@ impl BlancoApp {
         let schema_name = action.context.schema_name.clone();
         let object_name = action.object_name.clone();
         let kind = action.kind;
-        let activity = ActivityReporter::global(cx)
-            .begin(format!("{}: loading DDL", action.context.connection_name));
+        let activity = ActivityReporter::global(cx).begin(
+            t!(
+                "shell.activity.loading_ddl",
+                connection = action.context.connection_name
+            )
+            .into_owned(),
+        );
 
         cx.spawn_in(window, async move |_, window| {
             let _activity = activity;
@@ -2550,7 +2604,7 @@ impl BlancoApp {
             let content_clone = modal_content.clone();
 
             modal
-                .title("New Connection")
+                .title(SharedString::from(t!("shell.connection_dialog.new_title")))
                 .h(gpui::px(700.))
                 .w(gpui::px(650.))
                 .child(modal_content.clone())
@@ -2558,7 +2612,7 @@ impl BlancoApp {
                     DialogFooter::new()
                         .child(
                             Button::new("test-connection")
-                                .label("Test Connection")
+                                .label(t!("shell.connection_dialog.test"))
                                 .on_click({
                                     let content = content_clone.clone();
                                     move |_, window, cx| {
@@ -2571,14 +2625,14 @@ impl BlancoApp {
                         .child(
                             h_flex()
                                 .gap_2()
-                                .child(Button::new("cancel").label("Cancel").outline().on_click(
+                                .child(Button::new("cancel").label(t!("shell.common.cancel")).outline().on_click(
                                     |_, window, cx| {
                                         window.close_dialog(cx);
                                     },
                                 ))
                                 .child(
                                     DialogAction::new()
-                                        .child(Button::new("ok").primary().label("Save")),
+                                        .child(Button::new("ok").primary().label(t!("shell.common.save"))),
                                 ),
                         ),
                 )
@@ -2666,7 +2720,7 @@ impl BlancoApp {
                                         Ok(()) => window.push_notification(
                                             (
                                                 NotificationType::Success,
-                                                "Connection saved successfully",
+                                                SharedString::from(t!("shell.connection_dialog.saved")),
                                             ),
                                             cx,
                                         ),
@@ -2675,8 +2729,9 @@ impl BlancoApp {
                                             window.push_notification(
                                                 (
                                                     NotificationType::Error,
-                                                    SharedString::from(format!(
-                                                        "Failed to save connection: {error:#}"
+                                                    SharedString::from(t!(
+                                                        "shell.connection_dialog.save_failed",
+                                                        error = format!("{error:#}")
                                                     )),
                                                 ),
                                                 cx,
@@ -2691,7 +2746,7 @@ impl BlancoApp {
                             window.push_notification(
                                 (
                                     NotificationType::Error,
-                                    "Please fill in all required fields",
+                                    SharedString::from(t!("shell.connection_dialog.required_fields")),
                                 ),
                                 cx,
                             );
@@ -2733,8 +2788,9 @@ impl BlancoApp {
                     window.push_notification(
                         (
                             NotificationType::Error,
-                            SharedString::from(format!(
-                                "Failed to load connection credentials: {error:#}"
+                            SharedString::from(t!(
+                                "shell.connection_dialog.credentials_failed",
+                                error = format!("{error:#}")
                             )),
                         ),
                         cx,
@@ -2764,7 +2820,7 @@ impl BlancoApp {
             let content_clone = modal_content.clone();
 
             modal
-                .title("Edit Connection")
+                .title(SharedString::from(t!("shell.connection_dialog.edit_title")))
                 .h(gpui::px(700.))
                 .w(gpui::px(650.))
                 .child(modal_content.clone())
@@ -2772,7 +2828,7 @@ impl BlancoApp {
                     DialogFooter::new()
                         .child(
                             Button::new("test-connection")
-                                .label("Test Connection")
+                                .label(t!("shell.connection_dialog.test"))
                                 .on_click({
                                     let content = content_clone.clone();
                                     move |_, window, cx| {
@@ -2785,15 +2841,17 @@ impl BlancoApp {
                         .child(
                             h_flex()
                                 .gap_2()
-                                .child(Button::new("cancel").label("Cancel").outline().on_click(
-                                    |_, window, cx| {
-                                        window.close_dialog(cx);
-                                    },
-                                ))
                                 .child(
-                                    DialogAction::new()
-                                        .child(Button::new("ok").primary().label("Save")),
-                                ),
+                                    Button::new("cancel")
+                                        .label(t!("shell.common.cancel"))
+                                        .outline()
+                                        .on_click(|_, window, cx| {
+                                            window.close_dialog(cx);
+                                        }),
+                                )
+                                .child(DialogAction::new().child(
+                                    Button::new("ok").primary().label(t!("shell.common.save")),
+                                )),
                         ),
                 )
                 .on_ok({
@@ -2837,7 +2895,9 @@ impl BlancoApp {
                                         Ok(()) => window.push_notification(
                                             (
                                                 NotificationType::Success,
-                                                "Connection updated successfully",
+                                                SharedString::from(t!(
+                                                    "shell.connection_dialog.updated"
+                                                )),
                                             ),
                                             cx,
                                         ),
@@ -2848,8 +2908,9 @@ impl BlancoApp {
                                             window.push_notification(
                                                 (
                                                     NotificationType::Error,
-                                                    SharedString::from(format!(
-                                                        "Failed to update connection: {error:#}"
+                                                    SharedString::from(t!(
+                                                        "shell.connection_dialog.update_failed",
+                                                        error = format!("{error:#}")
                                                     )),
                                                 ),
                                                 cx,
@@ -2864,7 +2925,9 @@ impl BlancoApp {
                             window.push_notification(
                                 (
                                     NotificationType::Error,
-                                    "Please fill in all required fields",
+                                    SharedString::from(t!(
+                                        "shell.connection_dialog.required_fields"
+                                    )),
                                 ),
                                 cx,
                             );
@@ -3350,7 +3413,8 @@ pub(crate) fn init_menus(cx: &mut App) {
     // User-customizable shortcuts, resolved from settings (defaults overlaid
     // with any user overrides).
     let settings = AppSettings::global(cx).settings.clone();
-    cx.bind_keys(crate::keybindings::customizable_key_bindings(&settings));
+    let bindings = crate::keybindings::customizable_key_bindings(&settings, cx);
+    cx.bind_keys(bindings);
 
     // Quit is platform-fixed and not user-configurable.
     cx.bind_keys([
@@ -3370,11 +3434,17 @@ pub(crate) fn init_menus(cx: &mut App) {
         gpui::KeyBinding::new("f2", StartCellEdit, Some("DataTable")),
         gpui::KeyBinding::new("tab", EditNextCell, Some("CellEditor")),
         gpui::KeyBinding::new("shift-tab", EditPrevCell, Some("CellEditor")),
-        gpui::KeyBinding::new("secondary-r", ToggleCellExpression, Some("CellEditor")),
-        gpui::KeyBinding::new(
+        crate::keybindings::host_key_binding(
+            "secondary-r",
+            ToggleCellExpression,
+            Some("CellEditor"),
+            cx,
+        ),
+        crate::keybindings::host_key_binding(
             "secondary-r",
             ToggleCellExpression,
             Some("ExpandedCellEditor"),
+            cx,
         ),
         // The binary viewer holds no input whose own escape binding would
         // reach the overlay, and the pair editor may have none focused.
@@ -3441,6 +3511,12 @@ pub(crate) fn init_menus(cx: &mut App) {
         ),
     ]);
 
+    set_menus(cx);
+}
+
+/// Hand the menus to the platform, and on Linux and Windows to the app menu
+/// bar. Done again when the language changes, since both keep their labels.
+pub(crate) fn set_menus(cx: &mut App) {
     cx.set_menus(build_menu());
 
     if !cfg!(target_os = "macos") {
@@ -3453,79 +3529,82 @@ fn build_menu() -> Vec<Menu> {
     // macOS always shows the first menu as the application menu, titled with
     // the app's name, and that is where Settings and Quit belong there.
     let mut file_items = vec![
-        MenuItem::action("New Window", NewWindow),
+        MenuItem::action(t!("menu.new_window"), NewWindow),
         MenuItem::separator(),
         MenuItem::submenu(Menu {
-            name: "New".into(),
+            name: t!("menu.new").into(),
             items: vec![
-                MenuItem::action("SQLite Database…", NewSqliteDatabase),
-                MenuItem::action("DuckDB Database…", NewDuckdbDatabase),
+                MenuItem::action(t!("menu.new_sqlite_database"), NewSqliteDatabase),
+                MenuItem::action(t!("menu.new_duckdb_database"), NewDuckdbDatabase),
             ],
             disabled: false,
         }),
         MenuItem::submenu(Menu {
-            name: "Open".into(),
-            items: vec![MenuItem::action("Database File…", OpenDatabaseFile)],
+            name: t!("menu.open").into(),
+            items: vec![MenuItem::action(
+                t!("menu.open_database_file"),
+                OpenDatabaseFile,
+            )],
             disabled: false,
         }),
-        MenuItem::action("Save", SaveTab),
-        MenuItem::action("Save As…", SaveTabAs),
+        MenuItem::action(t!("menu.save"), SaveTab),
+        MenuItem::action(t!("menu.save_as"), SaveTabAs),
         MenuItem::separator(),
-        MenuItem::action("New Connection", OpenNewConnectionModal),
-        MenuItem::action("Import Connections…", ImportConnections),
-        MenuItem::action("Export Connections…", ExportConnections),
-        MenuItem::action("Toggle Terminal", OpenTerminal),
-        MenuItem::action("New Snippet", NewSnippet),
+        MenuItem::action(t!("menu.new_connection"), OpenNewConnectionModal),
+        MenuItem::action(t!("menu.import_connections"), ImportConnections),
+        MenuItem::action(t!("menu.export_connections"), ExportConnections),
+        MenuItem::action(t!("menu.toggle_terminal"), OpenTerminal),
+        MenuItem::action(t!("menu.new_snippet"), NewSnippet),
         MenuItem::separator(),
-        MenuItem::action("Close Window", CloseWindow),
+        MenuItem::action(t!("menu.close_window"), CloseWindow),
     ];
     let mut menus = Vec::new();
     if cfg!(target_os = "macos") {
         menus.push(Menu {
             name: "Blanco".into(),
             items: vec![
-                MenuItem::action("Settings…", OpenSettings),
+                MenuItem::action(t!("menu.settings_dialog"), OpenSettings),
                 MenuItem::separator(),
-                MenuItem::action("Quit Blanco", Quit),
+                MenuItem::action(t!("menu.quit_blanco"), Quit),
             ],
             disabled: false,
         });
     } else {
         file_items.extend([
-            MenuItem::action("Settings", OpenSettings),
+            MenuItem::action(t!("menu.settings"), OpenSettings),
             MenuItem::separator(),
-            MenuItem::action("Quit", Quit),
+            MenuItem::action(t!("menu.quit"), Quit),
         ]);
     }
     menus.extend([
         Menu {
-            name: "File".into(),
+            name: t!("menu.file").into(),
             items: file_items,
             disabled: false,
         },
         Menu {
-            name: "Edit".into(),
+            name: t!("menu.edit").into(),
             items: vec![
-                MenuItem::action("Undo", gpui_component::input::Undo),
-                MenuItem::action("Redo", gpui_component::input::Redo),
+                MenuItem::action(t!("menu.undo"), gpui_component::input::Undo),
+                MenuItem::action(t!("menu.redo"), gpui_component::input::Redo),
                 MenuItem::separator(),
-                MenuItem::action("Cut", gpui_component::input::Cut),
-                MenuItem::action("Copy", gpui_component::input::Copy),
-                MenuItem::action("Paste", gpui_component::input::Paste),
+                MenuItem::action(t!("menu.cut"), gpui_component::input::Cut),
+                MenuItem::action(t!("menu.copy"), gpui_component::input::Copy),
+                MenuItem::action(t!("menu.paste"), gpui_component::input::Paste),
                 MenuItem::separator(),
-                MenuItem::action("Select All", gpui_component::input::SelectAll),
+                MenuItem::action(t!("menu.select_all"), gpui_component::input::SelectAll),
             ],
             disabled: false,
         },
         Menu {
-            name: "View".into(),
+            name: t!("menu.view").into(),
             items: vec![
-                MenuItem::action("Render Whitespace", ToggleRenderWhitespace),
-                MenuItem::action("Word Wrap", ToggleWordWrap),
+                MenuItem::action(t!("menu.render_whitespace"), ToggleRenderWhitespace),
+                MenuItem::action(t!("menu.word_wrap"), ToggleWordWrap),
                 MenuItem::separator(),
-                MenuItem::action("Increase Editor Font Size", IncreaseEditorFontSize),
-                MenuItem::action("Decrease Editor Font Size", DecreaseEditorFontSize),
-                MenuItem::action("Reset Editor Font Size", ResetEditorFontSize),
+                MenuItem::action(t!("menu.increase_editor_font_size"), IncreaseEditorFontSize),
+                MenuItem::action(t!("menu.decrease_editor_font_size"), DecreaseEditorFontSize),
+                MenuItem::action(t!("menu.reset_editor_font_size"), ResetEditorFontSize),
             ],
             disabled: false,
         },

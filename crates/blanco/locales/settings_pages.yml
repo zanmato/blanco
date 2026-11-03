@@ -1,0 +1,627 @@
+_version: 2
+# Settings pages: formatter, CSV copy, environments and keybindings. See the
+# glossary at the top of app.yml.
+settings:
+  formatter:
+    title:
+      en: Formatter
+      sv: Formaterare
+    indentation:
+      en: Indentation
+      sv: Indrag
+    indented_joins:
+      en: Indented Joins
+      sv: Indenterade JOIN
+    indented_joins_description:
+      en: Indent JOIN clauses relative to the FROM clause.
+      sv: Dra in JOIN-satser i förhållande till FROM-satsen.
+    indented_ctes:
+      en: Indented CTEs
+      sv: Indenterade CTE:er
+    indented_ctes_description:
+      en: Indent CTE contents within the WITH clause.
+      sv: Dra in innehållet i CTE:er inom WITH-satsen.
+    indented_using_on:
+      en: Indented USING/ON
+      sv: Indenterade USING/ON
+    indented_using_on_description:
+      en: Indent USING and ON keywords within JOIN clauses.
+      sv: Dra in nyckelorden USING och ON i JOIN-satser.
+    indented_on_contents:
+      en: Indented ON Contents
+      sv: Indenterat innehåll efter ON
+    indented_on_contents_description:
+      en: Indent the contents after ON in JOIN conditions.
+      sv: Dra in det som följer efter ON i JOIN-villkor.
+    indented_then:
+      en: Indented THEN
+      sv: Indenterad THEN
+    indented_then_description:
+      en: Indent THEN keyword in CASE expressions.
+      sv: Dra in nyckelordet THEN i CASE-uttryck.
+    indented_then_contents:
+      en: Indented THEN Contents
+      sv: Indenterat innehåll efter THEN
+    indented_then_contents_description:
+      en: Indent the contents after THEN in CASE expressions.
+      sv: Dra in det som följer efter THEN i CASE-uttryck.
+    allow_implicit_indents:
+      en: Allow Implicit Indents
+      sv: Tillåt implicita indrag
+    allow_implicit_indents_description:
+      en: Allow implicit indentation in certain contexts.
+      sv: Tillåt implicita indrag i vissa sammanhang.
+    trailing_comments:
+      en: Trailing Comments
+      sv: Avslutande kommentarer
+    trailing_comments_before:
+      en: Before the line
+      sv: Före raden
+    trailing_comments_after:
+      en: After the line
+      sv: Efter raden
+    trailing_comments_description:
+      en: Where to place trailing comments when reflowing long lines.
+      sv: Var avslutande kommentarer placeras när långa rader bryts om.
+    line_length:
+      en: Line Length
+      sv: Radlängd
+    max_line_length:
+      en: Max Line Length
+      sv: Största radlängd
+    max_line_length_description:
+      en: Maximum line length before wrapping (0 disables).
+      sv: Största radlängd innan raden bryts (0 stänger av).
+    excluded_rules:
+      en: Excluded Rules
+      sv: Undantagna regler
+    exclude_rules:
+      en: Exclude Rules
+      sv: Undanta regler
+    exclude_rules_description:
+      en: Rules to exclude from linting and formatting.
+      sv: Regler som undantas från lintning och formatering.
+    capitalisation:
+      en: Capitalisation
+      sv: Versaler och gemener
+    keywords:
+      en: Keywords
+      sv: Nyckelord
+    keywords_description:
+      en: Capitalisation policy for SQL keywords (SELECT, FROM, etc.).
+      sv: Versaler eller gemener i SQL-nyckelord (SELECT, FROM osv.).
+    identifiers:
+      en: Identifiers
+      sv: Identifierare
+    identifiers_description:
+      en: Capitalisation policy for unquoted identifiers.
+      sv: Versaler eller gemener i identifierare utan citattecken.
+    functions:
+      en: Functions
+      sv: Funktioner
+    functions_description:
+      en: Capitalisation policy for function names.
+      sv: Versaler eller gemener i funktionsnamn.
+    literals:
+      en: Literals
+      sv: Literaler
+    literals_description:
+      en: Capitalisation policy for null and boolean literals.
+      sv: Versaler eller gemener i null och booleska literaler.
+    data_types:
+      en: Data Types
+      sv: Datatyper
+    data_types_description:
+      en: Capitalisation policy for data type names.
+      sv: Versaler eller gemener i namn på datatyper.
+    case_consistent:
+      en: Consistent
+      sv: Konsekvent
+    case_upper:
+      en: Upper
+      sv: Versaler
+    case_lower:
+      en: Lower
+      sv: Gemener
+    case_capitalise:
+      en: Capitalise
+      sv: Inledande versal
+    case_pascal:
+      en: Pascal
+      sv: Pascal
+    convention:
+      en: Convention
+      sv: Konventioner
+    trailing_commas:
+      en: Trailing Commas
+      sv: Avslutande kommatecken
+    trailing_commas_forbid:
+      en: Forbid
+      sv: Förbjud
+    trailing_commas_require:
+      en: Require
+      sv: Kräv
+    trailing_commas_description:
+      en: Whether to require or forbid trailing commas in SELECT clauses.
+      sv: Om avslutande kommatecken i SELECT-satser krävs eller förbjuds.
+    multiline_semicolon_newline:
+      en: Multiline Semicolon on New Line
+      sv: Semikolon på ny rad efter flerradiga satser
+    multiline_semicolon_newline_description:
+      en: Place semicolons on a new line for multiline statements.
+      sv: Placera semikolon på en ny rad efter satser som går över flera rader.
+    require_final_semicolon:
+      en: Require Final Semicolon
+      sv: Kräv avslutande semikolon
+    require_final_semicolon_description:
+      en: Require a semicolon at the end of the final statement.
+      sv: Kräv semikolon efter den sista satsen.
+    rule_groups:
+      aliasing:
+        en: Aliasing
+        sv: Alias
+      ambiguous:
+        en: Ambiguous
+        sv: Tvetydigheter
+      capitalisation:
+        en: Capitalisation
+        sv: Versaler och gemener
+      convention:
+        en: Convention
+        sv: Konventioner
+      layout:
+        en: Layout
+        sv: Layout
+      references:
+        en: References
+        sv: Referenser
+      structure:
+        en: Structure
+        sv: Struktur
+    rules:
+      AL01:
+        en: Implicit/explicit aliasing of table.
+        sv: Implicit eller explicit alias för tabeller.
+      AL02:
+        en: Implicit/explicit aliasing of columns.
+        sv: Implicit eller explicit alias för kolumner.
+      AL03:
+        en: Column expression without alias. Use explicit AS clause.
+        sv: Kolumnuttryck utan alias. Använd ett explicit AS.
+      AL04:
+        en: Table aliases should be unique within each clause.
+        sv: Tabellalias bör vara unika inom varje sats.
+      AL05:
+        en: Tables should not be aliased if that alias is not used.
+        sv: Tabeller bör inte få ett alias som inte används.
+      AL06:
+        en: Identify aliases in from clause and join conditions.
+        sv: Identifiera alias i FROM-satser och JOIN-villkor.
+      AL07:
+        en: Avoid table aliases in from clauses and join conditions.
+        sv: Undvik tabellalias i FROM-satser och JOIN-villkor.
+      AL08:
+        en: Column aliases should be unique within each clause.
+        sv: Kolumnalias bör vara unika inom varje sats.
+      AL09:
+        en: Find self-aliased columns and fix them.
+        sv: Hitta och rätta kolumner som har sig själva som alias.
+      AM01:
+        en: Ambiguous use of DISTINCT in a SELECT with GROUP BY.
+        sv: Tvetydig användning av DISTINCT i en SELECT med GROUP BY.
+      AM02:
+        en: UNION not immediately followed by DISTINCT or ALL.
+        sv: UNION följs inte direkt av DISTINCT eller ALL.
+      AM03:
+        en: Ambiguous ordering directions for columns in ORDER BY.
+        sv: Tvetydig sorteringsriktning för kolumner i ORDER BY.
+      AM04:
+        en: Outermost query should produce known number of columns.
+        sv: Den yttersta frågan bör ge ett känt antal kolumner.
+      AM05:
+        en: Join clauses should be fully qualified.
+        sv: JOIN-satser bör anges fullständigt.
+      AM06:
+        en: Inconsistent column references in GROUP BY/ORDER BY.
+        sv: Inkonsekventa kolumnreferenser i GROUP BY eller ORDER BY.
+      AM07:
+        en: All queries in set expression should return same number of columns.
+        sv: Alla frågor i ett mängduttryck bör returnera lika många kolumner.
+      AM08:
+        en: Implicit cross join detected.
+        sv: Implicit CROSS JOIN hittades.
+      AM09:
+        en: LIMIT/OFFSET without ORDER BY.
+        sv: LIMIT eller OFFSET utan ORDER BY.
+      CP01:
+        en: Inconsistent capitalisation of keywords.
+        sv: Inkonsekventa versaler i nyckelord.
+      CP02:
+        en: Inconsistent capitalisation of unquoted identifiers.
+        sv: Inkonsekventa versaler i identifierare utan citattecken.
+      CP03:
+        en: Inconsistent capitalisation of function names.
+        sv: Inkonsekventa versaler i funktionsnamn.
+      CP04:
+        en: Inconsistent capitalisation of boolean/null literal.
+        sv: Inkonsekventa versaler i booleska literaler och null.
+      CP05:
+        en: Inconsistent capitalisation of datatypes.
+        sv: Inkonsekventa versaler i datatyper.
+      CV01:
+        en: Consistent usage of != or <> for "not equal to".
+        sv: Konsekvent användning av != eller <> för ”inte lika med”.
+      CV02:
+        en: Use COALESCE instead of IFNULL or NVL.
+        sv: Använd COALESCE i stället för IFNULL eller NVL.
+      CV03:
+        en: Trailing commas within select clause.
+        sv: Avslutande kommatecken i SELECT-satsen.
+      CV04:
+        en: Use consistent syntax to express count number of rows.
+        sv: Använd en konsekvent syntax för att räkna rader.
+      CV05:
+        en: Relational operators should not be used to check for NULL.
+        sv: Jämförelseoperatorer bör inte användas för att testa NULL.
+      CV06:
+        en: Statements must end with a semi-colon.
+        sv: Satser måste avslutas med semikolon.
+      CV07:
+        en: Top-level statements should not be wrapped in brackets.
+        sv: Satser på översta nivån bör inte omges av parenteser.
+      CV08:
+        en: Use LEFT JOIN instead of RIGHT JOIN.
+        sv: Använd LEFT JOIN i stället för RIGHT JOIN.
+      CV09:
+        en: Block a list of configurable words from being used.
+        sv: Spärra ord från en konfigurerbar lista.
+      CV10:
+        en: Consistent usage of preferred quotes for quoted literals.
+        sv: Konsekvent användning av föredragna citattecken i strängliteraler.
+      CV11:
+        en: Enforce consistent type casting style.
+        sv: Kräv ett konsekvent sätt att skriva typkonverteringar.
+      CV12:
+        en: Join conditions should use the JOIN ... ON syntax.
+        sv: JOIN-villkor bör skrivas med JOIN ... ON.
+      LT01:
+        en: Inappropriate spacing.
+        sv: Olämpliga mellanrum.
+      LT02:
+        en: Incorrect indentation.
+        sv: Felaktigt indrag.
+      LT03:
+        en: Operators should follow a standard for newlines.
+        sv: Operatorer bör följa en standard för radbrytningar.
+      LT04:
+        en: Leading/Trailing comma enforcement.
+        sv: Kommatecken först eller sist på raden.
+      LT05:
+        en: Line is too long.
+        sv: Raden är för lång.
+      LT06:
+        en: Function name not immediately followed by parenthesis.
+        sv: Funktionsnamnet följs inte direkt av en parentes.
+      LT07:
+        en: WITH clause closing bracket should be on a new line.
+        sv: WITH-satsens avslutande parentes bör stå på en ny rad.
+      LT08:
+        en: Blank line expected after CTE closing bracket.
+        sv: En tom rad förväntas efter CTE:ns avslutande parentes.
+      LT09:
+        en: Select targets should be on a new line unless there is only one.
+        sv: Det som väljs i SELECT bör stå på var sin rad, utom när det bara är en sak.
+      LT10:
+        en: SELECT modifiers must be on the same line as SELECT.
+        sv: Modifierare till SELECT måste stå på samma rad som SELECT.
+      LT11:
+        en: Set operators should be surrounded by newlines.
+        sv: Mängdoperatorer bör omges av radbrytningar.
+      LT12:
+        en: Files must end with a single trailing newline.
+        sv: Filer måste sluta med exakt en radbrytning.
+      LT13:
+        en: Files must not begin with newlines or whitespace.
+        sv: Filer får inte börja med radbrytningar eller blanksteg.
+      LT14:
+        en: Keyword clause newline enforcement.
+        sv: Radbrytningar kring satser som inleds med nyckelord.
+      LT15:
+        en: Too many consecutive blank lines.
+        sv: För många tomma rader i följd.
+      RF01:
+        en: References cannot reference objects not present in FROM.
+        sv: Referenser kan inte peka på objekt som saknas i FROM.
+      RF02:
+        en: References should be qualified if select has more than one table.
+        sv: Referenser bör kvalificeras när SELECT har mer än en tabell.
+      RF03:
+        en: References should be consistent in single-table statements.
+        sv: Referenser bör vara konsekventa i satser med en enda tabell.
+      RF04:
+        en: Keywords should not be used as identifiers.
+        sv: Nyckelord bör inte användas som identifierare.
+      RF05:
+        en: Do not use special characters in identifiers.
+        sv: Använd inte specialtecken i identifierare.
+      RF06:
+        en: Unnecessary quoted identifier.
+        sv: Identifierare med onödiga citattecken.
+      ST01:
+        en: Do not specify ELSE NULL in a CASE WHEN (redundant).
+        sv: Ange inte ELSE NULL i CASE WHEN (överflödigt).
+      ST02:
+        en: Unnecessary CASE statement.
+        sv: Onödigt CASE-uttryck.
+      ST03:
+        en: Query defines a CTE but does not use it.
+        sv: Frågan definierar en CTE men använder den inte.
+      ST04:
+        en: Nested CASE in ELSE could be flattened.
+        sv: Nästlad CASE i ELSE kan plattas ut.
+      ST05:
+        en: Join/From clauses should not contain subqueries. Use CTEs.
+        sv: JOIN- och FROM-satser bör inte innehålla underfrågor. Använd CTE:er.
+      ST06:
+        en: Select wildcards then simple targets before calculations.
+        sv: Välj jokertecken och sedan enkla kolumner före beräkningar.
+      ST07:
+        en: Prefer specifying join keys instead of USING.
+        sv: Ange hellre kopplingsnycklar än USING.
+      ST08:
+        en: Looking for DISTINCT before a bracket.
+        sv: DISTINCT följt av en parentes.
+      ST09:
+        en: Joins should list earlier/later table first.
+        sv: JOIN bör ange den tidigare eller senare tabellen först.
+      ST10:
+        en: Redundant constant expression.
+        sv: Överflödigt konstant uttryck.
+      ST11:
+        en: Joined table not referenced in query.
+        sv: Kopplad tabell används inte i frågan.
+      ST12:
+        en: Remove consecutive semicolons.
+        sv: Ta bort semikolon som följer direkt på varandra.
+  csv:
+    copy_as_csv:
+      en: Copy as CSV
+      sv: Kopiera som CSV
+    delimiter:
+      en: Delimiter
+      sv: Avgränsare
+    custom_delimiter:
+      en: Custom Delimiter
+      sv: Egen avgränsare
+    custom_delimiter_description:
+      en: The character used when Delimiter is Custom.
+      sv: Tecknet som används när avgränsaren är en egen.
+    header_row:
+      en: Header Row
+      sv: Rubrikrad
+    header_row_description:
+      en: Write the column names as the first line.
+      sv: Skriv kolumnnamnen på första raden.
+    null_text:
+      en: NULL Text
+      sv: Text för NULL
+    null_text_description:
+      en: Written for NULL values. Empty by default.
+      sv: Skrivs för NULL-värden. Tom som standard.
+    quote_character:
+      en: Quote Character
+      sv: Citattecken
+    quote_values:
+      en: Quote Values
+      sv: Citera värden
+    quote_values_description:
+      en: When needed quotes values holding the delimiter, the quote character or a line break. NULL is never quoted.
+      sv: Vid behov citeras värden som innehåller avgränsaren, citattecknet eller en radbrytning. NULL citeras aldrig.
+    quoting_always:
+      en: Always
+      sv: Alltid
+    quoting_when_needed:
+      en: When needed
+      sv: Vid behov
+    quoting_never:
+      en: Never
+      sv: Aldrig
+    replace_line_breaks:
+      en: Replace Line Breaks
+      sv: Ersätt radbrytningar
+    replace_line_breaks_description:
+      en: Replace line breaks inside values, so each row stays on one line.
+      sv: Ersätt radbrytningar i värden, så att varje rad hålls på en textrad.
+    line_break_replacement:
+      en: Line Break Replacement
+      sv: Ersättning för radbrytningar
+  environments:
+    title:
+      en: Environments
+      sv: Miljöer
+    tags:
+      en: Tags
+      sv: Taggar
+    environment_tags:
+      en: Environment Tags
+      sv: Miljötaggar
+    environment_tags_description:
+      en: Tag connections with an environment.
+      sv: Tagga anslutningar med en miljö.
+    tag_name:
+      en: Tag name
+      sv: Taggnamn
+    tag_exists:
+      en: There is already a tag called %{name}.
+      sv: Det finns redan en tagg som heter %{name}.
+    confirm_writes:
+      en: Confirm writes
+      sv: Bekräfta skrivningar
+    delete:
+      en: Delete
+      sv: Ta bort
+    add:
+      en: Add
+      sv: Lägg till
+  keybindings:
+    title:
+      en: Keybindings
+      sv: Kortkommandon
+    description:
+      en: Changes take effect after a restart.
+      sv: Ändringarna gäller efter en omstart.
+    default:
+      en: Default
+      sv: Standard
+    unbound_by_default:
+      en: Unbound by default
+      sv: Inget kortkommando som standard
+    also_used_by:
+      en: Also used by %{actions}
+      sv: Används även av %{actions}
+    reset_to_default:
+      en: Reset to Default
+      sv: Återställ till standard
+    press_shortcut:
+      en: Press a shortcut
+      sv: Tryck på ett kortkommando
+    not_set:
+      en: Not set
+      sv: Inte angivet
+    groups:
+      query:
+        en: Query
+        sv: Fråga
+      file:
+        en: File
+        sv: Arkiv
+      tabs:
+        en: Tabs
+        sv: Flikar
+      view:
+        en: View
+        sv: Visa
+      data:
+        en: Data
+        sv: Data
+      editor:
+        en: Editor
+        sv: Redigerare
+      snippets:
+        en: Snippets
+        sv: Kodsnuttar
+    actions:
+      RunQuery:
+        en: Run current statement
+        sv: Kör aktuell sats
+      ExplainQuery:
+        en: Explain query
+        sv: Förklara fråga
+      ExplainAnalyzeQuery:
+        en: Explain analyze query
+        sv: Förklara och analysera fråga
+      CancelQuery:
+        en: Cancel running query
+        sv: Avbryt pågående fråga
+      FormatQuery:
+        en: Format SQL
+        sv: Formatera SQL
+      UpperCaseKeywords:
+        en: Upper case keywords
+        sv: Nyckelord med versaler
+      LowerCaseKeywords:
+        en: Lower case keywords
+        sv: Nyckelord med gemener
+      NewWindow:
+        en: New window
+        sv: Nytt fönster
+      CloseWindow:
+        en: Close window
+        sv: Stäng fönster
+      SaveTab:
+        en: Save tab to its file
+        sv: Spara fliken till sin fil
+      SaveTabAs:
+        en: Save tab as a new file
+        sv: Spara fliken som en ny fil
+      CommitChanges:
+        en: Commit changes
+        sv: Spara ändringar
+      RollbackChanges:
+        en: Rollback changes
+        sv: Ångra ändringar
+      ImportTableData:
+        en: Import into the selected table
+        sv: Importera till den markerade tabellen
+      ExportTableData:
+        en: Export the selected table
+        sv: Exportera den markerade tabellen
+      RefreshConnections:
+        en: Refresh connection
+        sv: Uppdatera anslutning
+      NewQueryTab:
+        en: New query tab
+        sv: Ny frågeflik
+      CloseActiveTab:
+        en: Close tab
+        sv: Stäng flik
+      CloseOtherTabs:
+        en: Close other tabs
+        sv: Stäng andra flikar
+      CloseTabsToTheLeft:
+        en: Close tabs to the left
+        sv: Stäng flikar till vänster
+      CloseTabsToTheRight:
+        en: Close tabs to the right
+        sv: Stäng flikar till höger
+      CloseAllTabs:
+        en: Close all tabs
+        sv: Stäng alla flikar
+      ActivateNextTab:
+        en: Next tab
+        sv: Nästa flik
+      ActivatePreviousTab:
+        en: Previous tab
+        sv: Föregående flik
+      ToggleCommandPalette:
+        en: Toggle command palette
+        sv: Visa eller dölj kommandopaletten
+      ToggleSidebar:
+        en: Toggle sidebar
+        sv: Visa eller dölj sidopanelen
+      ToggleResults:
+        en: Toggle results pane
+        sv: Visa eller dölj resultatpanelen
+      ToggleFilterBar:
+        en: Toggle result filter bar
+        sv: Visa eller dölj filterfältet för resultat
+      OpenSettings:
+        en: Open settings
+        sv: Öppna inställningar
+      OpenTerminal:
+        en: Toggle terminal
+        sv: Visa eller dölj terminal
+      RenameSnippet:
+        en: Rename snippet or group
+        sv: Byt namn på kodsnutt eller grupp
+      DuplicateSnippet:
+        en: Duplicate snippet
+        sv: Duplicera kodsnutt
+      ReopenClosedTab:
+        en: Reopen closed tab
+        sv: Öppna stängd flik igen
+      CopySelection:
+        en: Copy the selected cell, rows or column
+        sv: Kopiera markerad cell, rader eller kolumn
+      OpenReferencedRow:
+        en: Open referenced row
+        sv: Öppna refererad rad
+      IncreaseEditorFontSize:
+        en: Increase editor font size
+        sv: Större text i redigeraren
+      DecreaseEditorFontSize:
+        en: Decrease editor font size
+        sv: Mindre text i redigeraren
+      ResetEditorFontSize:
+        en: Reset editor font size
+        sv: Återställ textstorleken i redigeraren

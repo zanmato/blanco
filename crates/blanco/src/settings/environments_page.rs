@@ -56,7 +56,9 @@ impl EnvironmentTagsEditor {
     pub(super) fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let default_color = gpui::Hsla::from(tag_color(TAG_COLORS[1], cx));
         Self {
-            name_input: cx.new(|cx| InputState::new(window, cx).placeholder("Tag name")),
+            name_input: cx.new(|cx| {
+                InputState::new(window, cx).placeholder(t!("settings.environments.tag_name"))
+            }),
             color_picker: cx
                 .new(|cx| ColorPickerState::new(window, cx).default_value(default_color)),
             confirms_writes: false,
@@ -114,7 +116,7 @@ impl EnvironmentTagsEditor {
             window.push_notification(
                 (
                     NotificationType::Error,
-                    SharedString::from(format!("There is already a tag called {name}.")),
+                    SharedString::from(t!("settings.environments.tag_exists", name = name)),
                 ),
                 cx,
             );
@@ -183,7 +185,7 @@ impl EnvironmentTagsEditor {
             .child(div().w(px(120.)).text_sm().child(tag.name.clone()))
             .child(
                 Checkbox::new(("tag-confirms-writes", id.to_i32() as usize))
-                    .label("Confirm writes")
+                    .label(t!("settings.environments.confirm_writes").into_owned())
                     .checked(tag.confirms_writes)
                     .disabled(!custom)
                     .on_click({
@@ -200,7 +202,7 @@ impl EnvironmentTagsEditor {
             .when(custom, |this| {
                 this.child(div().flex_1()).child(
                     Button::new(("tag-delete", id.to_i32() as usize))
-                        .label("Delete")
+                        .label(t!("settings.environments.delete"))
                         .ghost()
                         .xsmall()
                         .on_click(move |_, _, cx| Self::save(None, Some(id), cx)),
@@ -249,7 +251,7 @@ impl Render for EnvironmentTagsEditor {
                 )
                 .child(
                     Checkbox::new("new-tag-confirms-writes")
-                        .label("Confirm writes")
+                        .label(t!("settings.environments.confirm_writes").into_owned())
                         .checked(self.confirms_writes)
                         .on_click(cx.listener(|editor, checked, _, cx| {
                             editor.confirms_writes = *checked;
@@ -258,7 +260,7 @@ impl Render for EnvironmentTagsEditor {
                 )
                 .child(
                     Button::new("tag-add")
-                        .label("Add")
+                        .label(t!("settings.environments.add"))
                         .small()
                         .on_click(cx.listener(|editor, _, window, cx| editor.add_tag(window, cx))),
                 ),
@@ -277,11 +279,15 @@ impl SettingFieldElement for EnvironmentTagsField {
 }
 
 pub(super) fn environments_page(editor: Entity<EnvironmentTagsEditor>) -> SettingPage {
-    SettingPage::new("Environments").groups(vec![SettingGroup::new().title("Tags").items(vec![
-            SettingItem::new(
-                "Environment Tags",
-                SettingField::element(EnvironmentTagsField(editor)),
-            )
-            .description("Tag connections with an environment."),
-        ])])
+    SettingPage::new(t!("settings.environments.title")).groups(vec![
+        SettingGroup::new()
+            .title(t!("settings.environments.tags"))
+            .items(vec![
+                SettingItem::new(
+                    t!("settings.environments.environment_tags"),
+                    SettingField::element(EnvironmentTagsField(editor)),
+                )
+                .description(t!("settings.environments.environment_tags_description").into_owned()),
+            ]),
+    ])
 }

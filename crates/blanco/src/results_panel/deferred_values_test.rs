@@ -1,6 +1,6 @@
 use blanco_core::ColumnType;
+use blanco_ui::table::TableState;
 use gpui::{Entity, TestAppContext, VisualTestContext};
-use gpui_component::table::TableState;
 
 use super::{ResultsPanel, ResultsTableDelegate};
 use crate::app::DuplicateRow;

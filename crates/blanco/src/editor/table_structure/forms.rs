@@ -11,8 +11,8 @@ use blanco_core::ddl::{
 };
 use blanco_core::{ConnectionContext, Dialect};
 use gpui::{
-    App, AppContext as _, Context, Entity, IntoElement, ParentElement, Render, Styled, Task,
-    Window, div, prelude::FluentBuilder as _, px,
+    App, AppContext as _, Context, Entity, IntoElement, ParentElement, Render, SharedString,
+    Styled, Task, Window, div, prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
     ActiveTheme as _, Disableable as _, IconName, IndexPath, Sizable as _,
@@ -64,7 +64,7 @@ impl ColumnForm {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let mut text = |value: Option<&str>, placeholder: &'static str, cx: &mut Context<Self>| {
+        let mut text = |value: Option<&str>, placeholder: SharedString, cx: &mut Context<Self>| {
             cx.new(|cx| {
                 let state = InputState::new(window, cx).placeholder(placeholder);
                 match value {
@@ -75,17 +75,17 @@ impl ColumnForm {
         };
         let name = text(
             original.as_ref().map(|spec| spec.name.as_str()),
-            "Column name",
+            t!("structure.form.column_name_placeholder").into(),
             cx,
         );
         let default = text(
             original.as_ref().and_then(|spec| spec.default.as_deref()),
-            "None",
+            t!("structure.form.none").into(),
             cx,
         );
         let comment = text(
             original.as_ref().and_then(|spec| spec.comment.as_deref()),
-            "None",
+            t!("structure.form.none").into(),
             cx,
         );
         let data_type = cx.new(|cx| {
@@ -93,7 +93,7 @@ impl ColumnForm {
                 .single_line(true)
                 .line_number(false)
                 .folding(false)
-                .placeholder("Type, e.g. integer or varchar(120)");
+                .placeholder(t!("structure.form.type_placeholder"));
             if let Some(spec) = &original {
                 editor = editor.default_value(spec.data_type.clone());
             }
@@ -104,9 +104,15 @@ impl ColumnForm {
         });
         let position_columns = positions.clone().unwrap_or_default();
         let position = positions.map(|columns| {
-            let labels = ["At the end".to_string(), "First".to_string()]
+            let labels =
+                [
+                    t!("structure.form.position_end").into_owned(),
+                    t!("structure.form.position_first").into_owned(),
+                ]
                 .into_iter()
-                .chain(columns.iter().map(|column| format!("After {column}")))
+                .chain(columns.iter().map(|column| {
+                    t!("structure.form.position_after", column = column).into_owned()
+                }))
                 .collect::<Vec<_>>();
             cx.new(|cx| SelectState::new(labels, Some(IndexPath::new(0)), window, cx))
         });
@@ -216,35 +222,41 @@ impl Render for ColumnForm {
         let theme = cx.theme();
         v_flex()
             .gap_3()
-            .child(labeled("Name", Input::new(&self.name).small()))
+            .child(labeled(
+                t!("structure.form.name"),
+                Input::new(&self.name).small(),
+            ))
             .child(
-                v_flex().gap_1().child(field_label("Type")).child(
-                    // Drawn like the small inputs around it: the editor
-                    // brings no frame of its own, and keeps a 6px margin
-                    // before its text, which the left padding makes up for.
-                    div()
-                        .w_full()
-                        .h_6()
-                        .flex()
-                        .items_center()
-                        .border_1()
-                        .border_color(theme.input)
-                        .rounded(theme.radius)
-                        .bg(theme.input_background())
-                        .pl(px(2.))
-                        .pr_2()
-                        .text_sm()
-                        .child(
-                            Editor::new(&self.data_type)
-                                .appearance(false)
-                                .bordered(false),
-                        ),
-                ),
+                v_flex()
+                    .gap_1()
+                    .child(field_label(t!("structure.form.type")))
+                    .child(
+                        // Drawn like the small inputs around it: the editor
+                        // brings no frame of its own, and keeps a 6px margin
+                        // before its text, which the left padding makes up for.
+                        div()
+                            .w_full()
+                            .h_6()
+                            .flex()
+                            .items_center()
+                            .border_1()
+                            .border_color(theme.input)
+                            .rounded(theme.radius)
+                            .bg(theme.input_background())
+                            .pl(px(2.))
+                            .pr_2()
+                            .text_sm()
+                            .child(
+                                Editor::new(&self.data_type)
+                                    .appearance(false)
+                                    .bordered(false),
+                            ),
+                    ),
             )
             .when(self.offers_primary_key, |this| {
                 this.child(
                     Checkbox::new("column-primary-key")
-                        .label("Primary key")
+                        .label(t!("structure.form.primary_key").into_owned())
                         .checked(self.primary_key)
                         .on_click(cx.listener(|this, checked: &bool, _, cx| {
                             this.primary_key = *checked;
@@ -258,7 +270,7 @@ impl Render for ColumnForm {
             })
             .child(
                 Checkbox::new("column-nullable")
-                    .label("Nullable")
+                    .label(t!("structure.form.nullable").into_owned())
                     .checked(self.nullable)
                     .disabled(self.offers_primary_key && self.primary_key)
                     .on_click(cx.listener(|this, checked: &bool, _, cx| {
@@ -269,10 +281,13 @@ impl Render for ColumnForm {
             .child(
                 v_flex()
                     .gap_1()
-                    .child(labeled("Default", Input::new(&self.default).small()))
+                    .child(labeled(
+                        t!("structure.form.default"),
+                        Input::new(&self.default).small(),
+                    ))
                     .child(
                         Checkbox::new("column-default-text")
-                            .label("Write the default as text")
+                            .label(t!("structure.form.default_as_text").into_owned())
                             .checked(self.default_is_text)
                             .on_click(cx.listener(|this, checked: &bool, _, cx| {
                                 this.default_is_text = *checked;
@@ -281,10 +296,16 @@ impl Render for ColumnForm {
                     ),
             )
             .when(self.dialect.supports_comments(), |this| {
-                this.child(labeled("Comment", Input::new(&self.comment).small()))
+                this.child(labeled(
+                    t!("structure.form.comment"),
+                    Input::new(&self.comment).small(),
+                ))
             })
             .when_some(self.position.clone(), |this, position| {
-                this.child(labeled("Position", Select::new(&position).small()))
+                this.child(labeled(
+                    t!("structure.form.position"),
+                    Select::new(&position).small(),
+                ))
             })
     }
 }
@@ -315,7 +336,7 @@ impl IndexForm {
     ) -> Self {
         let name = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("Index name")
+                .placeholder(t!("structure.form.index_name_placeholder"))
                 .default_value(format!("{table_name}_idx"))
         });
         let methods: Vec<String> = dialect
@@ -325,7 +346,8 @@ impl IndexForm {
             .collect();
         let method = (!methods.is_empty())
             .then(|| cx.new(|cx| SelectState::new(methods, Some(IndexPath::new(0)), window, cx)));
-        let condition = cx.new(|cx| InputState::new(window, cx).placeholder("None"));
+        let condition =
+            cx.new(|cx| InputState::new(window, cx).placeholder(t!("structure.form.none")));
         Self {
             dialect,
             server_version_num,
@@ -379,11 +401,14 @@ impl Render for IndexForm {
         let offers_nulls = self.offers_nulls_not_distinct();
         v_flex()
             .gap_3()
-            .child(labeled("Name", Input::new(&self.name).small()))
+            .child(labeled(
+                t!("structure.form.name"),
+                Input::new(&self.name).small(),
+            ))
             .child(
                 v_flex()
                     .gap_1()
-                    .child(field_label("Columns, in table order"))
+                    .child(field_label(t!("structure.form.index_columns")))
                     .child(
                         v_flex()
                             .gap_1()
@@ -406,7 +431,7 @@ impl Render for IndexForm {
             )
             .child(
                 Checkbox::new("index-unique")
-                    .label("Unique")
+                    .label(t!("structure.form.unique").into_owned())
                     .checked(self.unique)
                     .on_click(cx.listener(|this, checked: &bool, _, cx| {
                         this.unique = *checked;
@@ -415,9 +440,9 @@ impl Render for IndexForm {
             )
             .when(self.dialect.has_nulls_not_distinct(), |this| {
                 let note = if offers_nulls {
-                    "Only one row may leave the columns NULL."
+                    t!("structure.form.nulls_not_distinct_note")
                 } else {
-                    "Needs PostgreSQL 15 or later."
+                    t!("structure.form.nulls_not_distinct_needs_version")
                 };
                 this.child(
                     v_flex()
@@ -425,7 +450,7 @@ impl Render for IndexForm {
                         .gap_1()
                         .child(
                             Checkbox::new("index-nulls-not-distinct")
-                                .label("NULLs not distinct")
+                                .label(t!("structure.form.nulls_not_distinct").into_owned())
                                 .checked(self.unique && self.nulls_not_distinct)
                                 .disabled(!offers_nulls || !self.unique)
                                 .on_click(cx.listener(|this, checked: &bool, _, cx| {
@@ -437,7 +462,7 @@ impl Render for IndexForm {
                             div()
                                 .text_xs()
                                 .text_color(theme.muted_foreground)
-                                .child(note),
+                                .child(SharedString::from(note)),
                         ),
                 )
             })
@@ -448,9 +473,9 @@ impl Render for IndexForm {
                         .child(field_label(
                             if self.dialect.database_type() == blanco_core::DatabaseType::ClickHouse
                             {
-                                "Index type"
+                                t!("structure.form.index_type")
                             } else {
-                                "Method"
+                                t!("structure.form.method")
                             },
                         ))
                         .child(Select::new(&method).small()),
@@ -458,7 +483,7 @@ impl Render for IndexForm {
             })
             .when(self.dialect.supports_partial_indexes(), |this| {
                 this.child(labeled(
-                    "Condition (partial index)",
+                    t!("structure.form.condition"),
                     Input::new(&self.condition).small(),
                 ))
             })
@@ -541,9 +566,9 @@ impl ForeignKeyForm {
     ) -> Self {
         let name = cx.new(|cx| {
             let state = InputState::new(window, cx).placeholder(if is_virtual {
-                "Required"
+                t!("structure.form.virtual_key_name_placeholder")
             } else {
-                "Generated by the server"
+                t!("structure.form.foreign_key_name_placeholder")
             });
             match existing {
                 Some(key) => state.default_value(key.name.clone()),
@@ -767,20 +792,20 @@ impl ForeignKeyForm {
             ..
         } = self.operation(cx)
         else {
-            return Err("Not a new foreign key".to_string());
+            return Err(t!("structure.form.not_new_foreign_key").into_owned());
         };
         let Some(name) = name else {
-            return Err("A virtual key needs a name".to_string());
+            return Err(t!("structure.form.virtual_key_needs_name").into_owned());
         };
         if referenced_table.is_empty() {
-            return Err("Choose the referenced table".to_string());
+            return Err(t!("structure.form.choose_referenced_table").into_owned());
         }
         if columns
             .iter()
             .chain(&referenced_columns)
             .any(|column| column.is_empty())
         {
-            return Err("Choose a column and a referenced column in every row".to_string());
+            return Err(t!("structure.form.choose_column_pairs").into_owned());
         }
         Ok(VirtualForeignKey {
             id: self.editing.as_ref().map_or(0, |editing| editing.id),
@@ -842,19 +867,22 @@ impl Render for ForeignKeyForm {
         let can_remove = self.pairs.len() > 1;
         v_flex()
             .gap_3()
-            .child(labeled("Name", Input::new(&self.name).small()))
+            .child(labeled(
+                t!("structure.form.name"),
+                Input::new(&self.name).small(),
+            ))
             .child(
                 v_flex()
                     .gap_1()
                     .child(field_label(if self.is_virtual {
-                        "Referenced table or view"
+                        t!("structure.form.referenced_table_or_view")
                     } else {
-                        "Referenced table"
+                        t!("structure.form.referenced_table")
                     }))
                     .child(
                         Select::new(&self.table)
                             .small()
-                            .placeholder("Choose a table"),
+                            .placeholder(t!("structure.form.choose_table")),
                     ),
             )
             .when_some(self.load_error.clone(), |this, error| {
@@ -868,8 +896,16 @@ impl Render for ForeignKeyForm {
             .child(
                 h_flex()
                     .gap_2()
-                    .child(div().flex_1().child(field_label("Column")))
-                    .child(div().flex_1().child(field_label("Referenced column")))
+                    .child(
+                        div()
+                            .flex_1()
+                            .child(field_label(t!("structure.form.column"))),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .child(field_label(t!("structure.form.referenced_column"))),
+                    )
                     .when(can_remove, |this| this.child(div().w(px(24.)))),
             )
             .child(
@@ -880,12 +916,16 @@ impl Render for ForeignKeyForm {
                             .gap_2()
                             .child(
                                 div().flex_1().min_w_0().child(
-                                    Select::new(&pair.column).small().placeholder("Column"),
+                                    Select::new(&pair.column)
+                                        .small()
+                                        .placeholder(t!("structure.form.column")),
                                 ),
                             )
                             .child(
                                 div().flex_1().min_w_0().child(
-                                    Select::new(&pair.referenced).small().placeholder("Column"),
+                                    Select::new(&pair.referenced)
+                                        .small()
+                                        .placeholder(t!("structure.form.column")),
                                 ),
                             )
                             .when(can_remove, |this| {
@@ -894,7 +934,7 @@ impl Render for ForeignKeyForm {
                                         .ghost()
                                         .xsmall()
                                         .icon(IconName::Close)
-                                        .tooltip("Remove Column")
+                                        .tooltip(t!("structure.form.remove_column"))
                                         .on_click(cx.listener(move |this, _, _, cx| {
                                             this.remove_pair(ix, cx);
                                         })),
@@ -908,7 +948,7 @@ impl Render for ForeignKeyForm {
                         .ghost()
                         .small()
                         .icon(IconName::Plus)
-                        .label("Add Column")
+                        .label(t!("structure.form.add_column"))
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.add_pair(window, cx);
                         })),
@@ -919,9 +959,7 @@ impl Render for ForeignKeyForm {
                     div()
                         .text_xs()
                         .text_color(cx.theme().muted_foreground)
-                        .child(
-                            "Saved in Blanco for this connection, database and schema. The server never sees it, so it is saved at once and enforces nothing.",
-                        ),
+                        .child(SharedString::from(t!("structure.form.virtual_key_note"))),
                 )
             })
             .when(!self.is_virtual, |this| {
@@ -933,7 +971,7 @@ impl Render for ForeignKeyForm {
                                 .flex_1()
                                 .min_w_0()
                                 .gap_1()
-                                .child(field_label("On update"))
+                                .child(field_label(t!("structure.form.on_update")))
                                 .child(Select::new(&self.on_update).small()),
                         )
                         .child(
@@ -941,7 +979,7 @@ impl Render for ForeignKeyForm {
                                 .flex_1()
                                 .min_w_0()
                                 .gap_1()
-                                .child(field_label("On delete"))
+                                .child(field_label(t!("structure.form.on_delete")))
                                 .child(Select::new(&self.on_delete).small()),
                         ),
                 )
@@ -949,11 +987,11 @@ impl Render for ForeignKeyForm {
     }
 }
 
-pub(super) fn field_label(label: &'static str) -> impl IntoElement {
-    div().text_xs().child(label)
+pub(super) fn field_label(label: impl Into<SharedString>) -> impl IntoElement {
+    div().text_xs().child(label.into())
 }
 
-fn labeled(label: &'static str, input: impl IntoElement) -> impl IntoElement {
+fn labeled(label: impl Into<SharedString>, input: impl IntoElement) -> impl IntoElement {
     v_flex().gap_1().child(field_label(label)).child(input)
 }
 
@@ -978,11 +1016,13 @@ impl DataTypeCompletionProvider {
                 (data_type.label(), insert, data_type.description.to_string())
             })
             .collect();
-        types.extend(
-            user_types
-                .into_iter()
-                .map(|name| (name.clone(), name, "type in this database".to_string())),
-        );
+        types.extend(user_types.into_iter().map(|name| {
+            (
+                name.clone(),
+                name,
+                t!("structure.form.user_type_description").into_owned(),
+            )
+        }));
         Self { types }
     }
 

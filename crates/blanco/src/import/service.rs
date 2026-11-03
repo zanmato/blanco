@@ -30,7 +30,7 @@ pub enum ImportError {
 impl std::fmt::Display for ImportError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ImportError::Cancelled => write!(f, "import cancelled"),
+            ImportError::Cancelled => write!(f, "{}", t!("import.errors.cancelled")),
             ImportError::Failed(e) => write!(f, "{}", e),
         }
     }
@@ -83,8 +83,8 @@ impl RowSource {
         has_header: bool,
         headers: &[String],
     ) -> Result<Self> {
-        let file_handle =
-            File::open(file).with_context(|| format!("failed to open {}", file.display()))?;
+        let file_handle = File::open(file)
+            .with_context(|| t!("import.errors.open_failed", path = file.display()))?;
         let decoder = DecodeReaderBytesBuilder::new()
             .encoding(Some(encoding))
             .bom_sniffing(true)
@@ -100,7 +100,7 @@ impl RowSource {
             ImportFormat::Json => {
                 let mut text = String::new();
                 std::io::Read::read_to_string(&mut { decoder }, &mut text)
-                    .with_context(|| format!("failed to read {}", file.display()))?;
+                    .with_context(|| t!("import.errors.read_failed", path = file.display()))?;
                 let objects = detect::parse_json_objects(&text, None)?;
                 let rows: Vec<SourceRow> = objects
                     .iter()
@@ -153,9 +153,9 @@ where
     } = request;
 
     if mappings.is_empty() {
-        return Err(ImportError::Failed(anyhow::anyhow!(
-            "no columns mapped for import"
-        )));
+        return Err(ImportError::Failed(anyhow::anyhow!(t!(
+            "import.errors.no_columns_mapped"
+        ))));
     }
     let batch_size = batch_size.max(1);
 
@@ -221,10 +221,10 @@ where
         .execute_operations_transactional(&operations, database)
         .await
         .map_err(|failure| {
-            ImportError::Failed(failure.error.context(format!(
-                "import failed, {} of {} batches were applied",
-                failure.applied,
-                operations.len()
+            ImportError::Failed(failure.error.context(t!(
+                "import.errors.batches_applied",
+                applied = failure.applied,
+                total = operations.len()
             )))
         })?;
 

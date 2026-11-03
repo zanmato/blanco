@@ -8,6 +8,7 @@ publish = false
 path = "src/terminal.rs"
 
 [dependencies]
+rust-i18n = "4.2"
 gpui = { workspace = true }
 alacritty_terminal = { workspace = true }
 vte = { workspace = true }

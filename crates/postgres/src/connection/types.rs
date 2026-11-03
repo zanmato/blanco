@@ -151,9 +151,9 @@ impl PgConnectionKey {
         {
             connection_string
         } else {
-            return Err(anyhow::anyhow!(
-                "Invalid PostgreSQL connection string format"
-            ));
+            return Err(anyhow::anyhow!(t!(
+                "postgres.invalid_connection_string_format"
+            )));
         };
 
         let parsed = url::Url::parse(url)?;
@@ -165,13 +165,11 @@ impl PgConnectionKey {
         let password = parsed.password().map(|p| p.to_string());
 
         if database.is_empty() {
-            return Err(anyhow::anyhow!(
-                "Database name is required in connection string"
-            ));
+            return Err(anyhow::anyhow!(t!("postgres.database_required")));
         }
 
         if username.is_empty() {
-            return Err(anyhow::anyhow!("Username is required in connection string"));
+            return Err(anyhow::anyhow!(t!("postgres.username_required")));
         }
 
         Ok(PgConnectionKey {

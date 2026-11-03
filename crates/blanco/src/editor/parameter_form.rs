@@ -252,7 +252,7 @@ impl Render for ParameterForm {
                     )
                     .child(
                         Checkbox::new(("parameter-empty-string", index))
-                            .label("Empty string")
+                            .label(t!("editor.parameters.empty_string").into_owned())
                             .checked(param.empty_string)
                             .disabled(has_text)
                             .on_click(cx.listener(move |this, checked: &bool, window, cx| {

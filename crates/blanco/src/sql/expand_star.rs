@@ -164,8 +164,6 @@ impl ExpandStarProvider {
     }
 }
 
-const TITLE: &str = "Expand * into columns";
-
 impl CodeActionProvider for ExpandStarProvider {
     fn id(&self) -> SharedString {
         "blanco-expand-star".into()
@@ -226,7 +224,7 @@ fn code_action(rope: &Rope, range: Range<usize>, new_text: String) -> lsp_types:
     );
     let uri: lsp_types::Uri = "blanco-editor:query".parse().expect("valid uri");
     lsp_types::CodeAction {
-        title: TITLE.to_string(),
+        title: t!("completion.expand_star").into_owned(),
         kind: Some(lsp_types::CodeActionKind::REFACTOR_REWRITE),
         edit: Some(lsp_types::WorkspaceEdit {
             changes: Some(HashMap::from([(

@@ -1,0 +1,477 @@
+_version: 2
+# Results panel and grid. Glossary in app.yml.
+results:
+  tab:
+    result:
+      en: "Result"
+      sv: "Resultat"
+    result_numbered:
+      en: "Result %{number}"
+      sv: "Resultat %{number}"
+    filter_rows_placeholder:
+      en: "Filter rows"
+      sv: "Filtrera rader"
+    read_only_tooltip:
+      en: "Read-only: editing requires a complete primary key"
+      sv: "Skrivskyddad: redigering kräver en fullständig primärnyckel"
+    pin:
+      en: "Pin"
+      sv: "Fäst"
+    unpin:
+      en: "Unpin"
+      sv: "Lossa"
+    close:
+      en: "Close result"
+      sv: "Stäng resultat"
+    filtered_count:
+      en: "%{shown} of %{total}"
+      sv: "%{shown} av %{total}"
+    filter_on_server:
+      en: "Filter on the Server"
+      sv: "Filtrera på servern"
+    pending_edits_filter:
+      en: "Commit or discard pending edits to filter"
+      sv: "Spara eller ångra väntande ändringar för att filtrera"
+    query_plan:
+      en: "Query plan"
+      sv: "Frågeplan"
+    table_view:
+      en: "Table view"
+      sv: "Tabellvy"
+    chart_view:
+      en: "Chart view"
+      sv: "Diagramvy"
+  columns:
+    search_placeholder:
+      en: "Search columns"
+      sv: "Sök kolumner"
+    pending_edits_notice:
+      en: "Apply or discard the pending edits to change the columns"
+      sv: "Spara eller ångra de väntande ändringarna för att ändra kolumnerna"
+    pending_edits_hint:
+      en: "Apply or discard the pending edits to change the columns."
+      sv: "Spara eller ångra de väntande ändringarna för att ändra kolumnerna."
+    tooltip:
+      en: "Columns"
+      sv: "Kolumner"
+    pin:
+      en: "Pin Column"
+      sv: "Fäst kolumn"
+    unpin:
+      en: "Unpin Column"
+      sv: "Lossa kolumn"
+  filter:
+    where_placeholder:
+      en: "WHERE condition, e.g. status = 'open' AND total > 100"
+      sv: "WHERE-villkor, t.ex. status = 'open' AND total > 100"
+    any_column_placeholder:
+      en: "Search all text columns"
+      sv: "Sök i alla textkolumner"
+    value_placeholder:
+      en: "Value"
+      sv: "Värde"
+    no_text_columns:
+      en: "This result has no text columns to search"
+      sv: "Resultatet har inga textkolumner att söka i"
+    remove_condition:
+      en: "Remove Condition"
+      sv: "Ta bort villkor"
+    mode_conditions:
+      en: "Conditions"
+      sv: "Villkor"
+    mode_any_column:
+      en: "Any Column"
+      sv: "Valfri kolumn"
+    match_all:
+      en: "Match All"
+      sv: "Alla villkor"
+    match_any:
+      en: "Match Any"
+      sv: "Något villkor"
+    rows_one:
+      en: "1 row"
+      sv: "1 rad"
+    rows_other:
+      en: "%{rows} rows"
+      sv: "%{rows} rader"
+    copy_sql:
+      en: "Copy the SQL of This View"
+      sv: "Kopiera SQL för den här vyn"
+    clear:
+      en: "Clear"
+      sv: "Rensa"
+    apply:
+      en: "Apply"
+      sv: "Använd"
+    hide:
+      en: "Hide Filter Bar"
+      sv: "Dölj filterfältet"
+    add_condition:
+      en: "Add Condition"
+      sv: "Lägg till villkor"
+    operator_contains:
+      en: "contains"
+      sv: "innehåller"
+    operator_not_contains:
+      en: "does not contain"
+      sv: "innehåller inte"
+    operator_starts_with:
+      en: "starts with"
+      sv: "börjar med"
+    operator_ends_with:
+      en: "ends with"
+      sv: "slutar med"
+    pending_edits:
+      en: "Commit or discard pending edits before filtering"
+      sv: "Spara eller ångra väntande ändringar innan du filtrerar"
+  plan:
+    planning:
+      en: "planning:"
+      sv: "planering:"
+    execution:
+      en: "execution:"
+      sv: "körning:"
+    milliseconds:
+      en: "%{time} ms"
+      sv: "%{time} ms"
+    estimated_only:
+      en: "estimated plan (no timings for this statement)"
+      sv: "uppskattad plan (inga tider för den här satsen)"
+    rows_with_estimate:
+      en: "rows %{actual} (est %{estimated})"
+      sv: "rader %{actual} (uppsk. %{estimated})"
+    estimated_rows:
+      en: "est rows %{estimated}"
+      sv: "uppsk. rader %{estimated}"
+    rows:
+      en: "rows %{actual}"
+      sv: "rader %{actual}"
+    cost:
+      en: "cost %{cost}"
+      sv: "kostnad %{cost}"
+  dashboard:
+    add:
+      en: "Add to Dashboard"
+      sv: "Lägg till på instrumentpanel"
+    save_to_panel:
+      en: "Save to \"%{panel}\" on %{dashboard}"
+      sv: "Spara till ”%{panel}” på %{dashboard}"
+    new:
+      en: "New Dashboard…"
+      sv: "Ny instrumentpanel…"
+  menu:
+    copy_as:
+      en: "Copy as"
+      sv: "Kopiera som"
+    copy_column:
+      en: "Copy Column"
+      sv: "Kopiera kolumn"
+    export_as:
+      en: "Export as"
+      sv: "Exportera som"
+    add_row:
+      en: "Add Row"
+      sv: "Lägg till rad"
+    duplicate_row:
+      en: "Duplicate Row"
+      sv: "Duplicera rad"
+    delete_row:
+      en: "Delete Row"
+      sv: "Ta bort rad"
+    set_null:
+      en: "Set NULL"
+      sv: "Sätt till NULL"
+    set_default:
+      en: "Set DEFAULT"
+      sv: "Sätt till DEFAULT"
+    filter_by_value:
+      en: "Filter by Value"
+      sv: "Filtrera på värde"
+    select_cell_for_comparison:
+      en: "Select Cell for Comparison"
+      sv: "Välj cell att jämföra"
+    compare_cell_with_selected:
+      en: "Compare Cell with Selected"
+      sv: "Jämför cell med vald"
+    select_row_for_comparison:
+      en: "Select Row for Comparison"
+      sv: "Välj rad att jämföra"
+    compare_row_with_selected:
+      en: "Compare Row with Selected"
+      sv: "Jämför rad med vald"
+    clear_comparison_selection:
+      en: "Clear Comparison Selection"
+      sv: "Rensa val för jämförelse"
+    copy_column_values:
+      en: "Copy Column Values"
+      sv: "Kopiera kolumnens värden"
+    column_values:
+      en: "Values"
+      sv: "Värden"
+    copy_column_distinct_values:
+      en: "Copy Distinct Column Values"
+      sv: "Kopiera kolumnens unika värden"
+    column_distinct_values:
+      en: "Distinct Values"
+      sv: "Unika värden"
+    copy_column_in_list:
+      en: "Copy Column as IN List"
+      sv: "Kopiera kolumn som IN-lista"
+    column_in_list:
+      en: "IN List"
+      sv: "IN-lista"
+    copy_column_distinct_in_list:
+      en: "Copy Distinct Column as IN List"
+      sv: "Kopiera unika kolumnvärden som IN-lista"
+    column_distinct_in_list:
+      en: "Distinct IN List"
+      sv: "Unik IN-lista"
+  grid:
+    deferred_loading:
+      en: "%{size}, loading"
+      sv: "%{size}, läser in"
+    hide_column:
+      en: "Hide Column"
+      sv: "Dölj kolumn"
+    column_fallback:
+      en: "Column %{number}"
+      sv: "Kolumn %{number}"
+    tooltip_type:
+      en: "Type:"
+      sv: "Typ:"
+    tooltip_nullable:
+      en: "Nullable:"
+      sv: "Tillåter NULL:"
+    tooltip_default:
+      en: "Default:"
+      sv: "Standardvärde:"
+    "yes":
+      en: "Yes"
+      sv: "Ja"
+    "no":
+      en: "No"
+      sv: "Nej"
+  cell_edit:
+    invalid_wkt:
+      en: "Row %{row}, %{column}: invalid WKT: %{error}"
+      sv: "Rad %{row}, %{column}: ogiltig WKT: %{error}"
+    invalid_json:
+      en: "Row %{row}, %{column}: invalid JSON: %{error}"
+      sv: "Rad %{row}, %{column}: ogiltig JSON: %{error}"
+    invalid_hex:
+      en: "Row %{row}, %{column}: invalid hex: expected pairs of hex digits after 0x"
+      sv: "Rad %{row}, %{column}: ogiltig hex: hexsiffror i par väntades efter 0x"
+    expression_tooltip:
+      en: "Send as a SQL expression instead of a value"
+      sv: "Skicka som SQL-uttryck i stället för som värde"
+    invalid_json_preview:
+      en: "Invalid JSON: %{error}"
+      sv: "Ogiltig JSON: %{error}"
+    invalid_wkt_preview:
+      en: "Invalid WKT: %{error}"
+      sv: "Ogiltig WKT: %{error}"
+    format_json:
+      en: "Format"
+      sv: "Formatera"
+    minify_json:
+      en: "Minify"
+      sv: "Komprimera"
+    pick_date:
+      en: "Pick Date"
+      sv: "Välj datum"
+    pick_time:
+      en: "Pick Time"
+      sv: "Välj tid"
+    pick_date_and_time:
+      en: "Pick Date and Time"
+      sv: "Välj datum och tid"
+    pick_value:
+      en: "Pick Value"
+      sv: "Välj värde"
+  common:
+    unnamed_column:
+      en: "column %{number}"
+      sv: "kolumn %{number}"
+  binary:
+    too_large_to_preview:
+      en: "Too large to preview (%{size}, the limit is %{limit})"
+      sv: "För stor för förhandsvisning (%{size}, gränsen är %{limit})"
+    saved:
+      en: "Saved %{path}"
+      sv: "Sparade %{path}"
+    save_failed:
+      en: "Could not save %{path}: %{error}"
+      sv: "Kunde inte spara %{path}: %{error}"
+    load_prompt:
+      en: "Load"
+      sv: "Läs in"
+    read_failed:
+      en: "Could not read %{path}: %{error}"
+      sv: "Kunde inte läsa %{path}: %{error}"
+    image_description:
+      en: "%{format} image, %{size}"
+      sv: "%{format}-bild, %{size}"
+    decoding:
+      en: "Decoding image…"
+      sv: "Avkodar bild…"
+    no_preview:
+      en: "No preview"
+      sv: "Ingen förhandsvisning"
+    empty_value:
+      en: "Empty value"
+      sv: "Tomt värde"
+    image:
+      en: "Image"
+      sv: "Bild"
+    hex:
+      en: "Hex"
+      sv: "Hex"
+    save_to_file:
+      en: "Save to File"
+      sv: "Spara till fil"
+    load_file:
+      en: "Load File"
+      sv: "Läs in fil"
+  key_value:
+    key_placeholder:
+      en: "Key"
+      sv: "Nyckel"
+    value_placeholder:
+      en: "Value"
+      sv: "Värde"
+    pairs_one:
+      en: "1 pair"
+      sv: "1 par"
+    pairs_other:
+      en: "%{count} pairs"
+      sv: "%{count} par"
+    remove_pair:
+      en: "Remove Pair"
+      sv: "Ta bort par"
+    add_pair:
+      en: "Add Pair"
+      sv: "Lägg till par"
+    close:
+      en: "Close"
+      sv: "Stäng"
+    repeated_keys:
+      en: "Repeated keys, of which the server keeps one: %{keys}"
+      sv: "Upprepade nycklar, varav servern behåller en: %{keys}"
+    no_pairs:
+      en: "No pairs"
+      sv: "Inga par"
+    ttl_none:
+      en: "none"
+      sv: "ingen"
+    type_badge:
+      en: "type:"
+      sv: "typ:"
+    ttl_badge:
+      en: "ttl:"
+      sv: "ttl:"
+    compressed_badge:
+      en: "compressed:"
+      sv: "komprimerad:"
+    set_ttl:
+      en: "Set TTL…"
+      sv: "Ange TTL…"
+    remove_ttl:
+      en: "Remove TTL"
+      sv: "Ta bort TTL"
+    missing_key:
+      en: "(key does not exist)"
+      sv: "(nyckeln finns inte)"
+  key_ttl:
+    seconds_placeholder:
+      en: "Seconds"
+      sv: "Sekunder"
+    title:
+      en: "Set TTL of %{key}"
+      sv: "Ange TTL för %{key}"
+    description:
+      en: "Seconds until the key expires."
+      sv: "Sekunder tills nyckeln upphör att gälla."
+    cancel:
+      en: "Cancel"
+      sv: "Avbryt"
+    set:
+      en: "Set TTL"
+      sv: "Ange TTL"
+    invalid:
+      en: "The TTL must be a whole number of seconds above 0"
+      sv: "TTL måste vara ett heltal sekunder större än 0"
+    change_failed:
+      en: "Could not change the TTL: %{error}"
+      sv: "Kunde inte ändra TTL: %{error}"
+  date_time_picker:
+    time:
+      en: "Time"
+      sv: "Tid"
+    now:
+      en: "Now"
+      sv: "Nu"
+    cancel:
+      en: "Cancel"
+      sv: "Avbryt"
+    apply:
+      en: "Apply"
+      sv: "Använd"
+  foreign_key:
+    loading:
+      en: "Loading…"
+      sv: "Läser in…"
+    no_results:
+      en: "No results found"
+      sv: "Inga resultat hittades"
+    open_referenced_row:
+      en: "Open Referenced Row"
+      sv: "Öppna refererad rad"
+  compare:
+    cell_title:
+      en: "%{column} (row %{row})"
+      sv: "%{column} (rad %{row})"
+    row_title:
+      en: "Row %{row}"
+      sv: "Rad %{row}"
+    title:
+      en: "Compare"
+      sv: "Jämför"
+    close:
+      en: "Close"
+      sv: "Stäng"
+  deferred:
+    row_gone:
+      en: "Could not load the full value: the row is no longer in the table"
+      sv: "Kunde inte läsa in hela värdet: raden finns inte längre i tabellen"
+    load_failed:
+      en: "Could not load the full value: %{error}"
+      sv: "Kunde inte läsa in hela värdet: %{error}"
+  export:
+    exported_one:
+      en: "Exported 1 row to %{path}"
+      sv: "Exporterade 1 rad till %{path}"
+    exported_other:
+      en: "Exported %{rows} rows to %{path}"
+      sv: "Exporterade %{rows} rader till %{path}"
+    failed:
+      en: "Export failed: %{error}"
+      sv: "Exporten misslyckades: %{error}"
+  commit:
+    connection_error:
+      en: "Connection error: %{error}"
+      sv: "Anslutningsfel: %{error}"
+    log_summary:
+      en: "%{timestamp}, %{operations} operations, %{rows} rows affected in %{duration}"
+      sv: "%{timestamp}, %{operations} åtgärder, %{rows} rader påverkade på %{duration}"
+    refresh_failed:
+      en: "✗ Failed to refresh results after commit: %{error}"
+      sv: "✗ Kunde inte uppdatera resultatet efter att ändringarna sparades: %{error}"
+    unknown_error:
+      en: "Unknown error"
+      sv: "Okänt fel"
+    partially_applied:
+      en: "✗ Table operations partially applied (%{applied} of %{total} committed, backend is not transactional): %{error}. Re-run the query to see current state."
+      sv: "✗ Tabelländringarna sparades delvis (%{applied} av %{total} sparade, databasen saknar transaktioner): %{error}. Kör frågan igen för att se aktuellt läge."
+    failed_rolled_back:
+      en: "✗ Table operations failed (rolled back, no changes applied): %{error}"
+      sv: "✗ Tabelländringarna misslyckades (återställda, inga ändringar sparades): %{error}"

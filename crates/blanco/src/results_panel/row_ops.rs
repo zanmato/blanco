@@ -69,26 +69,19 @@ impl ResultsPanel {
     }
 
     /// The rows an action from a row's context menu applies to: the whole
-    /// selection when the clicked row is part of it, otherwise just that row.
+    /// selection when it lies in the clicked row, otherwise just that row.
     fn rows_for_context_action(&self, row_ix: usize, cx: &App) -> Vec<usize> {
-        let selected_rows = self.table_state.read(cx).selected_rows();
-        if selected_rows.contains(&row_ix) {
-            self.sorted_selected_rows(cx)
+        let selection = self.table_state.read(cx).selection();
+        if selection.covers_row(row_ix) {
+            selection.rows()
         } else {
             vec![row_ix]
         }
     }
 
+    /// The selected rows, or the row of the selected cell, in grid order.
     fn sorted_selected_rows(&self, cx: &App) -> Vec<usize> {
-        let mut rows: Vec<usize> = self
-            .table_state
-            .read(cx)
-            .selected_rows()
-            .iter()
-            .copied()
-            .collect();
-        rows.sort_unstable();
-        rows
+        self.table_state.read(cx).selection().rows()
     }
 
     pub fn duplicate_row_with_row(&mut self, row_ix: usize, cx: &mut Context<Self>) {

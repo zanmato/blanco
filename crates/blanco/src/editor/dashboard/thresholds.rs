@@ -1,7 +1,8 @@
 //! The dialog that sets when a panel's numbers turn yellow and red.
 
 use gpui::{
-    AppContext as _, Context, Entity, IntoElement, ParentElement, Render, Styled, Window, div, px,
+    AppContext as _, Context, Entity, IntoElement, ParentElement, Render, SharedString, Styled,
+    Window, div, px,
 };
 use gpui_component::{
     ActiveTheme as _, IndexPath, Sizable as _, WindowExt as _,
@@ -68,11 +69,11 @@ impl ThresholdForm {
         if warning.is_empty() && critical.is_empty() {
             return Ok(None);
         }
-        let parse = |text: &str, name: &str| {
+        let parse = |text: &str, not_a_number: std::borrow::Cow<'static, str>| {
             text.parse::<f64>()
                 .ok()
                 .filter(|value| value.is_finite())
-                .ok_or_else(|| format!("The {name} value is no number."))
+                .ok_or_else(|| not_a_number.into_owned())
         };
         let column = match &self.column {
             Some(select) => Some(
@@ -80,14 +81,14 @@ impl ThresholdForm {
                     .read(cx)
                     .selected_value()
                     .cloned()
-                    .ok_or_else(|| "Pick the column to color.".to_string())?,
+                    .ok_or_else(|| t!("dashboard.thresholds.pick_column").into_owned())?,
             ),
             None => None,
         };
         Ok(Some(Thresholds {
             column,
-            warning: parse(&warning, "warning")?,
-            critical: parse(&critical, "critical")?,
+            warning: parse(&warning, t!("dashboard.thresholds.warning_not_a_number"))?,
+            critical: parse(&critical, t!("dashboard.thresholds.critical_not_a_number"))?,
         }))
     }
 }
@@ -97,26 +98,27 @@ impl Render for ThresholdForm {
         let muted = cx.theme().muted_foreground;
         v_flex()
             .gap_3()
-            .children(
-                self.column
-                    .as_ref()
-                    .map(|column| field().label("Column").child(Select::new(column).small())),
-            )
+            .children(self.column.as_ref().map(|column| {
+                field()
+                    .label(t!("dashboard.thresholds.column").into_owned())
+                    .child(Select::new(column).small())
+            }))
             .child(
                 field()
-                    .label("Warning at")
+                    .label(t!("dashboard.thresholds.warning_at").into_owned())
                     .child(Input::new(&self.warning).w_full()),
             )
             .child(
                 field()
-                    .label("Critical at")
+                    .label(t!("dashboard.thresholds.critical_at").into_owned())
                     .child(Input::new(&self.critical).w_full()),
             )
-            .child(div().text_xs().text_color(muted).child(
-                "Numbers turn yellow at the warning value and red at the critical one, \
-                 green below both. A critical value under the warning one means lower is \
-                 worse. Leave both empty to color nothing.",
-            ))
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(muted)
+                    .child(SharedString::from(t!("dashboard.thresholds.help"))),
+            )
     }
 }
 
@@ -143,17 +145,21 @@ impl DashboardTab {
             let form = form.clone();
             let tab = tab.clone();
             dialog
-                .title("Thresholds")
+                .title(t!("dashboard.thresholds.title"))
                 .w(px(380.))
                 .child(form.clone())
                 .footer(
                     DialogFooter::new()
                         .child(
-                            DialogClose::new()
-                                .child(Button::new("cancel").label("Cancel").outline()),
+                            DialogClose::new().child(
+                                Button::new("cancel")
+                                    .label(t!("dashboard.cancel"))
+                                    .outline(),
+                            ),
                         )
                         .child(
-                            DialogAction::new().child(Button::new("ok").primary().label("Save")),
+                            DialogAction::new()
+                                .child(Button::new("ok").primary().label(t!("dashboard.save"))),
                         ),
                 )
                 .on_ok(move |_, window, cx| {

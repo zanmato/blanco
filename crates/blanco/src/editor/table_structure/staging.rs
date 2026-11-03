@@ -2,6 +2,8 @@
 //! them. The structure tab lists the replayed structure, so a column added
 //! by one pending change can be indexed by the next.
 
+use std::borrow::Cow;
+
 use blanco_core::ddl::{
     ColumnOperation, ColumnPosition, ColumnSpec, DdlError, ForeignKeyOperation, IndexOperation,
     TableChange,
@@ -50,12 +52,38 @@ impl StructureChange {
         }
     }
 
-    pub(super) fn label(&self) -> &'static str {
+    pub(super) fn label(&self) -> Cow<'static, str> {
         match self {
-            StructureChange::Column(operation) => operation.label(),
-            StructureChange::Index(operation) => operation.label(),
-            StructureChange::ForeignKey(operation) => operation.label(),
-            StructureChange::Table(change) => change.label(),
+            StructureChange::Column(ColumnOperation::Add { .. }) => {
+                t!("structure.change.label.add_column")
+            }
+            StructureChange::Column(ColumnOperation::Move { .. }) => {
+                t!("structure.change.label.move_column")
+            }
+            StructureChange::Column(ColumnOperation::Rename { .. }) => {
+                t!("structure.change.label.rename_column")
+            }
+            StructureChange::Column(ColumnOperation::Drop { .. }) => {
+                t!("structure.change.label.drop_column")
+            }
+            StructureChange::Column(ColumnOperation::Alter { .. }) => {
+                t!("structure.change.label.alter_column")
+            }
+            StructureChange::Index(IndexOperation::Create(_)) => {
+                t!("structure.change.label.create_index")
+            }
+            StructureChange::Index(IndexOperation::Drop { .. }) => {
+                t!("structure.change.label.drop_index")
+            }
+            StructureChange::ForeignKey(ForeignKeyOperation::Create { .. }) => {
+                t!("structure.change.label.create_foreign_key")
+            }
+            StructureChange::ForeignKey(ForeignKeyOperation::Drop { .. }) => {
+                t!("structure.change.label.drop_foreign_key")
+            }
+            StructureChange::Table(TableChange::Comment(_)) => {
+                t!("structure.change.label.table_comment")
+            }
         }
     }
 
@@ -113,36 +141,51 @@ impl StructureChange {
     /// The change with the object it touches, as the undo menu and the
     /// preview name it.
     pub(super) fn describe(&self) -> String {
-        let label = self.label();
         match self {
-            StructureChange::Column(
-                ColumnOperation::Add { column: spec, .. }
-                | ColumnOperation::Move { column: spec, .. },
-            ) => {
-                format!("{label} \"{}\"", spec.name)
+            StructureChange::Column(ColumnOperation::Add { column, .. }) => {
+                t!("structure.change.describe.add_column", name = column.name)
+            }
+            StructureChange::Column(ColumnOperation::Move { column, .. }) => {
+                t!("structure.change.describe.move_column", name = column.name)
             }
             StructureChange::Column(ColumnOperation::Rename { from, to }) => {
-                format!("{label} \"{from}\" to \"{to}\"")
+                t!(
+                    "structure.change.describe.rename_column",
+                    from = from,
+                    to = to
+                )
             }
             StructureChange::Column(ColumnOperation::Alter { from, .. }) => {
-                format!("{label} \"{}\"", from.name)
+                t!("structure.change.describe.alter_column", name = from.name)
+            }
+            StructureChange::Column(ColumnOperation::Drop { name }) => {
+                t!("structure.change.describe.drop_column", name = name)
             }
             StructureChange::Index(IndexOperation::Create(spec)) => {
-                format!("{label} \"{}\"", spec.name)
+                t!("structure.change.describe.create_index", name = spec.name)
             }
-            StructureChange::Column(ColumnOperation::Drop { name })
-            | StructureChange::Index(IndexOperation::Drop { name })
-            | StructureChange::ForeignKey(ForeignKeyOperation::Drop { name }) => {
-                format!("{label} \"{name}\"")
+            StructureChange::Index(IndexOperation::Drop { name }) => {
+                t!("structure.change.describe.drop_index", name = name)
             }
-            StructureChange::Table(_) => label.to_string(),
             StructureChange::ForeignKey(ForeignKeyOperation::Create { name, columns, .. }) => {
                 match name {
-                    Some(name) => format!("{label} \"{name}\""),
-                    None => format!("{label} on ({})", columns.join(", ")),
+                    Some(name) => {
+                        t!("structure.change.describe.create_foreign_key", name = name)
+                    }
+                    None => t!(
+                        "structure.change.describe.create_foreign_key_on",
+                        columns = columns.join(", ")
+                    ),
                 }
             }
+            StructureChange::ForeignKey(ForeignKeyOperation::Drop { name }) => {
+                t!("structure.change.describe.drop_foreign_key", name = name)
+            }
+            StructureChange::Table(TableChange::Comment(_)) => {
+                t!("structure.change.label.table_comment")
+            }
         }
+        .into_owned()
     }
 }
 
@@ -242,13 +285,13 @@ impl StagedStructure {
             Some(ColumnPosition::After(name)) => self
                 .live_column(name)
                 .map(|ix| ix + 1)
-                .ok_or_else(|| format!("No column named \"{name}\"")),
+                .ok_or_else(|| no_column(name)),
         }
     }
 
     fn missing_columns(&self, columns: &[String]) -> Result<(), String> {
         match columns.iter().find(|name| self.live_column(name).is_none()) {
-            Some(name) => Err(format!("No column named \"{name}\"")),
+            Some(name) => Err(no_column(name)),
             None => Ok(()),
         }
     }
@@ -289,7 +332,7 @@ impl StagedStructure {
                 position,
             } => {
                 if self.live_column(&spec.name).is_some() {
-                    return Err(format!("Column \"{}\" already exists", spec.name));
+                    return Err(column_exists(&spec.name));
                 }
                 let ix = self.position_index(position.as_ref())?;
                 let mut mark = RowMark::default();
@@ -301,9 +344,9 @@ impl StagedStructure {
             ColumnOperation::Move { column, position } => {
                 let ix = self
                     .live_column(&column.name)
-                    .ok_or_else(|| format!("No column named \"{}\"", column.name))?;
+                    .ok_or_else(|| no_column(&column.name))?;
                 if matches!(position, ColumnPosition::After(name) if *name == column.name) {
-                    return Err("A column cannot follow itself".to_string());
+                    return Err(t!("structure.staging.column_follows_itself").into_owned());
                 }
                 // The move restates the column as it is at this point, which
                 // an edit or undo of an earlier change may have changed.
@@ -333,9 +376,9 @@ impl StagedStructure {
             ColumnOperation::Alter { from, to } => {
                 let ix = self
                     .live_column(&from.name)
-                    .ok_or_else(|| format!("No column named \"{}\"", from.name))?;
+                    .ok_or_else(|| no_column(&from.name))?;
                 if from.name != to.name && self.live_column(&to.name).is_some() {
-                    return Err(format!("Column \"{}\" already exists", to.name));
+                    return Err(column_exists(&to.name));
                 }
                 self.rename_column_references(&from.name, &to.name);
                 let column = &mut self.columns[ix];
@@ -354,11 +397,9 @@ impl StagedStructure {
                 self.column_marks[ix].touch(change_ix, change, RowState::Modified);
             }
             ColumnOperation::Rename { from, to } => {
-                let ix = self
-                    .live_column(from)
-                    .ok_or_else(|| format!("No column named \"{from}\""))?;
+                let ix = self.live_column(from).ok_or_else(|| no_column(from))?;
                 if from != to && self.live_column(to).is_some() {
-                    return Err(format!("Column \"{to}\" already exists"));
+                    return Err(column_exists(to));
                 }
                 self.columns[ix].name = to.clone();
                 self.column_specs[ix].name = to.clone();
@@ -366,13 +407,9 @@ impl StagedStructure {
                 self.rename_column_references(from, to);
             }
             ColumnOperation::Drop { name } => {
-                let ix = self
-                    .live_column(name)
-                    .ok_or_else(|| format!("No column named \"{name}\""))?;
+                let ix = self.live_column(name).ok_or_else(|| no_column(name))?;
                 if self.column_marks[ix].state == RowState::Added {
-                    return Err(format!(
-                        "\"{name}\" is a new column, undo adding it instead"
-                    ));
+                    return Err(t!("structure.staging.new_column", name = name).into_owned());
                 }
                 self.column_marks[ix].touch(change_ix, change, RowState::Dropped);
             }
@@ -408,7 +445,7 @@ impl StagedStructure {
         match operation {
             IndexOperation::Create(spec) => {
                 if self.live_index(&spec.name).is_some() {
-                    return Err(format!("Index \"{}\" already exists", spec.name));
+                    return Err(t!("structure.staging.index_exists", name = spec.name).into_owned());
                 }
                 self.missing_columns(&spec.columns)?;
                 let mut mark = RowMark::default();
@@ -430,11 +467,9 @@ impl StagedStructure {
             IndexOperation::Drop { name } => {
                 let ix = self
                     .live_index(name)
-                    .ok_or_else(|| format!("No index named \"{name}\""))?;
+                    .ok_or_else(|| t!("structure.staging.no_index", name = name).into_owned())?;
                 if self.index_marks[ix].state == RowState::Added {
-                    return Err(format!(
-                        "\"{name}\" is a new index, undo creating it instead"
-                    ));
+                    return Err(t!("structure.staging.new_index", name = name).into_owned());
                 }
                 self.index_marks[ix].touch(change_ix, change, RowState::Dropped);
             }
@@ -461,7 +496,9 @@ impl StagedStructure {
                 if let Some(name) = name
                     && self.live_foreign_key(name).is_some()
                 {
-                    return Err(format!("Foreign key \"{name}\" already exists"));
+                    return Err(
+                        t!("structure.staging.foreign_key_exists", name = name).into_owned()
+                    );
                 }
                 self.missing_columns(columns)?;
                 let mut mark = RowMark::default();
@@ -478,19 +515,25 @@ impl StagedStructure {
                 self.foreign_key_marks.push(mark);
             }
             ForeignKeyOperation::Drop { name } => {
-                let ix = self
-                    .live_foreign_key(name)
-                    .ok_or_else(|| format!("No foreign key named \"{name}\""))?;
+                let ix = self.live_foreign_key(name).ok_or_else(|| {
+                    t!("structure.staging.no_foreign_key", name = name).into_owned()
+                })?;
                 if self.foreign_key_marks[ix].state == RowState::Added {
-                    return Err(format!(
-                        "\"{name}\" is a new foreign key, undo creating it instead"
-                    ));
+                    return Err(t!("structure.staging.new_foreign_key", name = name).into_owned());
                 }
                 self.foreign_key_marks[ix].touch(change_ix, change, RowState::Dropped);
             }
         }
         Ok(())
     }
+}
+
+fn no_column(name: &str) -> String {
+    t!("structure.staging.no_column", name = name).into_owned()
+}
+
+fn column_exists(name: &str) -> String {
+    t!("structure.staging.column_exists", name = name).into_owned()
 }
 
 /// A listed column as the column editor starts from it, and as an alter

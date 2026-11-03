@@ -140,7 +140,9 @@ impl ResultsPanel {
                     TableOperationResponse {
                         success: false,
                         rows_affected: None,
-                        error_message: Some(format!("Connection error: {}", e)),
+                        error_message: Some(
+                            t!("results.commit.connection_error", error = e).into_owned(),
+                        ),
                         operations_executed: 0,
                         duration: start_time.elapsed(),
                         sql_queries: Vec::new(),
@@ -211,15 +213,16 @@ impl ResultsPanel {
                                     );
                                 }
                                 // Log summary comment
-                                let log_message = format!(
-                                    "{}, {} operations, {} rows affected in {}",
-                                    time_format::format_current_timestamp(),
-                                    response.operations_executed,
-                                    response.rows_affected.unwrap_or(0),
-                                    time_format::format_duration(
+                                let log_message = t!(
+                                    "results.commit.log_summary",
+                                    timestamp = time_format::format_current_timestamp(),
+                                    operations = response.operations_executed,
+                                    rows = response.rows_affected.unwrap_or(0),
+                                    duration = time_format::format_duration(
                                         response.duration.as_micros() as i64
                                     )
-                                );
+                                )
+                                .into_owned();
                                 log.append_text(
                                     &blanco_ui::SqlViewMessage::Comment(log_message),
                                     cx,
@@ -286,10 +289,13 @@ impl ResultsPanel {
                             if let Some(sql_view) = sql_view_for_refresh {
                                 sql_view.update(cx, |log, cx| {
                                     log.append_text(
-                                        &blanco_ui::SqlViewMessage::Comment(format!(
-                                            "✗ Failed to refresh results after commit: {:#}",
-                                            error
-                                        )),
+                                        &blanco_ui::SqlViewMessage::Comment(
+                                            t!(
+                                                "results.commit.refresh_failed",
+                                                error = format!("{error:#}")
+                                            )
+                                            .into_owned(),
+                                        ),
                                         cx,
                                     );
                                 });
@@ -330,18 +336,18 @@ impl ResultsPanel {
                                 cx,
                             );
                         }
+                        let error = error_message_clone
+                            .unwrap_or_else(|| t!("results.commit.unknown_error").into_owned());
                         let error_msg = if partial {
-                            format!(
-                                "✗ Table operations partially applied ({} of {} committed, backend is not transactional): {}. Re-run the query to see current state.",
-                                response.applied,
-                                sql_queries_clone.len(),
-                                error_message_clone.unwrap_or_else(|| "Unknown error".to_string())
+                            t!(
+                                "results.commit.partially_applied",
+                                applied = response.applied,
+                                total = sql_queries_clone.len(),
+                                error = error
                             )
+                            .into_owned()
                         } else {
-                            format!(
-                                "✗ Table operations failed (rolled back, no changes applied): {}",
-                                error_message_clone.unwrap_or_else(|| "Unknown error".to_string())
-                            )
+                            t!("results.commit.failed_rolled_back", error = error).into_owned()
                         };
                         log.append_text(&blanco_ui::SqlViewMessage::Comment(error_msg), cx);
                     });

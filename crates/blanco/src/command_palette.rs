@@ -32,6 +32,7 @@ use crate::{
     },
     connections::ConnectionsPanel,
     editor::EditorPanel,
+    keybindings::action_label,
     result_ext::ResultExt as _,
 };
 use app_database::EnvironmentType;
@@ -205,7 +206,7 @@ impl CommandPalette {
         cx: &mut Context<Self>,
     ) -> Self {
         let query_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Type a command or search"));
+            cx.new(|cx| InputState::new(window, cx).placeholder(t!("palette.placeholder")));
 
         let delegate = CommandPaletteDelegate::new(sidebar, editor_panel, cx);
         let list_state = cx.new(|cx| ListState::new(delegate, window, cx).searchable(false));
@@ -323,7 +324,13 @@ impl CommandPalette {
             ItemKind::Database(database) => {
                 let crumb: SharedString = database.database_name.clone().into();
                 let leaves = database_action_leaves(&database);
-                self.push_level(crumb, leaves, "Search actions", window, cx);
+                self.push_level(
+                    crumb,
+                    leaves,
+                    t!("palette.search_actions").into(),
+                    window,
+                    cx,
+                );
             }
         }
     }
@@ -396,11 +403,10 @@ impl CommandPalette {
         &mut self,
         crumb: SharedString,
         items: Vec<CommandItem>,
-        placeholder: &str,
+        placeholder: SharedString,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let placeholder: SharedString = placeholder.to_string().into();
         self.list_state.update(cx, |state, cx| {
             state.delegate_mut().push_level(crumb, items, placeholder);
             cx.notify();
@@ -489,7 +495,13 @@ impl CommandPalette {
                                 .into_iter()
                                 .map(|name| database_item(&connection, name))
                                 .collect();
-                            this.push_level(crumb, items, "Search databases", window, cx);
+                            this.push_level(
+                                crumb,
+                                items,
+                                t!("palette.search_databases").into(),
+                                window,
+                                cx,
+                            );
                         }
                         None => {
                             // Schemaless backend: skip the database level entirely.
@@ -501,7 +513,13 @@ impl CommandPalette {
                                 database_name: connection.default_database.clone(),
                             };
                             let leaves = database_action_leaves(&database);
-                            this.push_level(crumb, leaves, "Search actions", window, cx);
+                            this.push_level(
+                                crumb,
+                                leaves,
+                                t!("palette.search_actions").into(),
+                                window,
+                                cx,
+                            );
                         }
                     }
                 }
@@ -526,7 +544,7 @@ impl CommandPalette {
         self.visible = true;
         self.query_input.update(cx, |input, cx| {
             input.set_value("", window, cx);
-            input.set_placeholder("Type a command or search", window, cx);
+            input.set_placeholder(t!("palette.placeholder"), window, cx);
         });
         self.list_state.update(cx, |state, cx| {
             state.delegate_mut().refresh_commands(cx);
@@ -704,7 +722,7 @@ impl Render for CommandPalette {
                     .size_full()
                     .text_sm()
                     .text_color(muted)
-                    .child("Connecting…"),
+                    .child(SharedString::from(t!("palette.connecting"))),
             )
         } else if let Some(error) = error {
             list_area.child(
@@ -950,9 +968,6 @@ fn execute_command(cmd: &CommandType, window: &mut Window, cx: &mut App) {
     }
 }
 
-/// Label shown for the first (root) breadcrumb chip.
-const ROOT_CRUMB: &str = "Commands";
-
 pub struct CommandPaletteDelegate {
     sidebar: WeakEntity<ConnectionsPanel>,
     editor_panel: WeakEntity<EditorPanel>,
@@ -1059,7 +1074,7 @@ impl CommandPaletteDelegate {
     /// Breadcrumb labels including the root, from root to the current level.
     fn breadcrumbs(&self) -> Vec<SharedString> {
         let mut crumbs = Vec::with_capacity(self.stack.len() + 1);
-        crumbs.push(SharedString::new_static(ROOT_CRUMB));
+        crumbs.push(t!("palette.root_crumb").into());
         crumbs.extend(self.stack.iter().map(|level| level.crumb.clone()));
         crumbs
     }
@@ -1069,7 +1084,7 @@ impl CommandPaletteDelegate {
         self.stack
             .last()
             .map(|level| level.placeholder.clone())
-            .unwrap_or_else(|| SharedString::new_static("Type a command or search"))
+            .unwrap_or_else(|| t!("palette.placeholder").into())
     }
 
     fn set_query(&mut self, query: &str, cx: &mut Context<ListState<Self>>) {
@@ -1169,7 +1184,7 @@ impl DatabaseRef {
 }
 
 /// Build a leaf command item.
-fn leaf(label: impl Into<String>, group: &str, command: CommandType) -> CommandItem {
+fn leaf(label: impl Into<String>, group: impl Into<String>, command: CommandType) -> CommandItem {
     CommandItem {
         label: label.into(),
         group: group.into(),
@@ -1177,37 +1192,48 @@ fn leaf(label: impl Into<String>, group: &str, command: CommandType) -> CommandI
     }
 }
 
+/// A leaf for an action the keybindings page lists, labeled as it is there.
+fn bound_leaf(action: &str, group: impl Into<String>, command: CommandType) -> CommandItem {
+    debug_assert!(
+        crate::keybindings::CUSTOMIZABLE_BINDINGS
+            .iter()
+            .any(|def| def.action == action),
+        "{action} is not a customizable action"
+    );
+    leaf(action_label(action).to_string(), group, command)
+}
+
 /// The leaf actions shown at the bottom of a navigation drill-down.
 fn database_action_leaves(database: &DatabaseRef) -> Vec<CommandItem> {
     let mut leaves = vec![new_query_leaf(database), new_script_leaf(database)];
     if database.db_type.supports_sql() {
         leaves.push(CommandItem {
-            label: "Open SQL file…".into(),
-            group: "Action".into(),
+            label: t!("palette.commands.open_sql_file").into(),
+            group: t!("palette.groups.action").into(),
             kind: ItemKind::Command(CommandType::OpenSqlFile(database.clone())),
         });
         leaves.push(CommandItem {
-            label: "Run SQL file…".into(),
-            group: "Action".into(),
+            label: t!("palette.commands.run_sql_file").into(),
+            group: t!("palette.groups.action").into(),
             kind: ItemKind::Command(CommandType::RunSqlFile(database.clone())),
         });
     }
     if database.db_type.dialect().client_tools().is_some() && !database.database_name.is_empty() {
         leaves.push(CommandItem {
-            label: "Back up…".into(),
-            group: "Action".into(),
+            label: t!("palette.commands.back_up").into(),
+            group: t!("palette.groups.action").into(),
             kind: ItemKind::Command(CommandType::BackupDatabase(database.clone())),
         });
         leaves.push(CommandItem {
-            label: "Restore…".into(),
-            group: "Action".into(),
+            label: t!("palette.commands.restore").into(),
+            group: t!("palette.groups.action").into(),
             kind: ItemKind::Command(CommandType::RestoreDatabase(database.clone())),
         });
     }
     if database.db_type.dialect().supports_process_list() {
         leaves.push(CommandItem {
-            label: "Process list".into(),
-            group: "Action".into(),
+            label: t!("palette.commands.process_list").into(),
+            group: t!("palette.groups.action").into(),
             kind: ItemKind::Command(CommandType::OpenProcessList(database.clone())),
         });
     }
@@ -1216,16 +1242,16 @@ fn database_action_leaves(database: &DatabaseRef) -> Vec<CommandItem> {
 
 fn new_query_leaf(database: &DatabaseRef) -> CommandItem {
     CommandItem {
-        label: "New query".into(),
-        group: "Action".into(),
+        label: t!("palette.commands.new_query").into(),
+        group: t!("palette.groups.action").into(),
         kind: ItemKind::Command(CommandType::NewQueryForDatabase(database.clone())),
     }
 }
 
 fn new_script_leaf(database: &DatabaseRef) -> CommandItem {
     CommandItem {
-        label: "New script".into(),
-        group: "Action".into(),
+        label: t!("palette.commands.new_script").into(),
+        group: t!("palette.groups.action").into(),
         kind: ItemKind::Command(CommandType::NewScriptForDatabase(database.clone())),
     }
 }
@@ -1234,7 +1260,7 @@ fn new_script_leaf(database: &DatabaseRef) -> CommandItem {
 fn database_item(connection: &ConnectionRef, name: String) -> CommandItem {
     CommandItem {
         label: name.clone(),
-        group: "Database".into(),
+        group: t!("palette.groups.database").into(),
         kind: ItemKind::Database(DatabaseRef {
             connection_id: connection.connection_id,
             connection_name: connection.connection_name.clone(),
@@ -1250,134 +1276,177 @@ fn build_commands(
     editor_panel: &WeakEntity<EditorPanel>,
     cx: &App,
 ) -> Vec<CommandItem> {
+    let query = t!("palette.groups.query");
+    let results = t!("palette.groups.results");
+    let file = t!("palette.groups.file");
+    let tab = t!("palette.groups.tab");
+    let connection = t!("palette.groups.connection");
+    let view = t!("palette.groups.view");
+    let edit = t!("palette.groups.edit");
+    let window = t!("palette.groups.window");
+    let dashboard = t!("palette.groups.dashboard");
     let mut commands = vec![
-        leaf("Run Query", "Query", CommandType::RunQuery),
-        leaf("Explain Query", "Query", CommandType::ExplainQuery),
-        leaf(
-            "Explain Analyze Query",
-            "Query",
+        bound_leaf("RunQuery", query.clone(), CommandType::RunQuery),
+        bound_leaf("ExplainQuery", query.clone(), CommandType::ExplainQuery),
+        bound_leaf(
+            "ExplainAnalyzeQuery",
+            query.clone(),
             CommandType::ExplainAnalyzeQuery,
         ),
-        leaf("Format Query", "Query", CommandType::FormatQuery),
-        leaf("Toggle Filter Bar", "Results", CommandType::ToggleFilterBar),
-        leaf("Save", "File", CommandType::SaveTab),
-        leaf("Save As…", "File", CommandType::SaveTabAs),
+        bound_leaf("FormatQuery", query.clone(), CommandType::FormatQuery),
+        bound_leaf(
+            "ToggleFilterBar",
+            results.clone(),
+            CommandType::ToggleFilterBar,
+        ),
+        bound_leaf("SaveTab", file.clone(), CommandType::SaveTab),
+        bound_leaf("SaveTabAs", file.clone(), CommandType::SaveTabAs),
         leaf(
-            "Open Themes Folder",
-            "Appearance",
+            t!("palette.commands.open_themes_folder"),
+            t!("palette.groups.appearance"),
             CommandType::OpenThemesFolder,
         ),
-        leaf("New Snippet", "Tab", CommandType::NewSnippet),
         leaf(
-            "New Connection",
-            "Connection",
+            t!("palette.commands.new_snippet"),
+            tab.clone(),
+            CommandType::NewSnippet,
+        ),
+        leaf(
+            t!("palette.commands.new_connection"),
+            connection.clone(),
             CommandType::OpenNewConnectionModal,
         ),
         leaf(
-            "Import Connections…",
-            "Connection",
+            t!("palette.commands.import_connections"),
+            connection.clone(),
             CommandType::ImportConnections,
         ),
         leaf(
-            "Export Connections…",
-            "Connection",
+            t!("palette.commands.export_connections"),
+            connection.clone(),
             CommandType::ExportConnections,
         ),
         leaf(
-            "Open Database File…",
-            "Connection",
+            t!("palette.commands.open_database_file"),
+            connection.clone(),
             CommandType::OpenDatabaseFile,
         ),
         leaf(
-            "New SQLite Database…",
-            "Connection",
+            t!("palette.commands.new_sqlite_database"),
+            connection.clone(),
             CommandType::NewSqliteDatabase,
         ),
         leaf(
-            "New DuckDB Database…",
-            "Connection",
+            t!("palette.commands.new_duckdb_database"),
+            connection.clone(),
             CommandType::NewDuckdbDatabase,
         ),
-        leaf("Open Settings", "View", CommandType::OpenSettings),
-        leaf("Toggle Terminal", "View", CommandType::OpenTerminal),
-        leaf("Toggle Sidebar", "View", CommandType::ToggleSidebar),
-        leaf("Commit Changes", "Edit", CommandType::CommitChanges),
-        leaf("Rollback Changes", "Edit", CommandType::RollbackChanges),
+        bound_leaf("OpenSettings", view.clone(), CommandType::OpenSettings),
+        bound_leaf("OpenTerminal", view.clone(), CommandType::OpenTerminal),
+        bound_leaf("ToggleSidebar", view.clone(), CommandType::ToggleSidebar),
+        bound_leaf("CommitChanges", edit.clone(), CommandType::CommitChanges),
+        bound_leaf("RollbackChanges", edit, CommandType::RollbackChanges),
         leaf(
-            "Clear Comparison Selection",
-            "Results",
+            t!("palette.commands.clear_comparison_selection"),
+            results.clone(),
             CommandType::ClearCompareSelection,
         ),
-        leaf("Copy as CSV", "Results", CommandType::CopyAsCSV),
-        leaf("Copy as TSV", "Results", CommandType::CopyAsTSV),
-        leaf("Copy as JSON", "Results", CommandType::CopyAsJSON),
-        leaf("Copy as SQL", "Results", CommandType::CopyAsSQL),
-        leaf("Copy as Markdown", "Results", CommandType::CopyAsMarkdown),
-        leaf("Copy as HTML", "Results", CommandType::CopyAsHTML),
-        leaf("Export as CSV", "Results", CommandType::ExportAsCSV),
-        leaf("Export as TSV", "Results", CommandType::ExportAsTSV),
-        leaf("Export as JSON", "Results", CommandType::ExportAsJSON),
-        leaf("Export as SQL", "Results", CommandType::ExportAsSQL),
+    ];
+    for (format, copy) in [
+        ("CSV", CommandType::CopyAsCSV),
+        ("TSV", CommandType::CopyAsTSV),
+        ("JSON", CommandType::CopyAsJSON),
+        ("SQL", CommandType::CopyAsSQL),
+        ("Markdown", CommandType::CopyAsMarkdown),
+        ("HTML", CommandType::CopyAsHTML),
+    ] {
+        commands.push(leaf(
+            t!("palette.commands.copy_as", format = format),
+            results.clone(),
+            copy,
+        ));
+    }
+    for (format, export) in [
+        ("CSV", CommandType::ExportAsCSV),
+        ("TSV", CommandType::ExportAsTSV),
+        ("JSON", CommandType::ExportAsJSON),
+        ("SQL", CommandType::ExportAsSQL),
+        ("Markdown", CommandType::ExportAsMarkdown),
+        ("HTML", CommandType::ExportAsHTML),
+    ] {
+        commands.push(leaf(
+            t!("palette.commands.export_as", format = format),
+            results.clone(),
+            export,
+        ));
+    }
+    commands.extend([
         leaf(
-            "Export as Markdown",
-            "Results",
-            CommandType::ExportAsMarkdown,
-        ),
-        leaf("Export as HTML", "Results", CommandType::ExportAsHTML),
-        leaf(
-            "Render Whitespace",
-            "View",
+            t!("palette.commands.render_whitespace"),
+            view.clone(),
             CommandType::ToggleRenderWhitespace,
         ),
-        leaf("Word Wrap", "View", CommandType::ToggleWordWrap),
-        leaf("Close Tab", "Tab", CommandType::CloseActiveTab),
-        leaf("Close Other Tabs", "Tab", CommandType::CloseOtherTabs),
         leaf(
-            "Close Tabs to the Left",
-            "Tab",
+            t!("palette.commands.word_wrap"),
+            view.clone(),
+            CommandType::ToggleWordWrap,
+        ),
+        bound_leaf("CloseActiveTab", tab.clone(), CommandType::CloseActiveTab),
+        bound_leaf("CloseOtherTabs", tab.clone(), CommandType::CloseOtherTabs),
+        bound_leaf(
+            "CloseTabsToTheLeft",
+            tab.clone(),
             CommandType::CloseTabsToTheLeft,
         ),
-        leaf(
-            "Close Tabs to the Right",
-            "Tab",
+        bound_leaf(
+            "CloseTabsToTheRight",
+            tab.clone(),
             CommandType::CloseTabsToTheRight,
         ),
-        leaf("Close All Tabs", "Tab", CommandType::CloseAllTabs),
-        leaf("New Query Tab", "Tab", CommandType::NewQueryTab),
+        bound_leaf("CloseAllTabs", tab.clone(), CommandType::CloseAllTabs),
+        bound_leaf("NewQueryTab", tab.clone(), CommandType::NewQueryTab),
         leaf(
-            "Move Tab to New Window",
-            "Tab",
+            t!("palette.commands.move_tab_to_new_window"),
+            tab.clone(),
             CommandType::MoveTabToNewWindow,
         ),
-        leaf("New Window", "Window", CommandType::NewWindow),
-        leaf("Close Window", "Window", CommandType::CloseWindow),
-        leaf("Next Tab", "Tab", CommandType::ActivateNextTab),
-        leaf("Previous Tab", "Tab", CommandType::ActivatePreviousTab),
-        leaf("Toggle Results Pane", "View", CommandType::ToggleResults),
-        leaf("Cancel Query", "Query", CommandType::CancelQuery),
-        leaf(
-            "Import into Selected Table…",
-            "Connection",
+        bound_leaf("NewWindow", window.clone(), CommandType::NewWindow),
+        bound_leaf("CloseWindow", window, CommandType::CloseWindow),
+        bound_leaf("ActivateNextTab", tab.clone(), CommandType::ActivateNextTab),
+        bound_leaf(
+            "ActivatePreviousTab",
+            tab.clone(),
+            CommandType::ActivatePreviousTab,
+        ),
+        bound_leaf("ToggleResults", view, CommandType::ToggleResults),
+        bound_leaf("CancelQuery", query.clone(), CommandType::CancelQuery),
+        bound_leaf(
+            "ImportTableData",
+            connection.clone(),
             CommandType::ImportTableData,
         ),
-        leaf(
-            "Export Selected Table…",
-            "Connection",
+        bound_leaf(
+            "ExportTableData",
+            connection.clone(),
             CommandType::ExportTableData,
         ),
-        leaf(
-            "Refresh Connection",
-            "Connection",
+        bound_leaf(
+            "RefreshConnections",
+            connection,
             CommandType::RefreshConnections,
         ),
-        leaf("Reopen Closed Tab", "Tab", CommandType::ReopenClosedTab),
-        leaf("New Dashboard…", "Dashboard", CommandType::NewDashboard),
-    ];
-    for dashboard in crate::editor::dashboard::DashboardDirectory::dashboards(cx) {
+        bound_leaf("ReopenClosedTab", tab, CommandType::ReopenClosedTab),
+        leaf(
+            t!("palette.commands.new_dashboard"),
+            dashboard.clone(),
+            CommandType::NewDashboard,
+        ),
+    ]);
+    for item in crate::editor::dashboard::DashboardDirectory::dashboards(cx) {
         commands.push(leaf(
-            format!("Open Dashboard: {}", dashboard.name),
-            "Dashboard",
-            CommandType::OpenDashboard(dashboard.id),
+            t!("palette.commands.open_dashboard", name = item.name),
+            dashboard.clone(),
+            CommandType::OpenDashboard(item.id),
         ));
     }
 
@@ -1394,16 +1463,12 @@ fn build_commands(
         commands.splice(
             after_format..after_format,
             [
-                leaf(
-                    "Upper Case Keywords",
-                    "Query",
+                bound_leaf(
+                    "UpperCaseKeywords",
+                    query.clone(),
                     CommandType::UpperCaseKeywords,
                 ),
-                leaf(
-                    "Lower Case Keywords",
-                    "Query",
-                    CommandType::LowerCaseKeywords,
-                ),
+                bound_leaf("LowerCaseKeywords", query, CommandType::LowerCaseKeywords),
             ],
         );
     }
@@ -1425,8 +1490,8 @@ fn add_tab_commands(
     };
     for (index, title) in editor_panel.read(cx).tab_titles(cx).into_iter().enumerate() {
         commands.push(leaf(
-            format!("Go to Tab: {title}"),
-            "Tab",
+            t!("palette.commands.go_to_tab", title = title),
+            t!("palette.groups.tab"),
             CommandType::ActivateEditorTab(index),
         ));
     }
@@ -1439,10 +1504,11 @@ fn add_theme_commands(commands: &mut Vec<CommandItem>, cx: &App) {
         .map(|name| name.to_string())
         .collect();
     names.sort();
+    let view = t!("palette.groups.view");
     for name in names {
         commands.push(leaf(
-            format!("Theme: {name}"),
-            "View",
+            t!("palette.commands.theme", name = name),
+            view.clone(),
             CommandType::SwitchTheme(name),
         ));
     }
@@ -1462,7 +1528,7 @@ fn add_connection_commands(
         };
         commands.push(CommandItem {
             label: connection.name.clone(),
-            group: "Connection".into(),
+            group: t!("palette.groups.connection").into(),
             kind: ItemKind::Connection(ConnectionRef {
                 connection_id,
                 connection_name: connection.name.clone(),
@@ -1752,17 +1818,17 @@ mod visual_tests {
         );
 
         palette.update_in(&mut cx, |p, window, cx| {
-            p.set_query_for_test("format query", window, cx);
+            p.set_query_for_test("format sql", window, cx);
         });
         cx.run_until_parked();
 
         let labels = palette.read_with(&cx, |p, cx| p.filtered_labels(cx));
         assert!(
-            labels.iter().any(|l| l == "Format Query"),
-            "filtered list should contain 'Format Query', got {labels:?}"
+            labels.iter().any(|l| l == "Format SQL"),
+            "filtered list should contain 'Format SQL', got {labels:?}"
         );
         assert!(
-            !labels.iter().any(|l| l == "Run Query"),
+            !labels.iter().any(|l| l == "Run current statement"),
             "non-matching commands should be filtered out, got {labels:?}"
         );
     }
@@ -1782,7 +1848,7 @@ mod visual_tests {
                     .map(|command| command.label)
                     .collect()
             });
-            for label in ["Upper Case Keywords", "Lower Case Keywords"] {
+            for label in ["Upper case keywords", "Lower case keywords"] {
                 assert_eq!(
                     labels.iter().any(|existing| existing == label),
                     offered,

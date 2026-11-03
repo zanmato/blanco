@@ -9,7 +9,6 @@ use gpui_component::{ActiveTheme, v_flex};
 use blanco_core::ConnectionContext;
 
 pub struct ObjectDdlTab {
-    pub title: String,
     pub kind: ObjectKind,
     pub context: ConnectionContext,
     pub object_name: String,
@@ -20,6 +19,16 @@ pub struct ObjectDdlTab {
 }
 
 impl ObjectDdlTab {
+    /// The tab strip label, in the current language.
+    pub fn title(&self) -> String {
+        t!(
+            "structure.object_ddl.title",
+            kind = kind_name(self.kind).to_lowercase(),
+            name = self.object_name
+        )
+        .into_owned()
+    }
+
     pub fn new(
         kind: ObjectKind,
         context: ConnectionContext,
@@ -27,11 +36,9 @@ impl ObjectDdlTab {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let title = format!("{}: {}", kind.display_name().to_lowercase(), object_name);
         let language = crate::sql::highlight_language(context.db_type);
         let sql_view = cx.new(|cx| SqlView::new(1, language, cx));
         Self {
-            title,
             kind,
             context,
             object_name,
@@ -59,6 +66,30 @@ impl ObjectDdlTab {
     }
 }
 
+fn kind_name(kind: ObjectKind) -> std::borrow::Cow<'static, str> {
+    match kind {
+        ObjectKind::Procedure => t!("structure.object_ddl.kind.procedure"),
+        ObjectKind::Function => t!("structure.object_ddl.kind.function"),
+        ObjectKind::Trigger => t!("structure.object_ddl.kind.trigger"),
+        ObjectKind::Enum => t!("structure.object_ddl.kind.enum"),
+        ObjectKind::CompositeType => t!("structure.object_ddl.kind.composite_type"),
+        ObjectKind::Domain => t!("structure.object_ddl.kind.domain"),
+        ObjectKind::Sequence => t!("structure.object_ddl.kind.sequence"),
+    }
+}
+
+fn ddl_header(kind: ObjectKind) -> std::borrow::Cow<'static, str> {
+    match kind {
+        ObjectKind::Procedure => t!("structure.object_ddl.header.procedure"),
+        ObjectKind::Function => t!("structure.object_ddl.header.function"),
+        ObjectKind::Trigger => t!("structure.object_ddl.header.trigger"),
+        ObjectKind::Enum => t!("structure.object_ddl.header.enum"),
+        ObjectKind::CompositeType => t!("structure.object_ddl.header.composite_type"),
+        ObjectKind::Domain => t!("structure.object_ddl.header.domain"),
+        ObjectKind::Sequence => t!("structure.object_ddl.header.sequence"),
+    }
+}
+
 impl Focusable for ObjectDdlTab {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus_handle.clone()
@@ -68,11 +99,13 @@ impl Focusable for ObjectDdlTab {
 impl Render for ObjectDdlTab {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
-        let header = format!("{} DDL", self.kind.display_name());
+        let header: SharedString = ddl_header(self.kind).into();
         let status: Option<SharedString> = if self.loading {
-            Some("Loading…".into())
+            Some(t!("structure.loading").into())
         } else {
-            self.error.as_ref().map(|e| format!("Error: {e}").into())
+            self.error
+                .as_ref()
+                .map(|error| t!("structure.error", error = error).into())
         };
 
         v_flex()

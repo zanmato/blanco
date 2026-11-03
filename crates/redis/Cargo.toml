@@ -8,6 +8,8 @@ description = "Redis backend implementation for Blanco SQL editor"
 path = "src/redis.rs"
 
 [dependencies]
+# The interface language, a process global the app sets at startup.
+rust-i18n = "4.2"
 blanco-core = { path = "../blanco-core" }
 anyhow = { workspace = true }
 async-trait = { workspace = true }

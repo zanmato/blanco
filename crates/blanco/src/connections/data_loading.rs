@@ -206,7 +206,9 @@ impl ConnectionsPanel {
             .find(|connection| connection.id == Some(connection_id));
         let connection_label = connection_data
             .map(|connection| connection.name.clone())
-            .unwrap_or_else(|| format!("connection {connection_id}"));
+            .unwrap_or_else(|| {
+                t!("sidebar.tree.connection_fallback", id = connection_id).into_owned()
+            });
         let pinned_database = connection_data
             .and_then(|connection| connection.pinned_database())
             .map(str::to_string);
@@ -216,8 +218,10 @@ impl ConnectionsPanel {
         let configured_database = connection_data
             .and_then(|connection| connection.database_name.clone())
             .filter(|database| !database.is_empty());
-        let activity =
-            ActivityReporter::global(cx).begin(format!("{connection_label}: listing schema"));
+        let activity = ActivityReporter::global(cx).begin(t!(
+            "sidebar.activity.listing_schema",
+            connection = connection_label
+        ));
         let key_filter = self
             .key_filters
             .get(&connection_id)
@@ -254,7 +258,7 @@ impl ConnectionsPanel {
                         None => connection
                             .get_databases()
                             .await
-                            .context("Failed to list databases")?,
+                            .context(t!("sidebar.errors.list_databases"))?,
                     };
                     tracing::info!(
                         "Connection {} supports schemas. Loaded {} databases: {:?}",
@@ -299,7 +303,7 @@ impl ConnectionsPanel {
                     let schemas = connection
                         .get_schemas()
                         .await
-                        .context("Failed to list schemas")?;
+                        .context(t!("sidebar.errors.list_schemas"))?;
                     tracing::info!(
                         "Connection {} loaded {} schemas: {:?}",
                         connection_id,

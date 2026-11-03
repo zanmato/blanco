@@ -9,8 +9,8 @@
 
 use std::collections::HashMap;
 
+use blanco_ui::table::ColumnFixed;
 use gpui::{Pixels, px};
-use gpui_component::table::ColumnFixed;
 use serde::{Deserialize, Serialize};
 
 use super::ResultsTableDelegate;
@@ -293,7 +293,7 @@ impl ResultsTableDelegate {
 mod tests {
     use super::*;
     use blanco_core::connection_trait::ColumnType;
-    use gpui_component::table::Column;
+    use blanco_ui::table::Column;
 
     fn delegate(names: &[&str]) -> ResultsTableDelegate {
         let mut delegate = ResultsTableDelegate {

@@ -118,7 +118,8 @@ pub struct HistoryPanel {
 
 impl HistoryPanel {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("Search history"));
+        let search_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder(t!("sidebar.history.search")));
 
         let search_subscription =
             cx.subscribe(&search_input, |this, _input, event: &InputEvent, cx| {
@@ -127,6 +128,12 @@ impl HistoryPanel {
                 }
             });
 
+        let placeholder_subscription = crate::i18n::placeholder_follows_locale(
+            &search_input,
+            "sidebar.history.search",
+            window,
+            cx,
+        );
         let mut this = Self {
             entries: Vec::new(),
             item_sizes: row_sizes(0),
@@ -136,6 +143,7 @@ impl HistoryPanel {
             // Previews keep the colors of the theme they were highlighted
             // with, so a theme change loads them again.
             _subscriptions: vec![
+                placeholder_subscription,
                 search_subscription,
                 cx.observe_global::<Theme>(|this, cx| this.reload(cx)),
             ],
@@ -272,7 +280,14 @@ impl HistoryPanel {
         if entry.success
             && let Some(rows) = entry.row_count
         {
-            meta.push(format!("{rows} rows"));
+            meta.push(
+                if rows == 1 {
+                    t!("sidebar.history.rows_one", count = rows)
+                } else {
+                    t!("sidebar.history.rows_other", count = rows)
+                }
+                .into_owned(),
+            );
         }
         if let Some(name) = &entry.connection_name {
             meta.push(name.clone());
@@ -356,7 +371,7 @@ impl HistoryPanel {
                             .ghost()
                             .xsmall()
                             .icon(IconName::Copy)
-                            .tooltip("Copy")
+                            .tooltip(t!("sidebar.history.copy"))
                             .on_click(cx.listener(move |this, _, _window, cx| {
                                 this.copy_entry(index, cx);
                             })),
@@ -366,7 +381,7 @@ impl HistoryPanel {
                             .ghost()
                             .xsmall()
                             .icon(IconName::Trash)
-                            .tooltip("Delete")
+                            .tooltip(t!("sidebar.history.delete"))
                             .on_click(cx.listener(move |this, _, _window, cx| {
                                 this.delete_entry(index, cx);
                             })),
@@ -415,7 +430,7 @@ impl Render for HistoryPanel {
                             .ghost()
                             .xsmall()
                             .icon(IconName::Trash)
-                            .tooltip("Clear all history")
+                            .tooltip(t!("sidebar.history.clear_all"))
                             .disabled(!has_entries)
                             .on_click(cx.listener(|this, _, _window, cx| {
                                 this.clear_all(cx);
@@ -436,7 +451,7 @@ impl Render for HistoryPanel {
                                 div()
                                     .text_size(px(12.))
                                     .text_color(cx.theme().muted_foreground)
-                                    .child("No query history yet"),
+                                    .child(t!("sidebar.history.empty")),
                             )
                         })
                         .when(has_entries, |this| {

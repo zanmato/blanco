@@ -1,0 +1,16 @@
+_version: 2
+# Messages the app database writes for the user. See the glossary at the top
+# of crates/blanco/locales/app.yml.
+app_database:
+  import_unknown_type:
+    en: "Connection \"%{name}\" has an unknown type \"%{db_type}\""
+    sv: "Anslutningen \"%{name}\" har en okänd typ \"%{db_type}\""
+  import_not_connections_file_because:
+    en: "This is not a Blanco connections file: %{error}"
+    sv: "Det här är ingen anslutningsfil från Blanco: %{error}"
+  import_not_connections_file:
+    en: "This is not a Blanco connections file"
+    sv: "Det här är ingen anslutningsfil från Blanco"
+  import_newer_version:
+    en: "This connections file was written by a newer Blanco"
+    sv: "Den här anslutningsfilen skrevs av en nyare version av Blanco"

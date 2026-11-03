@@ -1,7 +1,8 @@
 //! Pins the folders a tree has scrolled past to the top of its list, so the
-//! folder holding the rows on screen stays in reach. Both trees draw their rows
-//! through `uniform_list`, whose decoration layer is told the scroll offset and
-//! the row height, which is all the pinning needs.
+//! folder holding the rows on screen stays in reach. Both trees and the app's
+//! open tabs list draw their rows through `uniform_list`, whose decoration
+//! layer is told the scroll offset and the row height, which is all the
+//! pinning needs.
 
 use std::ops::Range;
 
@@ -102,7 +103,7 @@ pub(crate) fn rows_hidden_above(depth: usize) -> usize {
 }
 
 /// Scroll to an entry at `depth`, keeping it out from under the pinned folders.
-pub(crate) fn scroll_to_entry(
+pub fn scroll_to_entry(
     scroll_handle: &UniformListScrollHandle,
     ix: usize,
     depth: usize,
@@ -115,7 +116,7 @@ pub(crate) fn scroll_to_entry(
 }
 
 /// A tree that can pin its folders.
-pub(crate) trait StickyRowsHost: Sized + 'static {
+pub trait StickyRowsHost: Sized + 'static {
     fn entry_count(&self) -> usize;
 
     fn entry_depth(&self, ix: usize) -> usize;
@@ -131,7 +132,7 @@ pub(crate) trait StickyRowsHost: Sized + 'static {
 }
 
 /// The `uniform_list` decoration that draws a host's pinned folders.
-pub(crate) struct StickyRows<T>(pub Entity<T>);
+pub struct StickyRows<T>(pub Entity<T>);
 
 impl<T: StickyRowsHost> UniformListDecoration for StickyRows<T> {
     fn compute(

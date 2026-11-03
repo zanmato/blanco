@@ -358,7 +358,8 @@ impl EditorPanel {
     ) -> Result<TabRun, String> {
         let query_tab = self.query_tab_for_mcp(index)?;
         let statement = self
-            .statement_to_run(index, cx)?
+            .statement_to_run(index, cx)
+            .map_err(|nothing| nothing.agent_message())?
             .ok_or_else(|| format!("Tab {index} has nothing to run."))?;
         Ok(TabRun {
             tab_id: query_tab.editor.entity_id().as_u64(),

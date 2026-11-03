@@ -44,7 +44,7 @@ pub fn read_sql_file(path: &Path) -> std::io::Result<String> {
     String::from_utf8(bytes).map_err(|_| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            "the file is not UTF-8 text",
+            t!("editor.files.not_utf8").into_owned(),
         )
     })
 }
@@ -77,7 +77,7 @@ impl EditorPanel {
             files: true,
             directories: false,
             multiple: true,
-            prompt: Some("Open".into()),
+            prompt: Some(t!("editor.files.prompt_open").into()),
         });
         cx.spawn_in(window, async move |this, cx| {
             let Some(paths) = paths.await.ok().and_then(Result::ok).flatten() else {
@@ -107,7 +107,7 @@ impl EditorPanel {
             .map(|tab| tab.context.clone())
         else {
             Self::notify_error(
-                "Open a query tab on a connection first: a dropped SQL file opens on the active tab's connection".to_string(),
+                t!("editor.files.drop_needs_connection").into_owned(),
                 window,
                 cx,
             );
@@ -134,11 +134,12 @@ impl EditorPanel {
             let size = std::fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
             if size > MAX_EDITOR_FILE_BYTES {
                 Self::notify_error(
-                    format!(
-                        "{} is {} MB, too large to edit. Use Run SQL File to run it without opening it.",
-                        file_name(&path),
-                        size / (1024 * 1024)
-                    ),
+                    t!(
+                        "editor.files.too_large",
+                        file = file_name(&path),
+                        megabytes = size / (1024 * 1024)
+                    )
+                    .into_owned(),
                     window,
                     cx,
                 );
@@ -148,7 +149,12 @@ impl EditorPanel {
                 Ok(text) => text,
                 Err(error) => {
                     Self::notify_error(
-                        format!("Could not open {}: {error}", path.display()),
+                        t!(
+                            "editor.files.open_failed",
+                            path = path.display(),
+                            error = error
+                        )
+                        .into_owned(),
                         window,
                         cx,
                     );
@@ -265,10 +271,7 @@ impl EditorPanel {
             this.update_in(cx, |this, window, cx| {
                 if let Some(other) = this.tab_for_file(&path).filter(|other| *other != ix) {
                     Self::notify_error(
-                        format!(
-                            "{} is open in another tab. Close that tab before saving over the file.",
-                            file_name(&path)
-                        ),
+                        t!("editor.files.open_in_other_tab", file = file_name(&path)).into_owned(),
                         window,
                         cx,
                     );
@@ -297,7 +300,12 @@ impl EditorPanel {
         let text = tab.editor.read(cx).text().to_string();
         if let Err(error) = write_sql_file(&path, &text) {
             Self::notify_error(
-                format!("Could not save {}: {error}", path.display()),
+                t!(
+                    "editor.files.save_failed",
+                    path = path.display(),
+                    error = error
+                )
+                .into_owned(),
                 window,
                 cx,
             );
@@ -367,26 +375,29 @@ impl EditorPanel {
             let save = respond.clone();
             let discard = respond.clone();
             dialog
-                .title(format!("Save changes to {name}?"))
-                .child("Your changes are lost if you close the tab without saving.")
+                .title(t!("editor.unsaved.save_changes_to", name = name))
+                .child(t!("editor.unsaved.tab_message"))
                 .footer(
                     DialogFooter::new()
                         .child(
-                            DialogClose::new()
-                                .child(Button::new("close-file-cancel").label("Cancel").outline()),
+                            DialogClose::new().child(
+                                Button::new("close-file-cancel")
+                                    .label(t!("editor.cancel"))
+                                    .outline(),
+                            ),
                         )
                         // Sibling `DialogAction`s share a click state, so the
                         // buttons close the dialog themselves.
                         .child(
                             Button::new("close-file-discard")
                                 .outline()
-                                .label("Don't Save")
+                                .label(t!("editor.unsaved.dont_save"))
                                 .on_click(move |_, window, cx| discard(false, window, cx)),
                         )
                         .child(
                             Button::new("close-file-save")
                                 .primary()
-                                .label("Save")
+                                .label(t!("editor.unsaved.save"))
                                 .on_click(move |_, window, cx| save(true, window, cx)),
                         ),
                 )
@@ -407,21 +418,21 @@ impl EditorPanel {
             let weak = weak.clone();
             let structure = structure.clone();
             dialog
-                .title(format!("Discard changes to {table_name}?"))
-                .child("The structure changes you have not applied are lost if you close the tab.")
+                .title(t!("editor.unsaved.discard_structure_title", table = table_name))
+                .child(t!("editor.unsaved.discard_structure_message"))
                 .footer(
                     DialogFooter::new()
                         .child(
                             DialogClose::new().child(
                                 Button::new("close-structure-cancel")
-                                    .label("Cancel")
+                                    .label(t!("editor.cancel"))
                                     .outline(),
                             ),
                         )
                         .child(
                             Button::new("close-structure-discard")
                                 .danger()
-                                .label("Discard and Close")
+                                .label(t!("editor.unsaved.discard_and_close"))
                                 .on_click(move |_, window, cx| {
                                     // Found again by entity: other tabs may
                                     // have moved while the dialog was open.
@@ -462,7 +473,13 @@ fn rope_equals(rope: &gpui_component::input::Rope, text: &str) -> bool {
 /// kept.
 fn suggested_file_name(title: &str) -> String {
     let title = title.trim();
-    let title = if title.is_empty() { "query" } else { title };
+    let default_title = t!("editor.files.default_file_name");
+    let title = if title.is_empty() {
+        default_title.as_ref()
+    } else {
+        title
+    };
+
     let clean: String = title
         .chars()
         .map(|c| {

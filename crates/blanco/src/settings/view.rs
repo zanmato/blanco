@@ -89,11 +89,25 @@ fn client_tool_items(view_handle: &gpui::WeakEntity<SettingsView>) -> Vec<Settin
             )
             .default_value(SharedString::default()),
         )
-        .description(format!(
-            "Path to {name}. Leave empty to find it on PATH and in the usual install locations."
-        ))
+        .description(t!("settings.database.client_tool_description", name = name).into_owned())
     })
     .collect()
+}
+
+/// The language setting's choices: following the system, which names the
+/// language that gives, then every translation by its own name.
+fn language_options() -> Vec<(SharedString, SharedString)> {
+    let system_language = crate::i18n::language_name(&crate::i18n::system_locale());
+    let system = t!(
+        "settings.general.language_system",
+        language = system_language
+    );
+    std::iter::once((SharedString::default(), system.into()))
+        .chain(crate::i18n::available_locales().into_iter().map(|locale| {
+            let name = crate::i18n::language_name(&locale);
+            (locale.into(), name.into())
+        }))
+        .collect()
 }
 
 /// Main settings view component
@@ -118,7 +132,16 @@ impl SettingsView {
             theme_browser: None,
             // Re-render when the MCP server starts, stops or fails so the
             // status row stays current.
-            _subscriptions: vec![cx.observe_global::<McpService>(|_, cx| cx.notify())],
+            _subscriptions: vec![
+                cx.observe_global::<McpService>(|_, cx| cx.notify()),
+                // These keep translated text from when they were made, so
+                // render makes them again in the new language.
+                cx.observe_global::<crate::i18n::Locale>(|this, cx| {
+                    this.environment_tags_editor = None;
+                    this.theme_browser = None;
+                    cx.notify();
+                }),
+            ],
         }
     }
 
@@ -277,1073 +300,1297 @@ impl SettingsView {
         let mono_font_select = self.mono_font_select.clone();
 
         vec![
-            SettingPage::new("General").resettable(true).groups(vec![
-                SettingGroup::new().title("Updates").items(vec![
-                    SettingItem::new(
-                        "Check for Updates",
-                        SettingField::switch(
-                            move |cx: &App| {
-                                AppSettings::global(cx).settings.general.check_for_updates
-                            },
-                            {
-                                let view_handle = view_handle.clone();
-                                move |val: bool, cx: &mut App| {
-                                    AppSettings::global_mut(cx)
-                                        .settings
-                                        .general
-                                        .check_for_updates = val;
-
-                                    let key = "general.check_for_updates".to_string();
-                                    let value = val.to_string();
-                                    if let Some(view) = view_handle.upgrade() {
-                                        view.update(cx, |view, cx| {
-                                            view.save_setting_debounced(key, value, false, cx);
-                                        });
-                                    }
-                                }
-                            },
-                        )
-                        .default_value(default_settings.general.check_for_updates),
-                    )
-                    .description(
-                        "Check for new releases hourly. An Update button appears in the title bar when one is available.",
-                    ),
-                ]),
-                SettingGroup::new().title("Sidebar").items(vec![
-                    SettingItem::new(
-                        "Follow Active Tab",
-                        SettingField::switch(
-                            move |cx: &App| {
-                                AppSettings::global(cx).settings.general.follow_active_tab
-                            },
-                            {
-                                let view_handle = view_handle.clone();
-                                move |val: bool, cx: &mut App| {
-                                    AppSettings::global_mut(cx)
-                                        .settings
-                                        .general
-                                        .follow_active_tab = val;
-
-                                    let key = "general.follow_active_tab".to_string();
-                                    let value = val.to_string();
-                                    if let Some(view) = view_handle.upgrade() {
-                                        view.update(cx, |view, cx| {
-                                            view.save_setting_debounced(key, value, false, cx);
-                                        });
-                                    }
-                                }
-                            },
-                        )
-                        .default_value(default_settings.general.follow_active_tab),
-                    )
-                    .description(
-                        "Select the active tab's table in the sidebar, opening the groups above it.",
-                    ),
-                ]),
-            ]),
-            // Editor Settings Page
-            SettingPage::new("Editor").resettable(true).groups(vec![
-                SettingGroup::new().title("Text").items(vec![
-                    SettingItem::new(
-                        "Word Wrap",
-                        SettingField::switch(
-                            move |cx: &App| AppSettings::global(cx).settings.editor.word_wrap,
-                            {
-                                let view_handle = view_handle.clone();
-                                move |val: bool, cx: &mut App| {
-                                    AppSettings::global_mut(cx).settings.editor.word_wrap = val;
-
-                                    let key = "editor.word_wrap".to_string();
-                                    let value = val.to_string();
-                                    if let Some(view) = view_handle.upgrade() {
-                                        view.update(cx, |view, cx| {
-                                            view.save_setting_debounced(key, value, false, cx);
-                                        });
-                                    }
-                                }
-                            },
-                        )
-                        .default_value(default_settings.editor.word_wrap),
-                    )
-                    .description("Enable word wrapping in the SQL editor."),
-                    SettingItem::new(
-                        "Render Whitespace",
-                        SettingField::switch(
-                            move |cx: &App| AppSettings::global(cx).settings.editor.show_whitespace,
-                            {
-                                let view_handle = view_handle.clone();
-                                move |val: bool, cx: &mut App| {
-                                    AppSettings::global_mut(cx).settings.editor.show_whitespace =
-                                        val;
-
-                                    let key = "editor.show_whitespace".to_string();
-                                    let value = val.to_string();
-                                    if let Some(view) = view_handle.upgrade() {
-                                        view.update(cx, |view, cx| {
-                                            view.save_setting_debounced(key, value, false, cx);
-                                        });
-                                    }
-                                }
-                            },
-                        )
-                        .default_value(default_settings.editor.show_whitespace),
-                    )
-                    .description("Show whitespace characters in the SQL editor."),
-                    SettingItem::new(
-                        "Highlight Invisible Characters",
-                        SettingField::switch(
-                            move |cx: &App| {
-                                AppSettings::global(cx)
-                                    .settings
-                                    .editor
-                                    .highlight_invisible_characters
-                            },
-                            {
-                                let view_handle = view_handle.clone();
-                                move |val: bool, cx: &mut App| {
-                                    AppSettings::global_mut(cx)
-                                        .settings
-                                        .editor
-                                        .highlight_invisible_characters = val;
-
-                                    let key = "editor.highlight_invisible_characters".to_string();
-                                    let value = val.to_string();
-                                    if let Some(view) = view_handle.upgrade() {
-                                        view.update(cx, |view, cx| {
-                                            view.save_setting_debounced(key, value, false, cx);
-                                        });
-                                    }
-                                }
-                            },
-                        )
-                        .default_value(default_settings.editor.highlight_invisible_characters),
-                    )
-                    .description(
-                        "Box no-break spaces, zero width characters and control characters in \
-                         the SQL editor, which otherwise look like a plain space or nothing.",
-                    ),
-                    SettingItem::new(
-                        "Colorize Brackets",
-                        SettingField::switch(
-                            move |cx: &App| {
-                                AppSettings::global(cx).settings.editor.colorize_brackets
-                            },
-                            {
-                                let view_handle = view_handle.clone();
-                                move |val: bool, cx: &mut App| {
-                                    AppSettings::global_mut(cx)
-                                        .settings
-                                        .editor
-                                        .colorize_brackets = val;
-
-                                    let key = "editor.colorize_brackets".to_string();
-                                    let value = val.to_string();
-                                    if let Some(view) = view_handle.upgrade() {
-                                        view.update(cx, |view, cx| {
-                                            view.save_setting_debounced(key, value, false, cx);
-                                        });
-                                    }
-                                }
-                            },
-                        )
-                        .default_value(default_settings.editor.colorize_brackets),
-                    )
-                    .description(
-                        "Color brackets in the SQL editor by how deeply they nest, and brackets \
-                         without a partner in the error color.",
-                    ),
-                    SettingItem::new(
-                        "Folding",
-                        SettingField::switch(
-                            move |cx: &App| AppSettings::global(cx).settings.editor.folding,
-                            {
-                                let view_handle = view_handle.clone();
-                                move |val: bool, cx: &mut App| {
-                                    AppSettings::global_mut(cx).settings.editor.folding = val;
-
-                                    let key = "editor.folding".to_string();
-                                    let value = val.to_string();
-                                    if let Some(view) = view_handle.upgrade() {
-                                        view.update(cx, |view, cx| {
-                                            view.save_setting_debounced(key, value, false, cx);
-                                        });
-                                    }
-                                }
-                            },
-                        )
-                        .default_value(default_settings.editor.folding),
-                    )
-                    .description("Enable code folding in the SQL editor."),
-                    SettingItem::new(
-                        "Hard Tabs",
-                        SettingField::switch(
-                            move |cx: &App| AppSettings::global(cx).settings.editor.hard_tabs,
-                            {
-                                let view_handle = view_handle.clone();
-                                move |val: bool, cx: &mut App| {
-                                    AppSettings::global_mut(cx).settings.editor.hard_tabs = val;
-
-                                    let key = "editor.hard_tabs".to_string();
-                                    let value = val.to_string();
-                                    if let Some(view) = view_handle.upgrade() {
-                                        view.update(cx, |view, cx| {
-                                            view.save_setting_debounced(key, value, false, cx);
-                                        });
-                                    }
-                                }
-                            },
-                        )
-                        .default_value(default_settings.editor.hard_tabs),
-                    )
-                    .description("Use tab characters instead of spaces for indentation."),
-                    SettingItem::new(
-                        "Tab Size",
-                        SettingField::number_input(
-                            NumberFieldOptions {
-                                min: 1.0,
-                                max: 8.0,
-                                step: 1.0,
-                            },
-                            move |cx: &App| AppSettings::global(cx).settings.editor.tab_size as f64,
-                            {
-                                let view_handle = view_handle.clone();
-                                move |val: f64, cx: &mut App| {
-                                    AppSettings::global_mut(cx).settings.editor.tab_size =
-                                        val as u32;
-
-                                    let key = "editor.tab_size".to_string();
-                                    let value = val.to_string();
-                                    if let Some(view) = view_handle.upgrade() {
-                                        view.update(cx, |view, cx| {
-                                            view.save_setting_debounced(key, value, false, cx);
-                                        });
-                                    }
-                                }
-                            },
-                        )
-                        .default_value(default_settings.editor.tab_size as f64),
-                    )
-                    .description("Number of spaces per tab stop (1-8)."),
-                    SettingItem::new(
-                        "Accept Suggestion With",
-                        SettingField::dropdown(
-                            vec![
-                                ("enter".into(), "Enter".into()),
-                                ("tab".into(), "Tab".into()),
-                                ("enter_and_tab".into(), "Enter or Tab".into()),
-                            ],
-                            move |cx: &App| {
-                                SharedString::from(
-                                    AppSettings::global(cx)
-                                        .settings
-                                        .editor
-                                        .completion_accept_keys
-                                        .key(),
+            SettingPage::new(t!("settings.general.page"))
+                .resettable(true)
+                .groups(vec![
+                    SettingGroup::new()
+                        .title(t!("settings.general.language_group"))
+                        .items(vec![
+                            SettingItem::new(
+                                t!("settings.general.language"),
+                                SettingField::dropdown(
+                                    language_options(),
+                                    |cx: &App| {
+                                        SharedString::from(
+                                            AppSettings::global(cx)
+                                                .settings
+                                                .general
+                                                .language
+                                                .clone()
+                                                .unwrap_or_default(),
+                                        )
+                                    },
+                                    {
+                                        let view_handle = view_handle.clone();
+                                        move |val: SharedString, cx: &mut App| {
+                                            let language =
+                                                (!val.is_empty()).then(|| val.to_string());
+                                            crate::i18n::change(language.as_deref(), cx);
+                                            AppSettings::global_mut(cx).settings.general.language =
+                                                language;
+                                            if let Some(view) = view_handle.upgrade() {
+                                                view.update(cx, |view, cx| {
+                                                    view.save_setting_debounced(
+                                                        "general.language".to_string(),
+                                                        val.to_string(),
+                                                        false,
+                                                        cx,
+                                                    );
+                                                });
+                                            }
+                                        }
+                                    },
                                 )
-                            },
-                            {
-                                let view_handle = view_handle.clone();
-                                move |val: SharedString, cx: &mut App| {
-                                    let keys = CompletionAcceptKeysSetting::from_key(&val);
-                                    AppSettings::global_mut(cx)
-                                        .settings
-                                        .editor
-                                        .completion_accept_keys = keys;
+                                .default_value(SharedString::default()),
+                            )
+                            .description(t!("settings.general.language_description").into_owned()),
+                        ]),
+                    SettingGroup::new()
+                        .title(t!("settings.general.updates"))
+                        .items(vec![
+                            SettingItem::new(
+                                t!("settings.general.check_for_updates"),
+                                SettingField::switch(
+                                    move |cx: &App| {
+                                        AppSettings::global(cx).settings.general.check_for_updates
+                                    },
+                                    {
+                                        let view_handle = view_handle.clone();
+                                        move |val: bool, cx: &mut App| {
+                                            AppSettings::global_mut(cx)
+                                                .settings
+                                                .general
+                                                .check_for_updates = val;
 
-                                    let key = "editor.completion_accept_keys".to_string();
-                                    let value = keys.key().to_string();
-                                    if let Some(view) = view_handle.upgrade() {
-                                        view.update(cx, |view, cx| {
-                                            view.save_setting_debounced(key, value, false, cx);
-                                        });
-                                    }
-                                }
-                            },
-                        )
-                        .default_value(SharedString::from(
-                            default_settings.editor.completion_accept_keys.key(),
-                        )),
-                    )
-                    .description(
-                        "The key that accepts the highlighted completion. A key that does not accept keeps its usual meaning: Enter starts a new line and closes the list, Tab indents.",
-                    ),
-                    SettingItem::new(
-                        "Wrap Tab Navigation",
-                        SettingField::switch(
-                            move |cx: &App| {
-                                AppSettings::global(cx).settings.editor.tab_navigation_wraps
-                            },
-                            {
-                                let view_handle = view_handle.clone();
-                                move |val: bool, cx: &mut App| {
-                                    AppSettings::global_mut(cx)
-                                        .settings
-                                        .editor
-                                        .tab_navigation_wraps = val;
+                                            let key = "general.check_for_updates".to_string();
+                                            let value = val.to_string();
+                                            if let Some(view) = view_handle.upgrade() {
+                                                view.update(cx, |view, cx| {
+                                                    view.save_setting_debounced(
+                                                        key, value, false, cx,
+                                                    );
+                                                });
+                                            }
+                                        }
+                                    },
+                                )
+                                .default_value(default_settings.general.check_for_updates),
+                            )
+                            .description(
+                                t!("settings.general.check_for_updates_description").into_owned(),
+                            ),
+                        ]),
+                    SettingGroup::new()
+                        .title(t!("settings.general.sidebar"))
+                        .items(vec![
+                            SettingItem::new(
+                                t!("settings.general.follow_active_tab"),
+                                SettingField::switch(
+                                    move |cx: &App| {
+                                        AppSettings::global(cx).settings.general.follow_active_tab
+                                    },
+                                    {
+                                        let view_handle = view_handle.clone();
+                                        move |val: bool, cx: &mut App| {
+                                            AppSettings::global_mut(cx)
+                                                .settings
+                                                .general
+                                                .follow_active_tab = val;
 
-                                    let key = "editor.tab_navigation_wraps".to_string();
-                                    let value = val.to_string();
-                                    if let Some(view) = view_handle.upgrade() {
-                                        view.update(cx, |view, cx| {
-                                            view.save_setting_debounced(key, value, false, cx);
-                                        });
-                                    }
-                                }
-                            },
-                        )
-                        .default_value(default_settings.editor.tab_navigation_wraps),
-                    )
-                    .description(
-                        "Next and Previous Tab go around from the last tab to the first. Off, they stop at the ends.",
-                    ),
-                    SettingItem::new(
-                        "Font Size",
-                        SettingField::number_input(
-                            NumberFieldOptions {
-                                min: EditorSettings::MIN_FONT_SIZE as f64,
-                                max: EditorSettings::MAX_FONT_SIZE as f64,
-                                step: 1.0,
-                            },
-                            move |cx: &App| {
-                                AppSettings::global(cx).settings.editor.font_size as f64
-                            },
-                            {
-                                let view_handle = view_handle.clone();
-                                move |val: f64, cx: &mut App| {
-                                    crate::settings::set_editor_font_size(val as f32, cx);
-
-                                    let key = "editor.font_size".to_string();
-                                    let value = AppSettings::global(cx)
-                                        .settings
-                                        .editor
-                                        .font_size
-                                        .to_string();
-                                    if let Some(view) = view_handle.upgrade() {
-                                        view.update(cx, |view, cx| {
-                                            view.save_setting_debounced(key, value, false, cx);
-                                        });
-                                    }
-                                }
-                            },
-                        )
-                        .default_value(default_settings.editor.font_size as f64),
-                    )
-                    .description(
-                        "Font size in pixels for the query, script and snippet editors (8-32).",
-                    ),
+                                            let key = "general.follow_active_tab".to_string();
+                                            let value = val.to_string();
+                                            if let Some(view) = view_handle.upgrade() {
+                                                view.update(cx, |view, cx| {
+                                                    view.save_setting_debounced(
+                                                        key, value, false, cx,
+                                                    );
+                                                });
+                                            }
+                                        }
+                                    },
+                                )
+                                .default_value(default_settings.general.follow_active_tab),
+                            )
+                            .description(
+                                t!("settings.general.follow_active_tab_description").into_owned(),
+                            ),
+                        ]),
                 ]),
-            ]),
+            // Editor Settings Page
+            SettingPage::new(t!("settings.editor.page"))
+                .resettable(true)
+                .groups(vec![
+                    SettingGroup::new()
+                        .title(t!("settings.editor.text"))
+                        .items(vec![
+                            SettingItem::new(
+                                t!("settings.editor.word_wrap"),
+                                SettingField::switch(
+                                    move |cx: &App| {
+                                        AppSettings::global(cx).settings.editor.word_wrap
+                                    },
+                                    {
+                                        let view_handle = view_handle.clone();
+                                        move |val: bool, cx: &mut App| {
+                                            AppSettings::global_mut(cx).settings.editor.word_wrap =
+                                                val;
+
+                                            let key = "editor.word_wrap".to_string();
+                                            let value = val.to_string();
+                                            if let Some(view) = view_handle.upgrade() {
+                                                view.update(cx, |view, cx| {
+                                                    view.save_setting_debounced(
+                                                        key, value, false, cx,
+                                                    );
+                                                });
+                                            }
+                                        }
+                                    },
+                                )
+                                .default_value(default_settings.editor.word_wrap),
+                            )
+                            .description(t!("settings.editor.word_wrap_description").into_owned()),
+                            SettingItem::new(
+                                t!("settings.editor.render_whitespace"),
+                                SettingField::switch(
+                                    move |cx: &App| {
+                                        AppSettings::global(cx).settings.editor.show_whitespace
+                                    },
+                                    {
+                                        let view_handle = view_handle.clone();
+                                        move |val: bool, cx: &mut App| {
+                                            AppSettings::global_mut(cx)
+                                                .settings
+                                                .editor
+                                                .show_whitespace = val;
+
+                                            let key = "editor.show_whitespace".to_string();
+                                            let value = val.to_string();
+                                            if let Some(view) = view_handle.upgrade() {
+                                                view.update(cx, |view, cx| {
+                                                    view.save_setting_debounced(
+                                                        key, value, false, cx,
+                                                    );
+                                                });
+                                            }
+                                        }
+                                    },
+                                )
+                                .default_value(default_settings.editor.show_whitespace),
+                            )
+                            .description(
+                                t!("settings.editor.render_whitespace_description").into_owned(),
+                            ),
+                            SettingItem::new(
+                                t!("settings.editor.highlight_invisible_characters"),
+                                SettingField::switch(
+                                    move |cx: &App| {
+                                        AppSettings::global(cx)
+                                            .settings
+                                            .editor
+                                            .highlight_invisible_characters
+                                    },
+                                    {
+                                        let view_handle = view_handle.clone();
+                                        move |val: bool, cx: &mut App| {
+                                            AppSettings::global_mut(cx)
+                                                .settings
+                                                .editor
+                                                .highlight_invisible_characters = val;
+
+                                            let key =
+                                                "editor.highlight_invisible_characters".to_string();
+                                            let value = val.to_string();
+                                            if let Some(view) = view_handle.upgrade() {
+                                                view.update(cx, |view, cx| {
+                                                    view.save_setting_debounced(
+                                                        key, value, false, cx,
+                                                    );
+                                                });
+                                            }
+                                        }
+                                    },
+                                )
+                                .default_value(
+                                    default_settings.editor.highlight_invisible_characters,
+                                ),
+                            )
+                            .description(
+                                t!("settings.editor.highlight_invisible_characters_description")
+                                    .into_owned(),
+                            ),
+                            SettingItem::new(
+                                t!("settings.editor.colorize_brackets"),
+                                SettingField::switch(
+                                    move |cx: &App| {
+                                        AppSettings::global(cx).settings.editor.colorize_brackets
+                                    },
+                                    {
+                                        let view_handle = view_handle.clone();
+                                        move |val: bool, cx: &mut App| {
+                                            AppSettings::global_mut(cx)
+                                                .settings
+                                                .editor
+                                                .colorize_brackets = val;
+
+                                            let key = "editor.colorize_brackets".to_string();
+                                            let value = val.to_string();
+                                            if let Some(view) = view_handle.upgrade() {
+                                                view.update(cx, |view, cx| {
+                                                    view.save_setting_debounced(
+                                                        key, value, false, cx,
+                                                    );
+                                                });
+                                            }
+                                        }
+                                    },
+                                )
+                                .default_value(default_settings.editor.colorize_brackets),
+                            )
+                            .description(
+                                t!("settings.editor.colorize_brackets_description").into_owned(),
+                            ),
+                            SettingItem::new(
+                                t!("settings.editor.folding"),
+                                SettingField::switch(
+                                    move |cx: &App| AppSettings::global(cx).settings.editor.folding,
+                                    {
+                                        let view_handle = view_handle.clone();
+                                        move |val: bool, cx: &mut App| {
+                                            AppSettings::global_mut(cx).settings.editor.folding =
+                                                val;
+
+                                            let key = "editor.folding".to_string();
+                                            let value = val.to_string();
+                                            if let Some(view) = view_handle.upgrade() {
+                                                view.update(cx, |view, cx| {
+                                                    view.save_setting_debounced(
+                                                        key, value, false, cx,
+                                                    );
+                                                });
+                                            }
+                                        }
+                                    },
+                                )
+                                .default_value(default_settings.editor.folding),
+                            )
+                            .description(t!("settings.editor.folding_description").into_owned()),
+                            SettingItem::new(
+                                t!("settings.editor.hard_tabs"),
+                                SettingField::switch(
+                                    move |cx: &App| {
+                                        AppSettings::global(cx).settings.editor.hard_tabs
+                                    },
+                                    {
+                                        let view_handle = view_handle.clone();
+                                        move |val: bool, cx: &mut App| {
+                                            AppSettings::global_mut(cx).settings.editor.hard_tabs =
+                                                val;
+
+                                            let key = "editor.hard_tabs".to_string();
+                                            let value = val.to_string();
+                                            if let Some(view) = view_handle.upgrade() {
+                                                view.update(cx, |view, cx| {
+                                                    view.save_setting_debounced(
+                                                        key, value, false, cx,
+                                                    );
+                                                });
+                                            }
+                                        }
+                                    },
+                                )
+                                .default_value(default_settings.editor.hard_tabs),
+                            )
+                            .description(t!("settings.editor.hard_tabs_description").into_owned()),
+                            SettingItem::new(
+                                t!("settings.editor.tab_size"),
+                                SettingField::number_input(
+                                    NumberFieldOptions {
+                                        min: 1.0,
+                                        max: 8.0,
+                                        step: 1.0,
+                                    },
+                                    move |cx: &App| {
+                                        AppSettings::global(cx).settings.editor.tab_size as f64
+                                    },
+                                    {
+                                        let view_handle = view_handle.clone();
+                                        move |val: f64, cx: &mut App| {
+                                            AppSettings::global_mut(cx).settings.editor.tab_size =
+                                                val as u32;
+
+                                            let key = "editor.tab_size".to_string();
+                                            let value = val.to_string();
+                                            if let Some(view) = view_handle.upgrade() {
+                                                view.update(cx, |view, cx| {
+                                                    view.save_setting_debounced(
+                                                        key, value, false, cx,
+                                                    );
+                                                });
+                                            }
+                                        }
+                                    },
+                                )
+                                .default_value(default_settings.editor.tab_size as f64),
+                            )
+                            .description(t!("settings.editor.tab_size_description").into_owned()),
+                            SettingItem::new(
+                                t!("settings.editor.accept_suggestion_with"),
+                                SettingField::dropdown(
+                                    vec![
+                                        ("enter".into(), "Enter".into()),
+                                        ("tab".into(), "Tab".into()),
+                                        (
+                                            "enter_and_tab".into(),
+                                            t!("settings.editor.accept_enter_or_tab").into(),
+                                        ),
+                                    ],
+                                    move |cx: &App| {
+                                        SharedString::from(
+                                            AppSettings::global(cx)
+                                                .settings
+                                                .editor
+                                                .completion_accept_keys
+                                                .key(),
+                                        )
+                                    },
+                                    {
+                                        let view_handle = view_handle.clone();
+                                        move |val: SharedString, cx: &mut App| {
+                                            let keys = CompletionAcceptKeysSetting::from_key(&val);
+                                            AppSettings::global_mut(cx)
+                                                .settings
+                                                .editor
+                                                .completion_accept_keys = keys;
+
+                                            let key = "editor.completion_accept_keys".to_string();
+                                            let value = keys.key().to_string();
+                                            if let Some(view) = view_handle.upgrade() {
+                                                view.update(cx, |view, cx| {
+                                                    view.save_setting_debounced(
+                                                        key, value, false, cx,
+                                                    );
+                                                });
+                                            }
+                                        }
+                                    },
+                                )
+                                .default_value(SharedString::from(
+                                    default_settings.editor.completion_accept_keys.key(),
+                                )),
+                            )
+                            .description(
+                                t!("settings.editor.accept_suggestion_with_description")
+                                    .into_owned(),
+                            ),
+                            SettingItem::new(
+                                t!("settings.editor.wrap_tab_navigation"),
+                                SettingField::switch(
+                                    move |cx: &App| {
+                                        AppSettings::global(cx).settings.editor.tab_navigation_wraps
+                                    },
+                                    {
+                                        let view_handle = view_handle.clone();
+                                        move |val: bool, cx: &mut App| {
+                                            AppSettings::global_mut(cx)
+                                                .settings
+                                                .editor
+                                                .tab_navigation_wraps = val;
+
+                                            let key = "editor.tab_navigation_wraps".to_string();
+                                            let value = val.to_string();
+                                            if let Some(view) = view_handle.upgrade() {
+                                                view.update(cx, |view, cx| {
+                                                    view.save_setting_debounced(
+                                                        key, value, false, cx,
+                                                    );
+                                                });
+                                            }
+                                        }
+                                    },
+                                )
+                                .default_value(default_settings.editor.tab_navigation_wraps),
+                            )
+                            .description(
+                                t!("settings.editor.wrap_tab_navigation_description").into_owned(),
+                            ),
+                            SettingItem::new(
+                                t!("settings.editor.font_size"),
+                                SettingField::number_input(
+                                    NumberFieldOptions {
+                                        min: EditorSettings::MIN_FONT_SIZE as f64,
+                                        max: EditorSettings::MAX_FONT_SIZE as f64,
+                                        step: 1.0,
+                                    },
+                                    move |cx: &App| {
+                                        AppSettings::global(cx).settings.editor.font_size as f64
+                                    },
+                                    {
+                                        let view_handle = view_handle.clone();
+                                        move |val: f64, cx: &mut App| {
+                                            crate::settings::set_editor_font_size(val as f32, cx);
+
+                                            let key = "editor.font_size".to_string();
+                                            let value = AppSettings::global(cx)
+                                                .settings
+                                                .editor
+                                                .font_size
+                                                .to_string();
+                                            if let Some(view) = view_handle.upgrade() {
+                                                view.update(cx, |view, cx| {
+                                                    view.save_setting_debounced(
+                                                        key, value, false, cx,
+                                                    );
+                                                });
+                                            }
+                                        }
+                                    },
+                                )
+                                .default_value(default_settings.editor.font_size as f64),
+                            )
+                            .description(t!("settings.editor.font_size_description").into_owned()),
+                        ]),
+                ]),
             formatter_page(view_handle.clone(), &default_settings),
             keybindings_page(view_handle.clone()),
             // Database Settings Page
-            SettingPage::new("Database").resettable(true).groups(vec![
-                SettingGroup::new().title("Connection").items(vec![
-                    SettingItem::new(
-                        "Default Connection Timeout",
-                        SettingField::number_input(
-                            NumberFieldOptions {
-                                min: 5.0,
-                                max: 300.0,
-                                step: 5.0,
-                            },
-                            move |cx: &App| {
-                                AppSettings::global(cx)
-                                    .settings
-                                    .database
-                                    .default_connection_timeout_seconds
-                                    as f64
-                            },
-                            {
-                                let view_handle = view_handle.clone();
-                                move |val: f64, cx: &mut App| {
-                                    AppSettings::global_mut(cx)
-                                        .settings
-                                        .database
-                                        .default_connection_timeout_seconds = val as u32;
-                                    blanco_core::set_connect_timeout_secs(val as u64);
+            SettingPage::new(t!("settings.database.page"))
+                .resettable(true)
+                .groups(vec![
+                    SettingGroup::new()
+                        .title(t!("settings.database.connection"))
+                        .items(vec![
+                            SettingItem::new(
+                                t!("settings.database.default_connection_timeout"),
+                                SettingField::number_input(
+                                    NumberFieldOptions {
+                                        min: 5.0,
+                                        max: 300.0,
+                                        step: 5.0,
+                                    },
+                                    move |cx: &App| {
+                                        AppSettings::global(cx)
+                                            .settings
+                                            .database
+                                            .default_connection_timeout_seconds
+                                            as f64
+                                    },
+                                    {
+                                        let view_handle = view_handle.clone();
+                                        move |val: f64, cx: &mut App| {
+                                            AppSettings::global_mut(cx)
+                                                .settings
+                                                .database
+                                                .default_connection_timeout_seconds = val as u32;
+                                            blanco_core::set_connect_timeout_secs(val as u64);
 
-                                    let key =
-                                        "database.default_connection_timeout_seconds".to_string();
-                                    let value = val.to_string();
-                                    if let Some(view) = view_handle.upgrade() {
-                                        view.update(cx, |view, cx| {
-                                            view.save_setting_debounced(key, value, false, cx);
-                                        });
-                                    }
-                                }
-                            },
-                        )
-                        .default_value(
-                            default_settings.database.default_connection_timeout_seconds as f64,
-                        ),
-                    )
-                    .description(
-                        "Default timeout in seconds for database connections (5-300 seconds).",
-                    ),
-                    SettingItem::new(
-                        "Query Timeout",
-                        SettingField::number_input(
-                            NumberFieldOptions {
-                                min: 10.0,
-                                max: 600.0,
-                                step: 10.0,
-                            },
-                            move |cx: &App| {
-                                AppSettings::global(cx)
-                                    .settings
-                                    .database
-                                    .query_timeout_seconds as f64
-                            },
-                            {
-                                let view_handle = view_handle.clone();
-                                move |val: f64, cx: &mut App| {
-                                    AppSettings::global_mut(cx)
-                                        .settings
-                                        .database
-                                        .query_timeout_seconds = val as u32;
-
-                                    let key = "database.query_timeout_seconds".to_string();
-                                    let value = val.to_string();
-                                    if let Some(view) = view_handle.upgrade() {
-                                        view.update(cx, |view, cx| {
-                                            view.save_setting_debounced(key, value, false, cx);
-                                        });
-                                    }
-                                }
-                            },
-                        )
-                        .default_value(default_settings.database.query_timeout_seconds as f64),
-                    )
-                    .description("Timeout in seconds for SQL query execution (10-600 seconds)."),
-                    SettingItem::new(
-                        "Script Timeout",
-                        SettingField::number_input(
-                            NumberFieldOptions {
-                                min: 0.0,
-                                max: 86400.0,
-                                step: 30.0,
-                            },
-                            move |cx: &App| {
-                                AppSettings::global(cx)
-                                    .settings
-                                    .database
-                                    .script_timeout_seconds as f64
-                            },
-                            {
-                                let view_handle = view_handle.clone();
-                                move |val: f64, cx: &mut App| {
-                                    AppSettings::global_mut(cx)
-                                        .settings
-                                        .database
-                                        .script_timeout_seconds = val as u32;
-
-                                    let key = "database.script_timeout_seconds".to_string();
-                                    let value = val.to_string();
-                                    if let Some(view) = view_handle.upgrade() {
-                                        view.update(cx, |view, cx| {
-                                            view.save_setting_debounced(key, value, false, cx);
-                                        });
-                                    }
-                                }
-                            },
-                        )
-                        .default_value(default_settings.database.script_timeout_seconds as f64),
-                    )
-                    .description(
-                        "Wall-clock limit in seconds for a script run. 0 means unlimited, Stop is always available.",
-                    ),
-                    SettingItem::new(
-                        "Disconnect When Idle",
-                        SettingField::number_input(
-                            NumberFieldOptions {
-                                min: 0.0,
-                                max: 1440.0,
-                                step: 5.0,
-                            },
-                            move |cx: &App| {
-                                AppSettings::global(cx)
-                                    .settings
-                                    .database
-                                    .idle_disconnect_minutes as f64
-                            },
-                            {
-                                let view_handle = view_handle.clone();
-                                move |val: f64, cx: &mut App| {
-                                    AppSettings::global_mut(cx)
-                                        .settings
-                                        .database
-                                        .idle_disconnect_minutes = val as u32;
-
-                                    let key = "database.idle_disconnect_minutes".to_string();
-                                    let value = (val as u32).to_string();
-                                    if let Some(view) = view_handle.upgrade() {
-                                        view.update(cx, |view, cx| {
-                                            view.save_setting_debounced(key, value, false, cx);
-                                        });
-                                    }
-                                }
-                            },
-                        )
-                        .default_value(default_settings.database.idle_disconnect_minutes as f64),
-                    )
-                    .description(
-                        "Close a connection after this many minutes without a query, metadata fetch or pending edit. The next action reconnects. 0 keeps connections open. A connection can set its own value.",
-                    ),
-                    SettingItem::new(
-                        "Show Connection Notifications",
-                        SettingField::switch(
-                            move |cx: &App| {
-                                AppSettings::global(cx)
-                                    .settings
-                                    .database
-                                    .show_connection_notifications
-                            },
-                            {
-                                let view_handle = view_handle.clone();
-                                move |val: bool, cx: &mut App| {
-                                    AppSettings::global_mut(cx)
-                                        .settings
-                                        .database
-                                        .show_connection_notifications = val;
-
-                                    let key = "database.show_connection_notifications".to_string();
-                                    let value = val.to_string();
-                                    if let Some(view) = view_handle.upgrade() {
-                                        view.update(cx, |view, cx| {
-                                            view.save_setting_debounced(key, value, false, cx);
-                                        });
-                                    }
-                                }
-                            },
-                        )
-                        .default_value(default_settings.database.show_connection_notifications),
-                    )
-                    .description(
-                        "Show notifications when connecting to or disconnecting from databases.",
-                    ),
-                    SettingItem::new(
-                        "Max History Items",
-                        SettingField::number_input(
-                            NumberFieldOptions {
-                                min: 0.0,
-                                max: 100_000.0,
-                                step: 100.0,
-                            },
-                            move |cx: &App| {
-                                AppSettings::global(cx).settings.database.max_history_items as f64
-                            },
-                            {
-                                let view_handle = view_handle.clone();
-                                move |val: f64, cx: &mut App| {
-                                    AppSettings::global_mut(cx)
-                                        .settings
-                                        .database
-                                        .max_history_items = val as u32;
-
-                                    let key = "database.max_history_items".to_string();
-                                    let value = (val as u32).to_string();
-                                    if let Some(view) = view_handle.upgrade() {
-                                        view.update(cx, |view, cx| {
-                                            view.save_setting_debounced(key, value, false, cx);
-                                        });
-                                    }
-                                }
-                            },
-                        )
-                        .default_value(default_settings.database.max_history_items as f64),
-                    )
-                    .description(
-                        "Maximum number of query-history entries to keep. Older entries are \
-                         pruned after each query. Set to 0 to keep an unlimited history.",
-                    ),
-                ]),
-                csv_group(view_handle.clone(), &default_settings),
-                SettingGroup::new().title("Results").items(vec![
-                    SettingItem::new(
-                        "Show Row Numbers",
-                        SettingField::switch(
-                            move |cx: &App| AppSettings::global(cx).settings.results.show_row_numbers,
-                            {
-                                let view_handle = view_handle.clone();
-                                move |val: bool, cx: &mut App| {
-                                    AppSettings::global_mut(cx).settings.results.show_row_numbers =
-                                        val;
-
-                                    let key = "results.show_row_numbers".to_string();
-                                    let value = val.to_string();
-                                    if let Some(view) = view_handle.upgrade() {
-                                        view.update(cx, |view, cx| {
-                                            view.save_setting_debounced(key, value, false, cx);
-                                        });
-                                    }
-                                }
-                            },
-                        )
-                        .default_value(default_settings.results.show_row_numbers),
-                    )
-                    .description("Number the rows of a result. Applies to the next result shown."),
-                    SettingItem::new(
-                        "Show Invisible Characters",
-                        SettingField::switch(
-                            move |cx: &App| {
-                                AppSettings::global(cx)
-                                    .settings
-                                    .results
-                                    .show_invisible_characters
-                            },
-                            {
-                                let view_handle = view_handle.clone();
-                                move |val: bool, cx: &mut App| {
-                                    AppSettings::global_mut(cx)
-                                        .settings
-                                        .results
-                                        .show_invisible_characters = val;
-
-                                    let key = "results.show_invisible_characters".to_string();
-                                    let value = val.to_string();
-                                    if let Some(view) = view_handle.upgrade() {
-                                        view.update(cx, |view, cx| {
-                                            view.save_setting_debounced(key, value, false, cx);
-                                        });
-                                    }
-                                }
-                            },
-                        )
-                        .default_value(default_settings.results.show_invisible_characters),
-                    )
-                    .description(
-                        "Mark control characters, zero width characters, Unicode spaces and \
-                         spaces at the end of a value in result cells. Copy, export and \
-                         editing use the value unchanged.",
-                    ),
-                    SettingItem::new(
-                        "Defer Values Larger Than (KB)",
-                        SettingField::number_input(
-                            NumberFieldOptions {
-                                min: 0.0,
-                                max: 1_048_576.0,
-                                step: 16.0,
-                            },
-                            move |cx: &App| {
-                                f64::from(
-                                    AppSettings::global(cx)
-                                        .settings
-                                        .results
-                                        .defer_values_over_kb,
+                                            let key = "database.default_connection_timeout_seconds"
+                                                .to_string();
+                                            let value = val.to_string();
+                                            if let Some(view) = view_handle.upgrade() {
+                                                view.update(cx, |view, cx| {
+                                                    view.save_setting_debounced(
+                                                        key, value, false, cx,
+                                                    );
+                                                });
+                                            }
+                                        }
+                                    },
                                 )
-                            },
-                            {
-                                let view_handle = view_handle.clone();
-                                move |val: f64, cx: &mut App| {
-                                    AppSettings::global_mut(cx)
-                                        .settings
-                                        .results
-                                        .defer_values_over_kb = val as u32;
+                                .default_value(
+                                    default_settings.database.default_connection_timeout_seconds
+                                        as f64,
+                                ),
+                            )
+                            .description(
+                                t!("settings.database.default_connection_timeout_description")
+                                    .into_owned(),
+                            ),
+                            SettingItem::new(
+                                t!("settings.database.query_timeout"),
+                                SettingField::number_input(
+                                    NumberFieldOptions {
+                                        min: 10.0,
+                                        max: 600.0,
+                                        step: 10.0,
+                                    },
+                                    move |cx: &App| {
+                                        AppSettings::global(cx)
+                                            .settings
+                                            .database
+                                            .query_timeout_seconds
+                                            as f64
+                                    },
+                                    {
+                                        let view_handle = view_handle.clone();
+                                        move |val: f64, cx: &mut App| {
+                                            AppSettings::global_mut(cx)
+                                                .settings
+                                                .database
+                                                .query_timeout_seconds = val as u32;
 
-                                    let key = "results.defer_values_over_kb".to_string();
-                                    let value = (val as u32).to_string();
-                                    if let Some(view) = view_handle.upgrade() {
-                                        view.update(cx, |view, cx| {
-                                            view.save_setting_debounced(key, value, false, cx);
-                                        });
-                                    }
-                                }
-                            },
-                        )
-                        .default_value(f64::from(default_settings.results.defer_values_over_kb)),
-                    )
-                    .description(
-                        "When a table is opened, text and binary values larger than this are \
-                         left on the server and shown with their size. The full value loads \
-                         when the cell is opened or copied. Applies to SELECT * on one table \
-                         with a primary key. Set to 0 to always load full values.",
-                    ),
-                ]),
-                SettingGroup::new()
-                    .title("Backup Tools")
-                    .items(client_tool_items(&view_handle)),
-            ]),
-            SettingPage::new("Results").resettable(true).groups(vec![
-                SettingGroup::new().title("Dates and Times").items(vec![
-                    SettingItem::new(
-                        "Date Format",
-                        SettingField::dropdown(
-                            DateDisplayFormat::ALL
-                                .into_iter()
-                                .map(|format| (format.key().into(), format.label().into()))
-                                .collect(),
-                            move |cx: &App| {
-                                SharedString::from(
-                                    AppSettings::global(cx).settings.results.date_format.key(),
+                                            let key = "database.query_timeout_seconds".to_string();
+                                            let value = val.to_string();
+                                            if let Some(view) = view_handle.upgrade() {
+                                                view.update(cx, |view, cx| {
+                                                    view.save_setting_debounced(
+                                                        key, value, false, cx,
+                                                    );
+                                                });
+                                            }
+                                        }
+                                    },
                                 )
-                            },
-                            {
-                                let view_handle = view_handle.clone();
-                                move |val: SharedString, cx: &mut App| {
-                                    let Some(format) = DateDisplayFormat::from_key(&val) else {
-                                        return;
-                                    };
-                                    AppSettings::global_mut(cx).settings.results.date_format =
-                                        format;
-                                    cx.refresh_windows();
-                                    if let Some(view) = view_handle.upgrade() {
-                                        view.update(cx, |view, cx| {
-                                            view.save_setting_debounced(
-                                                "results.date_format".into(),
-                                                format.key().into(),
-                                                false,
-                                                cx,
-                                            );
-                                        });
-                                    }
-                                }
-                            },
-                        )
-                        .default_value(SharedString::from(
-                            default_settings.results.date_format.key(),
-                        )),
-                    )
-                    .description(
-                        "How dates and timestamps are shown in results. Copy, export and editing use the value as the database returns it.",
-                    ),
-                    SettingItem::new(
-                        "Time Zone",
-                        SettingField::dropdown(
-                            TimeZoneDisplay::ALL
-                                .into_iter()
-                                .map(|zone| (zone.key().into(), zone.label().into()))
-                                .collect(),
-                            move |cx: &App| {
-                                SharedString::from(
-                                    AppSettings::global(cx).settings.results.time_zone.key(),
+                                .default_value(
+                                    default_settings.database.query_timeout_seconds as f64,
+                                ),
+                            )
+                            .description(
+                                t!("settings.database.query_timeout_description").into_owned(),
+                            ),
+                            SettingItem::new(
+                                t!("settings.database.script_timeout"),
+                                SettingField::number_input(
+                                    NumberFieldOptions {
+                                        min: 0.0,
+                                        max: 86400.0,
+                                        step: 30.0,
+                                    },
+                                    move |cx: &App| {
+                                        AppSettings::global(cx)
+                                            .settings
+                                            .database
+                                            .script_timeout_seconds
+                                            as f64
+                                    },
+                                    {
+                                        let view_handle = view_handle.clone();
+                                        move |val: f64, cx: &mut App| {
+                                            AppSettings::global_mut(cx)
+                                                .settings
+                                                .database
+                                                .script_timeout_seconds = val as u32;
+
+                                            let key = "database.script_timeout_seconds".to_string();
+                                            let value = val.to_string();
+                                            if let Some(view) = view_handle.upgrade() {
+                                                view.update(cx, |view, cx| {
+                                                    view.save_setting_debounced(
+                                                        key, value, false, cx,
+                                                    );
+                                                });
+                                            }
+                                        }
+                                    },
                                 )
-                            },
-                            {
-                                let view_handle = view_handle.clone();
-                                move |val: SharedString, cx: &mut App| {
-                                    let Some(zone) = TimeZoneDisplay::from_key(&val) else {
-                                        return;
-                                    };
-                                    AppSettings::global_mut(cx).settings.results.time_zone = zone;
-                                    cx.refresh_windows();
-                                    if let Some(view) = view_handle.upgrade() {
-                                        view.update(cx, |view, cx| {
-                                            view.save_setting_debounced(
-                                                "results.time_zone".into(),
-                                                zone.key().into(),
-                                                false,
-                                                cx,
-                                            );
-                                        });
-                                    }
-                                }
-                            },
-                        )
-                        .default_value(SharedString::from(
-                            default_settings.results.time_zone.key(),
-                        )),
-                    )
-                    .description(
-                        "The time zone timestamps with a time zone are shown in. The date and time picker uses it too.",
-                    ),
+                                .default_value(
+                                    default_settings.database.script_timeout_seconds as f64,
+                                ),
+                            )
+                            .description(
+                                t!("settings.database.script_timeout_description").into_owned(),
+                            ),
+                            SettingItem::new(
+                                t!("settings.database.disconnect_when_idle"),
+                                SettingField::number_input(
+                                    NumberFieldOptions {
+                                        min: 0.0,
+                                        max: 1440.0,
+                                        step: 5.0,
+                                    },
+                                    move |cx: &App| {
+                                        AppSettings::global(cx)
+                                            .settings
+                                            .database
+                                            .idle_disconnect_minutes
+                                            as f64
+                                    },
+                                    {
+                                        let view_handle = view_handle.clone();
+                                        move |val: f64, cx: &mut App| {
+                                            AppSettings::global_mut(cx)
+                                                .settings
+                                                .database
+                                                .idle_disconnect_minutes = val as u32;
+
+                                            let key =
+                                                "database.idle_disconnect_minutes".to_string();
+                                            let value = (val as u32).to_string();
+                                            if let Some(view) = view_handle.upgrade() {
+                                                view.update(cx, |view, cx| {
+                                                    view.save_setting_debounced(
+                                                        key, value, false, cx,
+                                                    );
+                                                });
+                                            }
+                                        }
+                                    },
+                                )
+                                .default_value(
+                                    default_settings.database.idle_disconnect_minutes as f64,
+                                ),
+                            )
+                            .description(
+                                t!("settings.database.disconnect_when_idle_description")
+                                    .into_owned(),
+                            ),
+                            SettingItem::new(
+                                t!("settings.database.show_connection_notifications"),
+                                SettingField::switch(
+                                    move |cx: &App| {
+                                        AppSettings::global(cx)
+                                            .settings
+                                            .database
+                                            .show_connection_notifications
+                                    },
+                                    {
+                                        let view_handle = view_handle.clone();
+                                        move |val: bool, cx: &mut App| {
+                                            AppSettings::global_mut(cx)
+                                                .settings
+                                                .database
+                                                .show_connection_notifications = val;
+
+                                            let key = "database.show_connection_notifications"
+                                                .to_string();
+                                            let value = val.to_string();
+                                            if let Some(view) = view_handle.upgrade() {
+                                                view.update(cx, |view, cx| {
+                                                    view.save_setting_debounced(
+                                                        key, value, false, cx,
+                                                    );
+                                                });
+                                            }
+                                        }
+                                    },
+                                )
+                                .default_value(
+                                    default_settings.database.show_connection_notifications,
+                                ),
+                            )
+                            .description(
+                                t!("settings.database.show_connection_notifications_description")
+                                    .into_owned(),
+                            ),
+                            SettingItem::new(
+                                t!("settings.database.max_history_items"),
+                                SettingField::number_input(
+                                    NumberFieldOptions {
+                                        min: 0.0,
+                                        max: 100_000.0,
+                                        step: 100.0,
+                                    },
+                                    move |cx: &App| {
+                                        AppSettings::global(cx).settings.database.max_history_items
+                                            as f64
+                                    },
+                                    {
+                                        let view_handle = view_handle.clone();
+                                        move |val: f64, cx: &mut App| {
+                                            AppSettings::global_mut(cx)
+                                                .settings
+                                                .database
+                                                .max_history_items = val as u32;
+
+                                            let key = "database.max_history_items".to_string();
+                                            let value = (val as u32).to_string();
+                                            if let Some(view) = view_handle.upgrade() {
+                                                view.update(cx, |view, cx| {
+                                                    view.save_setting_debounced(
+                                                        key, value, false, cx,
+                                                    );
+                                                });
+                                            }
+                                        }
+                                    },
+                                )
+                                .default_value(default_settings.database.max_history_items as f64),
+                            )
+                            .description(
+                                t!("settings.database.max_history_items_description").into_owned(),
+                            ),
+                        ]),
+                    csv_group(view_handle.clone(), &default_settings),
+                    SettingGroup::new()
+                        .title(t!("settings.results.title"))
+                        .items(vec![
+                            SettingItem::new(
+                                t!("settings.database.show_row_numbers"),
+                                SettingField::switch(
+                                    move |cx: &App| {
+                                        AppSettings::global(cx).settings.results.show_row_numbers
+                                    },
+                                    {
+                                        let view_handle = view_handle.clone();
+                                        move |val: bool, cx: &mut App| {
+                                            AppSettings::global_mut(cx)
+                                                .settings
+                                                .results
+                                                .show_row_numbers = val;
+
+                                            let key = "results.show_row_numbers".to_string();
+                                            let value = val.to_string();
+                                            if let Some(view) = view_handle.upgrade() {
+                                                view.update(cx, |view, cx| {
+                                                    view.save_setting_debounced(
+                                                        key, value, false, cx,
+                                                    );
+                                                });
+                                            }
+                                        }
+                                    },
+                                )
+                                .default_value(default_settings.results.show_row_numbers),
+                            )
+                            .description(
+                                t!("settings.database.show_row_numbers_description").into_owned(),
+                            ),
+                            SettingItem::new(
+                                t!("settings.database.show_invisible_characters"),
+                                SettingField::switch(
+                                    move |cx: &App| {
+                                        AppSettings::global(cx)
+                                            .settings
+                                            .results
+                                            .show_invisible_characters
+                                    },
+                                    {
+                                        let view_handle = view_handle.clone();
+                                        move |val: bool, cx: &mut App| {
+                                            AppSettings::global_mut(cx)
+                                                .settings
+                                                .results
+                                                .show_invisible_characters = val;
+
+                                            let key =
+                                                "results.show_invisible_characters".to_string();
+                                            let value = val.to_string();
+                                            if let Some(view) = view_handle.upgrade() {
+                                                view.update(cx, |view, cx| {
+                                                    view.save_setting_debounced(
+                                                        key, value, false, cx,
+                                                    );
+                                                });
+                                            }
+                                        }
+                                    },
+                                )
+                                .default_value(default_settings.results.show_invisible_characters),
+                            )
+                            .description(
+                                t!("settings.database.show_invisible_characters_description")
+                                    .into_owned(),
+                            ),
+                            SettingItem::new(
+                                t!("settings.database.defer_values"),
+                                SettingField::number_input(
+                                    NumberFieldOptions {
+                                        min: 0.0,
+                                        max: 1_048_576.0,
+                                        step: 16.0,
+                                    },
+                                    move |cx: &App| {
+                                        f64::from(
+                                            AppSettings::global(cx)
+                                                .settings
+                                                .results
+                                                .defer_values_over_kb,
+                                        )
+                                    },
+                                    {
+                                        let view_handle = view_handle.clone();
+                                        move |val: f64, cx: &mut App| {
+                                            AppSettings::global_mut(cx)
+                                                .settings
+                                                .results
+                                                .defer_values_over_kb = val as u32;
+
+                                            let key = "results.defer_values_over_kb".to_string();
+                                            let value = (val as u32).to_string();
+                                            if let Some(view) = view_handle.upgrade() {
+                                                view.update(cx, |view, cx| {
+                                                    view.save_setting_debounced(
+                                                        key, value, false, cx,
+                                                    );
+                                                });
+                                            }
+                                        }
+                                    },
+                                )
+                                .default_value(f64::from(
+                                    default_settings.results.defer_values_over_kb,
+                                )),
+                            )
+                            .description(
+                                t!("settings.database.defer_values_description").into_owned(),
+                            ),
+                        ]),
+                    SettingGroup::new()
+                        .title(t!("settings.database.backup_tools"))
+                        .items(client_tool_items(&view_handle)),
                 ]),
-            ]),
+            SettingPage::new(t!("settings.results.title"))
+                .resettable(true)
+                .groups(vec![
+                    SettingGroup::new()
+                        .title(t!("settings.results.dates_and_times"))
+                        .items(vec![
+                            SettingItem::new(
+                                t!("settings.results.date_format"),
+                                SettingField::dropdown(
+                                    DateDisplayFormat::ALL
+                                        .into_iter()
+                                        .map(|format| (format.key().into(), format.label()))
+                                        .collect(),
+                                    move |cx: &App| {
+                                        SharedString::from(
+                                            AppSettings::global(cx)
+                                                .settings
+                                                .results
+                                                .date_format
+                                                .key(),
+                                        )
+                                    },
+                                    {
+                                        let view_handle = view_handle.clone();
+                                        move |val: SharedString, cx: &mut App| {
+                                            let Some(format) = DateDisplayFormat::from_key(&val)
+                                            else {
+                                                return;
+                                            };
+                                            AppSettings::global_mut(cx)
+                                                .settings
+                                                .results
+                                                .date_format = format;
+                                            cx.refresh_windows();
+                                            if let Some(view) = view_handle.upgrade() {
+                                                view.update(cx, |view, cx| {
+                                                    view.save_setting_debounced(
+                                                        "results.date_format".into(),
+                                                        format.key().into(),
+                                                        false,
+                                                        cx,
+                                                    );
+                                                });
+                                            }
+                                        }
+                                    },
+                                )
+                                .default_value(SharedString::from(
+                                    default_settings.results.date_format.key(),
+                                )),
+                            )
+                            .description(
+                                t!("settings.results.date_format_description").into_owned(),
+                            ),
+                            SettingItem::new(
+                                t!("settings.results.time_zone"),
+                                SettingField::dropdown(
+                                    TimeZoneDisplay::ALL
+                                        .into_iter()
+                                        .map(|zone| (zone.key().into(), zone.label()))
+                                        .collect(),
+                                    move |cx: &App| {
+                                        SharedString::from(
+                                            AppSettings::global(cx)
+                                                .settings
+                                                .results
+                                                .time_zone
+                                                .key(),
+                                        )
+                                    },
+                                    {
+                                        let view_handle = view_handle.clone();
+                                        move |val: SharedString, cx: &mut App| {
+                                            let Some(zone) = TimeZoneDisplay::from_key(&val) else {
+                                                return;
+                                            };
+                                            AppSettings::global_mut(cx)
+                                                .settings
+                                                .results
+                                                .time_zone = zone;
+                                            cx.refresh_windows();
+                                            if let Some(view) = view_handle.upgrade() {
+                                                view.update(cx, |view, cx| {
+                                                    view.save_setting_debounced(
+                                                        "results.time_zone".into(),
+                                                        zone.key().into(),
+                                                        false,
+                                                        cx,
+                                                    );
+                                                });
+                                            }
+                                        }
+                                    },
+                                )
+                                .default_value(SharedString::from(
+                                    default_settings.results.time_zone.key(),
+                                )),
+                            )
+                            .description(t!("settings.results.time_zone_description").into_owned()),
+                        ]),
+                ]),
             super::environments_page::environments_page(
                 self.environment_tags_editor
                     .clone()
                     .expect("created before the pages"),
             ),
             // Appearance Settings Page
-            SettingPage::new("Appearance").resettable(true).groups(vec![
-                SettingGroup::new().title("Theme").items(vec![
-                    SettingItem::new(
-                        "Theme",
-                        SettingField::dropdown(
-                            sorted_themes,
-                            move |cx: &App| {
-                                SharedString::from(
-                                    AppSettings::global(cx).settings.appearance.theme.clone(),
+            SettingPage::new(t!("settings.appearance.page"))
+                .resettable(true)
+                .groups(vec![
+                    SettingGroup::new()
+                        .title(t!("settings.appearance.theme"))
+                        .items(vec![
+                            SettingItem::new(
+                                t!("settings.appearance.theme"),
+                                SettingField::dropdown(
+                                    sorted_themes,
+                                    move |cx: &App| {
+                                        SharedString::from(
+                                            AppSettings::global(cx)
+                                                .settings
+                                                .appearance
+                                                .theme
+                                                .clone(),
+                                        )
+                                    },
+                                    |val: SharedString, cx: &mut App| {
+                                        crate::settings::apply_theme_by_name(&val, cx);
+                                    },
                                 )
-                            },
-                            |val: SharedString, cx: &mut App| {
-                                crate::settings::apply_theme_by_name(&val, cx);
-                            },
-                        )
-                        .default_value(SharedString::from(
-                            default_settings.appearance.theme.clone(),
-                        )),
-                    )
-                    .description(
-                        "Choose the color theme for the application. Used while Follow \
-                         System Appearance is off.",
-                    ),
-                    SettingItem::new(
-                        "Follow System Appearance",
-                        SettingField::switch(
-                            |cx: &App| AppSettings::global(cx).settings.appearance.follow_system,
-                            {
-                                let view_handle = view_handle.clone();
-                                move |val: bool, cx: &mut App| {
-                                    AppSettings::global_mut(cx)
-                                        .settings
-                                        .appearance
-                                        .follow_system = val;
-                                    let system = cx.window_appearance();
-                                    let appearance =
-                                        AppSettings::global(cx).settings.appearance.clone();
-                                    crate::settings::install_theme(
-                                        crate::settings::theme_for_appearance(&appearance, system),
-                                        cx,
-                                    );
-                                    save_appearance(&view_handle, "follow_system", val.to_string(), cx);
-                                }
-                            },
-                        )
-                        .default_value(default_settings.appearance.follow_system),
-                    )
-                    .description(
-                        "Switch between the light and dark theme below as the system \
-                         appearance changes.",
-                    ),
-                    SettingItem::new(
-                        "Light Theme",
-                        SettingField::dropdown(
-                            light_themes,
-                            |cx: &App| {
-                                SharedString::from(
-                                    AppSettings::global(cx).settings.appearance.light_theme.clone(),
-                                )
-                            },
-                            {
-                                let view_handle = view_handle.clone();
-                                move |val: SharedString, cx: &mut App| {
-                                    AppSettings::global_mut(cx).settings.appearance.light_theme =
-                                        val.to_string();
-                                    crate::settings::follow_system_appearance(
-                                        cx.window_appearance(),
-                                        cx,
-                                    );
-                                    save_appearance(&view_handle, "light_theme", val.to_string(), cx);
-                                }
-                            },
-                        )
-                        .default_value(SharedString::from(
-                            default_settings.appearance.light_theme.clone(),
-                        )),
-                    ),
-                    SettingItem::new(
-                        "Dark Theme",
-                        SettingField::dropdown(
-                            dark_themes,
-                            |cx: &App| {
-                                SharedString::from(
-                                    AppSettings::global(cx).settings.appearance.dark_theme.clone(),
-                                )
-                            },
-                            {
-                                let view_handle = view_handle.clone();
-                                move |val: SharedString, cx: &mut App| {
-                                    AppSettings::global_mut(cx).settings.appearance.dark_theme =
-                                        val.to_string();
-                                    crate::settings::follow_system_appearance(
-                                        cx.window_appearance(),
-                                        cx,
-                                    );
-                                    save_appearance(&view_handle, "dark_theme", val.to_string(), cx);
-                                }
-                            },
-                        )
-                        .default_value(SharedString::from(
-                            default_settings.appearance.dark_theme.clone(),
-                        )),
-                    ),
-                ]),
-                SettingGroup::new().title("Fonts").items(vec![
-                    SettingItem::new(
-                        "UI Font",
-                        SettingField::render({
-                            let ui_font_select = ui_font_select;
-                            move |options, _window, cx| {
-                                let theme_font = cx.theme().font_family.to_string();
-                                if let Some(state) = &ui_font_select {
-                                    Select::new(state)
-                                        .with_size(options.size())
-                                        .placeholder(format!("{theme_font} (theme default)"))
-                                        .search_placeholder("Search fonts")
-                                        .cleanable(true)
-                                        .menu_max_h(rems(16.))
-                                        .w(px(240.))
-                                        .into_any_element()
-                                } else {
-                                    gpui::div().into_any_element()
-                                }
-                            }
-                        }),
-                    )
-                    .description("Font used for the application UI."),
-                    SettingItem::new(
-                        "Editor Font",
-                        SettingField::render({
-                            let mono_font_select = mono_font_select;
-                            move |options, _window, cx| {
-                                let theme_font = cx.theme().mono_font_family.to_string();
-                                if let Some(state) = &mono_font_select {
-                                    Select::new(state)
-                                        .with_size(options.size())
-                                        .placeholder(format!("{theme_font} (theme default)"))
-                                        .search_placeholder("Search fonts")
-                                        .cleanable(true)
-                                        .menu_max_h(rems(16.))
-                                        .w(px(240.))
-                                        .into_any_element()
-                                } else {
-                                    gpui::div().into_any_element()
-                                }
-                            }
-                        }),
-                    )
-                    .description("Monospace font used in the SQL editor and results table."),
-                    SettingItem::new(
-                        "Terminal Font Size",
-                        SettingField::number_input(
-                            NumberFieldOptions {
-                                min: 8.0,
-                                max: 32.0,
-                                step: 1.0,
-                            },
-                            move |cx: &App| {
-                                AppSettings::global(cx).settings.appearance.terminal_font_size
-                                    as f64
-                            },
-                            {
-                                let view_handle = view_handle.clone();
-                                move |val: f64, cx: &mut App| {
-                                    AppSettings::global_mut(cx)
-                                        .settings
-                                        .appearance
-                                        .terminal_font_size = val as f32;
-
-                                    let key = "appearance.terminal_font_size".to_string();
-                                    let value = val.to_string();
-                                    if let Some(view) = view_handle.upgrade() {
-                                        view.update(cx, |view, cx| {
-                                            view.save_setting_debounced(key, value, false, cx);
-                                        });
-                                    }
-                                }
-                            },
-                        )
-                        .default_value(default_settings.appearance.terminal_font_size as f64),
-                    )
-                    .description("Font size in pixels for the terminal pane (8-32)."),
-                ]),
-                vsx_themes::browser::setting_group(
-                    self.theme_browser.clone().expect("created before the pages"),
-                ),
-            ]),
-            // MCP Server Settings Page
-            SettingPage::new("MCP Server").resettable(true).groups(vec![
-                SettingGroup::new().title("Server").items(vec![
-                    SettingItem::new(
-                        "Enable MCP server",
-                        SettingField::switch(
-                            move |cx: &App| AppSettings::global(cx).settings.mcp.enabled,
-                            {
-                                let view_handle = view_handle.clone();
-                                move |val: bool, cx: &mut App| {
-                                    AppSettings::global_mut(cx).settings.mcp.enabled = val;
-                                    if val {
-                                        McpService::start(cx);
-                                    } else {
-                                        McpService::stop(cx);
-                                    }
-
-                                    let key = "mcp.enabled".to_string();
-                                    let value = val.to_string();
-                                    if let Some(view) = view_handle.upgrade() {
-                                        view.update(cx, |view, cx| {
-                                            view.save_setting_debounced(key, value, false, cx);
-                                        });
-                                    }
-                                }
-                            },
-                        )
-                        .default_value(default_settings.mcp.enabled),
-                    )
-                    .description(
-                        "Expose the open tabs, saved connections, SQL execution and schema \
-                         browsing to external agents (Claude Code, OpenCode, ...) over a local \
-                         MCP endpoint on 127.0.0.1. Requests must carry the bearer token shown \
-                         below.",
-                    ),
-                    SettingItem::new(
-                        "Port",
-                        SettingField::number_input(
-                            NumberFieldOptions {
-                                min: 1024.0,
-                                max: 65535.0,
-                                step: 1.0,
-                            },
-                            move |cx: &App| AppSettings::global(cx).settings.mcp.port as f64,
-                            {
-                                let view_handle = view_handle.clone();
-                                move |val: f64, cx: &mut App| {
-                                    let port = val.clamp(1024.0, 65535.0) as u16;
-                                    AppSettings::global_mut(cx).settings.mcp.port = port;
-                                    if McpService::global(cx).is_running() {
-                                        McpService::restart(cx);
-                                    }
-
-                                    let key = "mcp.port".to_string();
-                                    if let Some(view) = view_handle.upgrade() {
-                                        view.update(cx, |view, cx| {
-                                            view.save_setting_debounced(
-                                                key,
-                                                port.to_string(),
-                                                false,
+                                .default_value(SharedString::from(
+                                    default_settings.appearance.theme.clone(),
+                                )),
+                            )
+                            .description(t!("settings.appearance.theme_description").into_owned()),
+                            SettingItem::new(
+                                t!("settings.appearance.follow_system"),
+                                SettingField::switch(
+                                    |cx: &App| {
+                                        AppSettings::global(cx).settings.appearance.follow_system
+                                    },
+                                    {
+                                        let view_handle = view_handle.clone();
+                                        move |val: bool, cx: &mut App| {
+                                            AppSettings::global_mut(cx)
+                                                .settings
+                                                .appearance
+                                                .follow_system = val;
+                                            let system = cx.window_appearance();
+                                            let appearance =
+                                                AppSettings::global(cx).settings.appearance.clone();
+                                            crate::settings::install_theme(
+                                                crate::settings::theme_for_appearance(
+                                                    &appearance,
+                                                    system,
+                                                ),
                                                 cx,
                                             );
-                                        });
+                                            save_appearance(
+                                                &view_handle,
+                                                "follow_system",
+                                                val.to_string(),
+                                                cx,
+                                            );
+                                        }
+                                    },
+                                )
+                                .default_value(default_settings.appearance.follow_system),
+                            )
+                            .description(
+                                t!("settings.appearance.follow_system_description").into_owned(),
+                            ),
+                            SettingItem::new(
+                                t!("settings.appearance.light_theme"),
+                                SettingField::dropdown(
+                                    light_themes,
+                                    |cx: &App| {
+                                        SharedString::from(
+                                            AppSettings::global(cx)
+                                                .settings
+                                                .appearance
+                                                .light_theme
+                                                .clone(),
+                                        )
+                                    },
+                                    {
+                                        let view_handle = view_handle.clone();
+                                        move |val: SharedString, cx: &mut App| {
+                                            AppSettings::global_mut(cx)
+                                                .settings
+                                                .appearance
+                                                .light_theme = val.to_string();
+                                            crate::settings::follow_system_appearance(
+                                                cx.window_appearance(),
+                                                cx,
+                                            );
+                                            save_appearance(
+                                                &view_handle,
+                                                "light_theme",
+                                                val.to_string(),
+                                                cx,
+                                            );
+                                        }
+                                    },
+                                )
+                                .default_value(SharedString::from(
+                                    default_settings.appearance.light_theme.clone(),
+                                )),
+                            ),
+                            SettingItem::new(
+                                t!("settings.appearance.dark_theme"),
+                                SettingField::dropdown(
+                                    dark_themes,
+                                    |cx: &App| {
+                                        SharedString::from(
+                                            AppSettings::global(cx)
+                                                .settings
+                                                .appearance
+                                                .dark_theme
+                                                .clone(),
+                                        )
+                                    },
+                                    {
+                                        let view_handle = view_handle.clone();
+                                        move |val: SharedString, cx: &mut App| {
+                                            AppSettings::global_mut(cx)
+                                                .settings
+                                                .appearance
+                                                .dark_theme = val.to_string();
+                                            crate::settings::follow_system_appearance(
+                                                cx.window_appearance(),
+                                                cx,
+                                            );
+                                            save_appearance(
+                                                &view_handle,
+                                                "dark_theme",
+                                                val.to_string(),
+                                                cx,
+                                            );
+                                        }
+                                    },
+                                )
+                                .default_value(SharedString::from(
+                                    default_settings.appearance.dark_theme.clone(),
+                                )),
+                            ),
+                        ]),
+                    SettingGroup::new()
+                        .title(t!("settings.appearance.fonts"))
+                        .items(vec![
+                            SettingItem::new(
+                                t!("settings.appearance.ui_font"),
+                                SettingField::render({
+                                    let ui_font_select = ui_font_select;
+                                    move |options, _window, cx| {
+                                        let theme_font = cx.theme().font_family.to_string();
+                                        if let Some(state) = &ui_font_select {
+                                            Select::new(state)
+                                                .with_size(options.size())
+                                                .placeholder(t!(
+                                                    "settings.appearance.theme_default_font",
+                                                    font = theme_font
+                                                ))
+                                                .search_placeholder(t!(
+                                                    "settings.appearance.search_fonts"
+                                                ))
+                                                .cleanable(true)
+                                                .menu_max_h(rems(16.))
+                                                .w(px(240.))
+                                                .into_any_element()
+                                        } else {
+                                            gpui::div().into_any_element()
+                                        }
                                     }
-                                }
-                            },
-                        )
-                        .default_value(default_settings.mcp.port as f64),
-                    )
-                    .description(
-                        "Loopback port the server listens on. Changing it restarts a running \
-                         server and rotates the token.",
-                    ),
-                    SettingItem::new(
-                        "Allow writes without confirmation",
-                        SettingField::switch(
-                            move |cx: &App| AppSettings::global(cx).settings.mcp.allow_writes,
-                            {
-                                let view_handle = view_handle;
-                                move |val: bool, cx: &mut App| {
-                                    AppSettings::global_mut(cx).settings.mcp.allow_writes = val;
-                                    McpService::set_allow_writes(cx, val);
+                                }),
+                            )
+                            .description(
+                                t!("settings.appearance.ui_font_description").into_owned(),
+                            ),
+                            SettingItem::new(
+                                t!("settings.appearance.editor_font"),
+                                SettingField::render({
+                                    let mono_font_select = mono_font_select;
+                                    move |options, _window, cx| {
+                                        let theme_font = cx.theme().mono_font_family.to_string();
+                                        if let Some(state) = &mono_font_select {
+                                            Select::new(state)
+                                                .with_size(options.size())
+                                                .placeholder(t!(
+                                                    "settings.appearance.theme_default_font",
+                                                    font = theme_font
+                                                ))
+                                                .search_placeholder(t!(
+                                                    "settings.appearance.search_fonts"
+                                                ))
+                                                .cleanable(true)
+                                                .menu_max_h(rems(16.))
+                                                .w(px(240.))
+                                                .into_any_element()
+                                        } else {
+                                            gpui::div().into_any_element()
+                                        }
+                                    }
+                                }),
+                            )
+                            .description(
+                                t!("settings.appearance.editor_font_description").into_owned(),
+                            ),
+                            SettingItem::new(
+                                t!("settings.appearance.terminal_font_size"),
+                                SettingField::number_input(
+                                    NumberFieldOptions {
+                                        min: 8.0,
+                                        max: 32.0,
+                                        step: 1.0,
+                                    },
+                                    move |cx: &App| {
+                                        AppSettings::global(cx)
+                                            .settings
+                                            .appearance
+                                            .terminal_font_size
+                                            as f64
+                                    },
+                                    {
+                                        let view_handle = view_handle.clone();
+                                        move |val: f64, cx: &mut App| {
+                                            AppSettings::global_mut(cx)
+                                                .settings
+                                                .appearance
+                                                .terminal_font_size = val as f32;
 
-                                    let key = "mcp.allow_writes".to_string();
-                                    let value = val.to_string();
-                                    if let Some(view) = view_handle.upgrade() {
-                                        view.update(cx, |view, cx| {
-                                            view.save_setting_debounced(key, value, false, cx);
-                                        });
-                                    }
-                                }
-                            },
-                        )
-                        .default_value(default_settings.mcp.allow_writes),
-                    )
-                    .description(
-                        "Run INSERT, UPDATE, DELETE and DDL sent by an agent without asking. \
-                         Writes on PROD connections and DROP/TRUNCATE always ask, and reads \
-                         never do.",
+                                            let key = "appearance.terminal_font_size".to_string();
+                                            let value = val.to_string();
+                                            if let Some(view) = view_handle.upgrade() {
+                                                view.update(cx, |view, cx| {
+                                                    view.save_setting_debounced(
+                                                        key, value, false, cx,
+                                                    );
+                                                });
+                                            }
+                                        }
+                                    },
+                                )
+                                .default_value(
+                                    default_settings.appearance.terminal_font_size as f64,
+                                ),
+                            )
+                            .description(
+                                t!("settings.appearance.terminal_font_size_description")
+                                    .into_owned(),
+                            ),
+                        ]),
+                    vsx_themes::browser::setting_group(
+                        self.theme_browser
+                            .clone()
+                            .expect("created before the pages"),
                     ),
-                    SettingItem::render(|_, _, cx| mcp_status_element(cx)),
                 ]),
-            ]),
+            // MCP Server Settings Page
+            SettingPage::new(t!("settings.mcp.page"))
+                .resettable(true)
+                .groups(vec![
+                    SettingGroup::new()
+                        .title(t!("settings.mcp.server"))
+                        .items(vec![
+                            SettingItem::new(
+                                t!("settings.mcp.enable"),
+                                SettingField::switch(
+                                    move |cx: &App| AppSettings::global(cx).settings.mcp.enabled,
+                                    {
+                                        let view_handle = view_handle.clone();
+                                        move |val: bool, cx: &mut App| {
+                                            AppSettings::global_mut(cx).settings.mcp.enabled = val;
+                                            if val {
+                                                McpService::start(cx);
+                                            } else {
+                                                McpService::stop(cx);
+                                            }
+
+                                            let key = "mcp.enabled".to_string();
+                                            let value = val.to_string();
+                                            if let Some(view) = view_handle.upgrade() {
+                                                view.update(cx, |view, cx| {
+                                                    view.save_setting_debounced(
+                                                        key, value, false, cx,
+                                                    );
+                                                });
+                                            }
+                                        }
+                                    },
+                                )
+                                .default_value(default_settings.mcp.enabled),
+                            )
+                            .description(t!("settings.mcp.enable_description").into_owned()),
+                            SettingItem::new(
+                                t!("settings.mcp.port"),
+                                SettingField::number_input(
+                                    NumberFieldOptions {
+                                        min: 1024.0,
+                                        max: 65535.0,
+                                        step: 1.0,
+                                    },
+                                    move |cx: &App| {
+                                        AppSettings::global(cx).settings.mcp.port as f64
+                                    },
+                                    {
+                                        let view_handle = view_handle.clone();
+                                        move |val: f64, cx: &mut App| {
+                                            let port = val.clamp(1024.0, 65535.0) as u16;
+                                            AppSettings::global_mut(cx).settings.mcp.port = port;
+                                            if McpService::global(cx).is_running() {
+                                                McpService::restart(cx);
+                                            }
+
+                                            let key = "mcp.port".to_string();
+                                            if let Some(view) = view_handle.upgrade() {
+                                                view.update(cx, |view, cx| {
+                                                    view.save_setting_debounced(
+                                                        key,
+                                                        port.to_string(),
+                                                        false,
+                                                        cx,
+                                                    );
+                                                });
+                                            }
+                                        }
+                                    },
+                                )
+                                .default_value(default_settings.mcp.port as f64),
+                            )
+                            .description(t!("settings.mcp.port_description").into_owned()),
+                            SettingItem::new(
+                                t!("settings.mcp.allow_writes"),
+                                SettingField::switch(
+                                    move |cx: &App| {
+                                        AppSettings::global(cx).settings.mcp.allow_writes
+                                    },
+                                    {
+                                        let view_handle = view_handle;
+                                        move |val: bool, cx: &mut App| {
+                                            AppSettings::global_mut(cx).settings.mcp.allow_writes =
+                                                val;
+                                            McpService::set_allow_writes(cx, val);
+
+                                            let key = "mcp.allow_writes".to_string();
+                                            let value = val.to_string();
+                                            if let Some(view) = view_handle.upgrade() {
+                                                view.update(cx, |view, cx| {
+                                                    view.save_setting_debounced(
+                                                        key, value, false, cx,
+                                                    );
+                                                });
+                                            }
+                                        }
+                                    },
+                                )
+                                .default_value(default_settings.mcp.allow_writes),
+                            )
+                            .description(t!("settings.mcp.allow_writes_description").into_owned()),
+                            SettingItem::render(|_, _, cx| mcp_status_element(cx)),
+                        ]),
+                ]),
         ]
     }
 }
@@ -1355,12 +1602,24 @@ fn mcp_status_element(cx: &mut App) -> gpui::AnyElement {
     let workspace = crate::mcp::discovery::workspace_dir();
     let (status_text, status_color, endpoint) = match McpService::global(cx).status() {
         McpStatus::Running { port, token } => (
-            format!("Running at {}", crate::mcp::discovery::server_url(*port)),
+            t!(
+                "settings.mcp.running_at",
+                url = crate::mcp::discovery::server_url(*port)
+            )
+            .into_owned(),
             theme.green,
             Some((*port, token.clone())),
         ),
-        McpStatus::Stopped => ("Stopped".to_string(), theme.muted_foreground, None),
-        McpStatus::Error(message) => (format!("Error: {message}"), theme.red, None),
+        McpStatus::Stopped => (
+            t!("settings.mcp.stopped").to_string(),
+            theme.muted_foreground,
+            None,
+        ),
+        McpStatus::Error(message) => (
+            t!("settings.mcp.error", message = message).into_owned(),
+            theme.red,
+            None,
+        ),
     };
 
     v_flex()
@@ -1373,19 +1632,14 @@ fn mcp_status_element(cx: &mut App) -> gpui::AnyElement {
                     div()
                         .text_sm()
                         .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .child("Status"),
+                        .child(t!("settings.mcp.status")),
                 )
                 .child(div().text_sm().text_color(status_color).child(status_text))
                 .child(
                     div()
                         .text_xs()
                         .text_color(theme.muted_foreground)
-                        .child(format!(
-                            "Agent workspace: {} (a tab's terminal pane opens there; start \
-                             claude, opencode or codex and .mcp.json / opencode.json point \
-                             them at this server)",
-                            workspace.display()
-                        )),
+                        .child(t!("settings.mcp.workspace", path = workspace.display())),
                 ),
         )
         .child(
@@ -1399,7 +1653,7 @@ fn mcp_status_element(cx: &mut App) -> gpui::AnyElement {
                         Button::new("mcp-copy-url")
                             .small()
                             .outline()
-                            .label("Copy URL")
+                            .label(t!("settings.mcp.copy_url"))
                             .on_click(move |_, _, cx| {
                                 cx.write_to_clipboard(ClipboardItem::new_string(url.clone()));
                             }),
@@ -1408,7 +1662,7 @@ fn mcp_status_element(cx: &mut App) -> gpui::AnyElement {
                         Button::new("mcp-copy-token")
                             .small()
                             .outline()
-                            .label("Copy token")
+                            .label(t!("settings.mcp.copy_token"))
                             .on_click(move |_, _, cx| {
                                 cx.write_to_clipboard(ClipboardItem::new_string(token.clone()));
                             }),
@@ -1417,7 +1671,7 @@ fn mcp_status_element(cx: &mut App) -> gpui::AnyElement {
                         Button::new("mcp-copy-claude-command")
                             .small()
                             .outline()
-                            .label("Copy `claude mcp add` command")
+                            .label(t!("settings.mcp.copy_claude_command"))
                             .on_click(move |_, _, cx| {
                                 cx.write_to_clipboard(ClipboardItem::new_string(command.clone()));
                             }),
@@ -1427,7 +1681,7 @@ fn mcp_status_element(cx: &mut App) -> gpui::AnyElement {
                     Button::new("mcp-open-workspace")
                         .small()
                         .outline()
-                        .label("Open workspace folder")
+                        .label(t!("settings.mcp.open_workspace"))
                         .on_click(move |_, _, cx| {
                             if let Err(error) = std::fs::create_dir_all(&workspace) {
                                 tracing::warn!("Failed to create the agent workspace: {error}");
@@ -1468,9 +1722,14 @@ impl Render for SettingsView {
                 Some(cx.new(|cx| vsx_themes::ThemeBrowser::new(options, window, cx)));
         }
 
-        GpuiSettings::new("blanco-settings")
-            .with_group_variant(GroupBoxVariant::Outline)
-            .pages(self.setting_pages(cx))
+        // The settings component keeps its search box from its first render,
+        // so each language gets its own state.
+        GpuiSettings::new(SharedString::from(format!(
+            "blanco-settings-{}",
+            rust_i18n::locale().as_ref() as &str
+        )))
+        .with_group_variant(GroupBoxVariant::Outline)
+        .pages(self.setting_pages(cx))
     }
 }
 

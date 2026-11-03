@@ -13,7 +13,7 @@ use sqlparser::dialect::{
 mod column_types;
 mod data_types;
 mod process_list;
-pub use data_types::DataTypeName;
+pub use data_types::{DataTypeName, TypeDescription};
 pub use process_list::ServerSession;
 
 /// Dialect facts for one [`DatabaseType`]. Obtained through

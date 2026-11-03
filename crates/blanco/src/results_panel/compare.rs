@@ -63,7 +63,7 @@ pub fn cell_compare_source(
         .columns
         .get(col)
         .map(|column| column.name.to_string())
-        .unwrap_or_else(|| format!("column {}", col + 1));
+        .unwrap_or_else(|| t!("results.common.unnamed_column", number = col + 1).into_owned());
     let is_json = is_json_column(delegate, col);
     let text = match value {
         None => "NULL".to_string(),
@@ -71,7 +71,12 @@ pub fn cell_compare_source(
         Some(text) => text,
     };
     Some(DiffSource {
-        title: SharedString::from(format!("{column_name} (row {})", row + 1)),
+        title: t!(
+            "results.compare.cell_title",
+            column = column_name,
+            row = row + 1
+        )
+        .into(),
         text,
         language: is_json.then(|| SharedString::from("json")),
     })
@@ -102,7 +107,7 @@ pub fn row_compare_source(delegate: &ResultsTableDelegate, row: usize) -> Option
         }
     }
     Some(DiffSource {
-        title: SharedString::from(format!("Row {}", row + 1)),
+        title: t!("results.compare.row_title", row = row + 1).into(),
         text: lines.join("\n"),
         language: None,
     })
@@ -266,13 +271,17 @@ impl ResultsPanel {
         self.last_diff_view = Some(diff_view.clone());
         window.open_dialog(cx, move |dialog, _window, _cx| {
             dialog
-                .title("Compare")
+                .title(t!("results.compare.title"))
                 .w(px(1100.))
                 .h(px(700.))
                 .child(diff_view.clone())
                 .footer(
                     DialogFooter::new().child(
-                        DialogClose::new().child(Button::new("close").label("Close").outline()),
+                        DialogClose::new().child(
+                            Button::new("close")
+                                .label(t!("results.compare.close"))
+                                .outline(),
+                        ),
                     ),
                 )
         });
@@ -282,7 +291,7 @@ impl ResultsPanel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui_component::table::Column;
+    use blanco_ui::table::Column;
 
     fn delegate(
         columns: &[(&str, ColumnType)],

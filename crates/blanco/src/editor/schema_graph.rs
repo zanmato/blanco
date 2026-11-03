@@ -22,12 +22,12 @@ pub struct SchemaGraphParams {
 }
 
 pub struct SchemaGraphTab {
-    pub title: String,
     pub context: ConnectionContext,
     graph_view: Entity<GraphView>,
     focus_handle: FocusHandle,
     load: Option<Task<()>>,
     _subscription: Subscription,
+    _locale_subscription: Subscription,
 }
 
 /// Where loading a graph is.
@@ -42,17 +42,21 @@ pub enum LoadStep {
 impl LoadStep {
     fn label(self) -> SharedString {
         match self {
-            Self::Connecting => "Connecting…".into(),
-            Self::ForeignKeys => "Reading foreign keys…".into(),
+            Self::Connecting => t!("schema_graph.step.connecting").into(),
+            Self::ForeignKeys => t!("schema_graph.step.foreign_keys").into(),
             Self::Columns {
                 tables_elsewhere: 0,
-            } => "Reading columns…".into(),
-            Self::Columns { tables_elsewhere } => format!(
-                "Reading columns, with {tables_elsewhere} table{} of other schemas…",
-                if tables_elsewhere == 1 { "" } else { "s" }
+            } => t!("schema_graph.step.columns").into(),
+            Self::Columns {
+                tables_elsewhere: 1,
+            } => t!("schema_graph.step.columns_elsewhere_one").into(),
+            Self::Columns { tables_elsewhere } => t!(
+                "schema_graph.step.columns_elsewhere_other",
+                count = tables_elsewhere
             )
             .into(),
-            Self::Layout { tables } => format!("Laying out {tables} tables…").into(),
+            Self::Layout { tables: 1 } => t!("schema_graph.step.layout_one").into(),
+            Self::Layout { tables } => t!("schema_graph.step.layout_other", count = tables).into(),
         }
     }
 
@@ -74,6 +78,19 @@ impl SchemaGraphTab {
             .update(cx, |view, cx| view.set_show_all_edges(true, cx));
     }
 
+    /// The tab strip label, in the current language.
+    pub fn title(&self) -> String {
+        t!(
+            "schema_graph.title",
+            schema = self
+                .context
+                .schema_name
+                .as_deref()
+                .unwrap_or(&self.context.database_name)
+        )
+        .into_owned()
+    }
+
     pub fn new(context: ConnectionContext, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let graph_view = cx.new(|cx| GraphView::new(window, cx));
         let subscription = cx.subscribe_in(
@@ -84,18 +101,19 @@ impl SchemaGraphTab {
             },
         );
 
-        let title = match &context.schema_name {
-            Some(schema) => format!("Schema: {}", schema),
-            None => format!("Schema: {}", context.database_name),
-        };
-
         let mut tab = Self {
-            title,
             context,
             graph_view,
             focus_handle: cx.focus_handle(),
             load: None,
             _subscription: subscription,
+            _locale_subscription: cx.observe_global_in::<crate::i18n::Locale>(
+                window,
+                |this: &mut Self, window, cx| {
+                    this.graph_view
+                        .update(cx, |graph, cx| graph.retranslate(window, cx));
+                },
+            ),
         };
         tab.load(cx);
         tab
@@ -116,11 +134,11 @@ impl SchemaGraphTab {
                 let note = match result {
                     Ok(()) => (
                         NotificationType::Success,
-                        SharedString::from(format!("Saved the graph to {}.", path.display())),
+                        SharedString::from(t!("schema_graph.saved", path = path.display())),
                     ),
                     Err(error) => (
                         NotificationType::Error,
-                        SharedString::from(format!("Saving the graph failed: {error}")),
+                        SharedString::from(t!("schema_graph.save_failed", error = error)),
                     ),
                 };
                 window.push_notification(note, cx);
@@ -162,9 +180,11 @@ impl SchemaGraphTab {
                         this.update(cx, |tab, cx| tab.show_step(step, cx)).ok();
                     })
                     .await
-                    .map_err(|error| format!("Failed to read the schema: {error:#}"))
+                    .map_err(|error| {
+                        t!("schema_graph.read_failed", error = format!("{error:#}")).into_owned()
+                    })
                 }
-                Err(error) => Err(format!("Failed to connect: {error}")),
+                Err(error) => Err(t!("schema_graph.connect_failed", error = error).into_owned()),
             };
             let model = match tables {
                 Ok(tables) => {
@@ -199,7 +219,7 @@ impl SchemaGraphTab {
             view.set_loading(None, cx);
             match model {
                 Ok(model) if model.nodes.is_empty() => {
-                    view.error = Some("No tables found in schema".to_string());
+                    view.error = Some(t!("schema_graph.no_tables").into_owned());
                 }
                 Ok(model) => view.set_model(model, cx),
                 Err(error) => view.error = Some(error),
