@@ -29,6 +29,8 @@ All notable changes to this project will be documented in this file.
   row again
 - Copy As and Export As used rows selected earlier instead of the selected
   cell's row
+- Partitioned Postgres tables showed a size of 0 B, now each level shows the
+  total of the partitions below it
 
 ## [0.1.6] - 2026-10-29
 

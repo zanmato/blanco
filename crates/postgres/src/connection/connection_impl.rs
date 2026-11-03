@@ -490,12 +490,25 @@ impl Connection for PostgresConnection {
         schema: Option<&str>,
     ) -> Result<std::collections::HashMap<String, u64>> {
         let schema_filter = schema.unwrap_or("public");
+        // A partitioned table holds no storage of its own, so it gets the
+        // sum of every partition below it, at each level of the tree.
         let query = "
+            WITH RECURSIVE tree AS (
+                SELECT c.oid AS root, c.oid AS relid
+                FROM pg_class c
+                JOIN pg_namespace n ON n.oid = c.relnamespace
+                WHERE n.nspname = $1 AND c.relkind IN ('r', 'm', 'p')
+                UNION ALL
+                SELECT tree.root, i.inhrelid
+                FROM tree
+                JOIN pg_class p ON p.oid = tree.relid AND p.relkind = 'p'
+                JOIN pg_inherits i ON i.inhparent = tree.relid
+            )
             SELECT c.relname,
-                   pg_total_relation_size(c.oid)::bigint AS size_bytes
-            FROM pg_class c
-            JOIN pg_namespace n ON n.oid = c.relnamespace
-            WHERE n.nspname = $1 AND c.relkind IN ('r', 'm', 'p')
+                   sum(pg_total_relation_size(tree.relid))::bigint AS size_bytes
+            FROM tree
+            JOIN pg_class c ON c.oid = tree.root
+            GROUP BY c.relname
         ";
         let result = self
             .execute_query(
@@ -752,16 +765,30 @@ impl Connection for PostgresConnection {
             "
         } else {
             // A partitioned table holds no rows itself, so its sizes and
-            // estimate would read 0.
+            // estimate are summed over every partition below it.
             "
             SELECT obj_description(c.oid, 'pg_class'),
-                   CASE WHEN c.relkind <> 'p' AND c.reltuples >= 0 THEN c.reltuples::bigint END,
-                   CASE WHEN c.relkind <> 'p' THEN pg_table_size(c.oid) END,
-                   CASE WHEN c.relkind <> 'p' THEN pg_indexes_size(c.oid) END,
+                   sum(CASE WHEN l.relkind <> 'p' AND l.reltuples >= 0 THEN l.reltuples END)::bigint,
+                   sum(pg_table_size(l.oid))::bigint,
+                   sum(pg_indexes_size(l.oid))::bigint,
                    array_to_string(c.reloptions, ', ')
             FROM pg_class c
             JOIN pg_namespace n ON n.oid = c.relnamespace
+            CROSS JOIN LATERAL (
+                WITH RECURSIVE tree AS (
+                    SELECT c.oid AS relid
+                    UNION ALL
+                    SELECT i.inhrelid
+                    FROM tree
+                    JOIN pg_inherits i ON i.inhparent = tree.relid
+                    WHERE c.relkind = 'p'
+                )
+                SELECT x.oid, x.relkind, x.reltuples
+                FROM tree
+                JOIN pg_class x ON x.oid = tree.relid
+            ) l
             WHERE n.nspname = $1 AND c.relname = $2
+            GROUP BY c.oid, c.reloptions
             "
         };
         let result = self
