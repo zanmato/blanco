@@ -260,30 +260,21 @@ impl PostgresConnection {
         &self.server_key
     }
 
-    /// Fetch PostgreSQL tables using async background task
-    async fn fetch_postgres_tables(&self, schema: Option<&str>) -> Result<Vec<String>> {
-        let schema_filter = schema.unwrap_or("public");
-        let query = "
-            SELECT table_name
-            FROM information_schema.tables
-            WHERE table_schema = $1
-            AND table_type = 'BASE TABLE'
-            ORDER BY table_name
-        ";
-
-        let result = self
+    /// The names `query` lists for the schema bound as `$1`, `public` when
+    /// none is given.
+    pub(crate) async fn list_schema_names(
+        &self,
+        query: &str,
+        schema: Option<&str>,
+    ) -> Result<Vec<String>> {
+        let schema = schema.unwrap_or("public");
+        Ok(self
             .execute_query(
                 query,
                 self.initial_database.as_deref(),
-                Some(&[schema_filter.to_string()]),
+                Some(&[schema.to_string()]),
             )
-            .await?;
-        let tables: Vec<String> = result
-            .rows
-            .into_iter()
-            .filter_map(|row| row.into_iter().next().flatten())
-            .collect();
-
-        Ok(tables)
+            .await?
+            .into_first_column())
     }
 }

@@ -242,19 +242,25 @@ impl ResultsTableDelegate {
             && !self.edit_state.is_expression(row_ix, col_ix)
     }
 
-    /// Why an edit pending for a geometry column is not a geometry PostGIS
-    /// reads, so it can be fixed before it is sent.
-    pub fn invalid_geometry_edit(&self) -> Option<String> {
+    /// The first pending edit, by row then column, of a `column_type` column
+    /// whose text `problem` rejects: its row counted from one, its column's
+    /// name and the problem. SQL expressions are the server's to evaluate and
+    /// are not checked.
+    fn first_invalid_edit<Problem>(
+        &self,
+        column_type: ColumnType,
+        problem: impl Fn(&str) -> Option<Problem>,
+    ) -> Option<(usize, String, Problem)> {
         let mut cells: Vec<&(usize, usize)> = self.edit_state.edited_values.keys().collect();
         cells.sort();
         cells.into_iter().find_map(|&(row, col)| {
-            if self.column_types.get(col) != Some(&ColumnType::Geometry)
+            if self.column_types.get(col) != Some(&column_type)
                 || self.edit_state.expression_cells.contains(&(row, col))
             {
                 return None;
             }
             let text = self.edit_state.edited_values.get(&(row, col))?.as_deref()?;
-            let error = blanco_core::geometry::edit_error(text)?;
+            let problem = problem(text)?;
             let column = self
                 .columns
                 .get(col)
@@ -262,85 +268,51 @@ impl ResultsTableDelegate {
                 .unwrap_or_else(|| {
                     t!("results.common.unnamed_column", number = col + 1).into_owned()
                 });
-            Some(
-                t!(
-                    "results.cell_edit.invalid_wkt",
-                    row = row + 1,
-                    column = column,
-                    error = error
-                )
-                .into_owned(),
-            )
+            Some((row + 1, column, problem))
         })
     }
 
-    /// Why an edit pending for a JSON column is not valid JSON, naming the row
-    /// and column, so it can be fixed before it is sent. SQL expressions are
-    /// the server's to evaluate and are not checked.
-    pub fn invalid_json_edit(&self) -> Option<String> {
-        let mut cells: Vec<&(usize, usize)> = self.edit_state.edited_values.keys().collect();
-        cells.sort();
-        cells.into_iter().find_map(|&(row, col)| {
-            if self.column_types.get(col) != Some(&ColumnType::Json)
-                || self.edit_state.expression_cells.contains(&(row, col))
-            {
-                return None;
-            }
-            let text = self.edit_state.edited_values.get(&(row, col))?.as_deref()?;
-            let error = json_error(text)?;
-            let column = self
-                .columns
-                .get(col)
-                .map(|column| column.name.to_string())
-                .unwrap_or_else(|| {
-                    t!("results.common.unnamed_column", number = col + 1).into_owned()
-                });
-            Some(
-                t!(
-                    "results.cell_edit.invalid_json",
-                    row = row + 1,
-                    column = column,
-                    error = error
-                )
-                .into_owned(),
+    /// Why an edit pending for a geometry column is not a geometry PostGIS
+    /// reads, so it can be fixed before it is sent.
+    pub fn invalid_geometry_edit(&self) -> Option<String> {
+        let (row, column, error) =
+            self.first_invalid_edit(ColumnType::Geometry, blanco_core::geometry::edit_error)?;
+        Some(
+            t!(
+                "results.cell_edit.invalid_wkt",
+                row = row,
+                column = column,
+                error = error
             )
-        })
+            .into_owned(),
+        )
+    }
+
+    /// Why an edit pending for a JSON column is not valid JSON, naming the row
+    /// and column, so it can be fixed before it is sent.
+    pub fn invalid_json_edit(&self) -> Option<String> {
+        let (row, column, error) = self.first_invalid_edit(ColumnType::Json, json_error)?;
+        Some(
+            t!(
+                "results.cell_edit.invalid_json",
+                row = row,
+                column = column,
+                error = error
+            )
+            .into_owned(),
+        )
     }
 
     /// Why an edit pending for a binary column is not the bytes it claims to
     /// be: text written as hex (`0x…`) whose digits are not whole bytes. Text
     /// without the prefix is sent as the string it is.
     pub fn invalid_binary_edit(&self) -> Option<String> {
-        let mut cells: Vec<&(usize, usize)> = self.edit_state.edited_values.keys().collect();
-        cells.sort();
-        cells.into_iter().find_map(|&(row, col)| {
-            if self.column_types.get(col) != Some(&ColumnType::Binary)
-                || self.edit_state.expression_cells.contains(&(row, col))
-            {
-                return None;
-            }
-            let text = self.edit_state.edited_values.get(&(row, col))?.as_deref()?;
-            if !blanco_core::binary::is_hex_notation(text)
-                || blanco_core::binary::hex_digits(text).is_some()
-            {
-                return None;
-            }
-            let column = self
-                .columns
-                .get(col)
-                .map(|column| column.name.to_string())
-                .unwrap_or_else(|| {
-                    t!("results.common.unnamed_column", number = col + 1).into_owned()
-                });
-            Some(
-                t!(
-                    "results.cell_edit.invalid_hex",
-                    row = row + 1,
-                    column = column
-                )
-                .into_owned(),
-            )
-        })
+        let (row, column, ()) = self.first_invalid_edit(ColumnType::Binary, |text| {
+            (blanco_core::binary::is_hex_notation(text)
+                && blanco_core::binary::hex_digits(text).is_none())
+            .then_some(())
+        })?;
+        Some(t!("results.cell_edit.invalid_hex", row = row, column = column).into_owned())
     }
 
     /// What a date or time cell holds, which decides whether the cell editor

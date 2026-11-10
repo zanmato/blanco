@@ -458,43 +458,21 @@ impl Connection for MysqlConnection {
     }
 
     async fn list_procedures(&self, _schema: Option<&str>) -> Result<Vec<String>, anyhow::Error> {
-        let database = self
-            .initial_database
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!(t!("mysql.no_database")))?;
-        let pool = self.get_or_create_pool(database).await?;
-        let rows = sqlx::query(
+        self.list_database_names(
             "SELECT ROUTINE_NAME FROM information_schema.routines
              WHERE ROUTINE_SCHEMA = ? AND ROUTINE_TYPE = 'PROCEDURE'
              ORDER BY ROUTINE_NAME",
         )
-        .bind(database)
-        .fetch_all(&pool)
-        .await?;
-        Ok(rows
-            .iter()
-            .filter_map(|r| r.try_get::<String, _>(0).ok())
-            .collect())
+        .await
     }
 
     async fn list_functions(&self, _schema: Option<&str>) -> Result<Vec<String>, anyhow::Error> {
-        let database = self
-            .initial_database
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!(t!("mysql.no_database")))?;
-        let pool = self.get_or_create_pool(database).await?;
-        let rows = sqlx::query(
+        self.list_database_names(
             "SELECT ROUTINE_NAME FROM information_schema.routines
              WHERE ROUTINE_SCHEMA = ? AND ROUTINE_TYPE = 'FUNCTION'
              ORDER BY ROUTINE_NAME",
         )
-        .bind(database)
-        .fetch_all(&pool)
-        .await?;
-        Ok(rows
-            .iter()
-            .filter_map(|r| r.try_get::<String, _>(0).ok())
-            .collect())
+        .await
     }
 
     async fn list_function_signatures(
@@ -556,23 +534,12 @@ impl Connection for MysqlConnection {
     }
 
     async fn list_triggers(&self, _schema: Option<&str>) -> Result<Vec<String>, anyhow::Error> {
-        let database = self
-            .initial_database
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!(t!("mysql.no_database")))?;
-        let pool = self.get_or_create_pool(database).await?;
-        let rows = sqlx::query(
+        self.list_database_names(
             "SELECT TRIGGER_NAME FROM information_schema.triggers
              WHERE TRIGGER_SCHEMA = ?
              ORDER BY TRIGGER_NAME",
         )
-        .bind(database)
-        .fetch_all(&pool)
-        .await?;
-        Ok(rows
-            .iter()
-            .filter_map(|r| r.try_get::<String, _>(0).ok())
-            .collect())
+        .await
     }
 
     async fn get_object_comments(
@@ -1076,54 +1043,26 @@ impl Connection for MysqlConnection {
         reference_value: &str,
     ) -> Result<QueryResult, anyhow::Error> {
         const ROW_ESTIMATE_THRESHOLD: i64 = 20;
-        const LIMIT_THRESHOLD: i64 = 100;
-        let quote_identifier = |identifier: &str| {
-            identifier
-                .split('.')
-                .map(|part| {
-                    let part = part.trim();
-                    let unquoted = part
-                        .strip_prefix('`')
-                        .and_then(|value| value.strip_suffix('`'))
-                        .unwrap_or(part);
-                    format!("`{}`", unquoted.replace('`', "``"))
-                })
-                .collect::<Vec<_>>()
-                .join(".")
-        };
-        let table_identifier = quote_identifier(table_name);
-        let column_identifier = quote_identifier(column_name);
-        let reference_value = reference_value.replace('\'', "''");
+        const LIMIT_THRESHOLD: usize = 100;
 
-        // Get row estimate from INFORMATION_SCHEMA.TABLES
         let estimate_query = "SELECT TABLE_ROWS FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = ? AND TABLE_SCHEMA = DATABASE()";
         let estimate_result = self
             .execute_query(estimate_query, None, Some(&[table_name.to_string()]))
             .await?;
-
-        let row_count = estimate_result
+        let small_table = estimate_result
             .rows
             .first()
             .and_then(|row| row.first())
             .and_then(|val| val.as_ref())
             .and_then(|val| val.parse::<i64>().ok())
-            .filter(|n| *n >= 0);
+            .is_some_and(|count| (0..=ROW_ESTIMATE_THRESHOLD).contains(&count));
 
-        if let Some(count) = row_count
-            && count <= ROW_ESTIMATE_THRESHOLD
-        {
-            // Small table: fetch all rows with referenced row first
-            let query = format!(
-                "SELECT * FROM {} ORDER BY {} = '{}' DESC LIMIT {}",
-                table_identifier, column_identifier, reference_value, LIMIT_THRESHOLD
-            );
-            return self.execute_query(&query, None, None).await;
-        }
-
-        // Large table or estimate unavailable: fetch only referenced row
-        let query = format!(
-            "SELECT * FROM {} WHERE {} = '{}'",
-            table_identifier, column_identifier, reference_value
+        let query = self.database_type().dialect().foreign_key_lookup_query(
+            table_name,
+            column_name,
+            reference_value,
+            small_table,
+            small_table.then_some(LIMIT_THRESHOLD),
         );
         self.execute_query(&query, None, None).await
     }

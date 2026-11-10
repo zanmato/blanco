@@ -4,7 +4,7 @@ use gpui_component::ActiveTheme;
 
 use blanco_core::{QueryResult, connection_trait::ColumnType};
 
-use super::cell_edit_state::{CellEditState, DisplayText, display_text};
+use super::cell_edit_state::{CellEditState, DISPLAY_CHARACTERS, DisplayText, display_text};
 use super::compare::CompareKind;
 use super::deferred_values::DeferredValues;
 use super::temporal;
@@ -383,6 +383,12 @@ impl ResultsTableDelegate {
                             .lines()
                             .max_by_key(|line| line.len())
                             .unwrap_or_default();
+                        // A cell shows only its first characters, and shaping
+                        // a value megabytes long took seconds.
+                        let widest_line = match widest_line.char_indices().nth(DISPLAY_CHARACTERS) {
+                            Some((end, _)) => &widest_line[..end],
+                            None => widest_line,
+                        };
                         let shared_value: SharedString = widest_line.to_string().into();
                         let shaped_line = window.text_system().shape_line(
                             shared_value,

@@ -5,33 +5,6 @@ use anyhow::Result;
 use blanco_core::Connection;
 use blanco_core::{ColumnInfo, ForeignKeyInfo, InboundForeignKey, TableSchemaInfo};
 
-fn parse_referenced_by(table_info: &serde_json::Value) -> Vec<InboundForeignKey> {
-    table_info
-        .get("referenced_by")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|item| {
-                    let from_table = item.get("from_table").and_then(|v| v.as_str())?;
-                    let from_column = item.get("from_column").and_then(|v| v.as_str())?;
-                    let to_column = item.get("to_column").and_then(|v| v.as_str())?;
-                    let constraint_name = item
-                        .get("constraint_name")
-                        .and_then(|v| v.as_str())
-                        .filter(|s| !s.is_empty())
-                        .map(|s| s.to_string());
-                    Some(InboundForeignKey {
-                        from_table: from_table.to_string(),
-                        from_column: from_column.to_string(),
-                        to_column: to_column.to_string(),
-                        constraint_name,
-                    })
-                })
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
 impl MysqlConnection {
     /// Get MySQL database schema with pagination using a single JSON aggregation query
     pub async fn get_schema_paginated(
@@ -119,7 +92,7 @@ impl MysqlConnection {
                         }
                     }
 
-                    let referenced_by = parse_referenced_by(&table_info_json);
+                    let referenced_by = InboundForeignKey::list_from_json(&table_info_json);
                     tables.push(TableSchemaInfo {
                         name: table_name.to_string(),
                         schema: self.get_display_name(),

@@ -2982,28 +2982,13 @@ impl BlancoApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let new_value = !AppSettings::global(cx).settings.editor.show_whitespace;
-        AppSettings::global_mut(cx).settings.editor.show_whitespace = new_value;
-
-        // Save to database
-        let db = AppDatabase::global(cx).clone();
-        let new_value_str = new_value.to_string();
-        cx.spawn(async move |_, _| {
-            if let Err(e) = db
-                .save_setting("editor.show_whitespace", &new_value_str, false)
-                .await
-            {
-                tracing::error!("Failed to save show_whitespace setting: {}", e);
-            }
-        })
-        .detach();
-
-        // Update all query tab editors
-        self.editor_panel.update(cx, |panel, cx| {
-            panel.set_all_editors_show_whitespace(new_value, window, cx);
-        });
-
-        cx.notify();
+        self.toggle_editor_setting(
+            "editor.show_whitespace",
+            |editor| &mut editor.show_whitespace,
+            EditorPanel::set_all_editors_show_whitespace,
+            window,
+            cx,
+        );
     }
 
     fn on_toggle_word_wrap(
@@ -3012,27 +2997,40 @@ impl BlancoApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let new_value = !AppSettings::global(cx).settings.editor.word_wrap;
-        AppSettings::global_mut(cx).settings.editor.word_wrap = new_value;
+        self.toggle_editor_setting(
+            "editor.word_wrap",
+            |editor| &mut editor.word_wrap,
+            EditorPanel::set_all_editors_soft_wrap,
+            window,
+            cx,
+        );
+    }
 
-        // Save to database
+    /// Flips the editor setting `setting` points at, saves it as `key` and
+    /// gives every query tab's editor the new value through `apply`.
+    fn toggle_editor_setting(
+        &mut self,
+        key: &'static str,
+        setting: fn(&mut crate::settings::EditorSettings) -> &mut bool,
+        apply: fn(&mut EditorPanel, bool, &mut Window, &mut Context<EditorPanel>),
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let value = setting(&mut AppSettings::global_mut(cx).settings.editor);
+        *value = !*value;
+        let new_value = *value;
+
         let db = AppDatabase::global(cx).clone();
-        let new_value_str = new_value.to_string();
         cx.spawn(async move |_, _| {
-            if let Err(e) = db
-                .save_setting("editor.word_wrap", &new_value_str, false)
-                .await
-            {
-                tracing::error!("Failed to save word_wrap setting: {}", e);
+            if let Err(error) = db.save_setting(key, &new_value.to_string(), false).await {
+                tracing::error!("Failed to save setting {key}: {error}");
             }
         })
         .detach();
 
-        // Update all query tab editors
         self.editor_panel.update(cx, |panel, cx| {
-            panel.set_all_editors_soft_wrap(new_value, window, cx);
+            apply(panel, new_value, window, cx);
         });
-
         cx.notify();
     }
 

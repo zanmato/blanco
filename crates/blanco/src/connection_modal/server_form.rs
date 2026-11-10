@@ -23,7 +23,8 @@ use app_database::{ConnectionData, EnvironmentType};
 
 use super::NewConnectionModal;
 use super::shared::{
-    make_input, render_ssh_section, render_ssl_advanced_fields, secret_field, validate_ssh_section,
+    make_input, optional_value, render_ssh_section, render_ssl_advanced_fields, secret_field,
+    validate_server_fields, validate_ssh_section,
 };
 use super::types::host_contains_explicit_port;
 use database::SecretKind;
@@ -302,27 +303,14 @@ impl ServerForm {
         {
             return Some(error);
         }
-        let host = self.host_input.read(cx).value();
-        let port_str = self.port_input.read(cx).value();
-        let database = self.database_input.read(cx).value();
-        let username = self.username_input.read(cx).value();
-
-        if host.is_empty() {
-            return Some(t!("connection_dialog.errors.host_required").into_owned());
-        }
-        if port_str.is_empty() && !self.port_is_optional(&host) {
-            return Some(t!("connection_dialog.errors.port_required").into_owned());
-        }
-        if !port_str.is_empty() && port_str.parse::<u16>().is_err() {
-            return Some(t!("connection_dialog.errors.port_invalid").into_owned());
-        }
-        if database.is_empty() {
-            return Some(t!("connection_dialog.errors.database_name_required").into_owned());
-        }
-        if username.is_empty() {
-            return Some(t!("connection_dialog.errors.username_required").into_owned());
-        }
-        None
+        validate_server_fields(
+            &self.host_input,
+            &self.port_input,
+            &self.database_input,
+            &self.username_input,
+            |host| self.port_is_optional(host),
+            cx,
+        )
     }
 
     pub fn get_connection_data(
@@ -399,15 +387,6 @@ impl ServerForm {
         connection.ssl_cert_path = optional_value(&self.ssl_cert_input, cx);
         connection.ssl_ca_cert_path = optional_value(&self.ssl_ca_cert_input, cx);
         Some(connection)
-    }
-}
-
-fn optional_value(input: &Entity<InputState>, cx: &App) -> Option<String> {
-    let value = input.read(cx).value();
-    if value.is_empty() {
-        None
-    } else {
-        Some(value.to_string())
     }
 }
 

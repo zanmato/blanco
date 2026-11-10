@@ -212,6 +212,12 @@ pub(crate) enum Scene {
     /// with bracket colors off and on, after which the app quits. Besides
     /// the frames it logs how long each keystroke keeps the main thread.
     LargeInsert,
+    /// Not a screenshot: an editable table of product descriptions, each
+    /// about 1.8 MB of HTML on one line, with one opened in the expanded
+    /// cell editor, then redrawn, typed into and scrolled, after which the
+    /// app quits. Besides the frames it logs how long opening the inline and
+    /// the expanded editor and each keystroke keep the main thread.
+    LargeCellEdit,
 }
 
 impl Scene {
@@ -239,6 +245,7 @@ impl Scene {
             "large-values" => Some(Self::LargeValues),
             "large-query" => Some(Self::LargeQuery),
             "large-insert" => Some(Self::LargeInsert),
+            "large-cell-edit" => Some(Self::LargeCellEdit),
             _ => {
                 tracing::error!("Unknown BLANCO_SCENE {scene:?}");
                 None
@@ -265,7 +272,11 @@ impl Scene {
             | Self::Import
             | Self::Dashboard
             | Self::JsonEdit => 0,
-            Self::InlineEdit | Self::LargeValues | Self::Filter | Self::Motion => 1,
+            Self::InlineEdit
+            | Self::LargeValues
+            | Self::LargeCellEdit
+            | Self::Filter
+            | Self::Motion => 1,
             Self::Script => 2,
         }
     }
@@ -1019,6 +1030,10 @@ async fn stage_scene(
             measure_large_insert(&editor_panel, cx).await?;
             cx.update(|_, cx| cx.quit())?;
         }
+        Scene::LargeCellEdit => {
+            measure_large_cell_edit(&editor_panel, cx).await?;
+            cx.update(|_, cx| cx.quit())?;
+        }
     }
 
     settle(cx, 1500).await;
@@ -1204,6 +1219,120 @@ async fn measure_large_values(
         tracing::info!("grid measurement: done");
         settle(cx, 500).await;
     }
+    Ok(())
+}
+
+/// Product descriptions shaped like a shop's: HTML on one line, about 1.8 MB
+/// each, with Danish letters, so the expanded editor wraps one huge line.
+const LARGE_CELL_EDIT_STATEMENTS: [&str; 3] = [
+    "CREATE TABLE localized_products (id INTEGER PRIMARY KEY, locale TEXT NOT NULL, description TEXT)",
+    "INSERT INTO localized_products (id, locale, description) WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 3) SELECT i, 'da', replace(hex(zeroblob(9000)), '00', '<p>Forsyn dine Lenovo-enheder effektivt med Lenovo AC Adapter ' || i || ' W. Denne højkvalitetsadapter er designet til pålidelig ydeevne</p><ul><li style=\"box-sizing: border-box; color: rgb(33, 37, 41)\"> Mærke: Lenovo</li></ul>') FROM n",
+    "SELECT id, locale, description FROM localized_products",
+];
+
+/// Time one main thread step of the large cell edit scene, on stdout beside
+/// GPUI's frame durations, which scripts/measure-frames reads.
+fn log_step_duration(step: &str, started: std::time::Instant) {
+    #[allow(clippy::print_stdout)]
+    {
+        println!("{step} duration: {:?}", started.elapsed());
+    }
+}
+
+/// Open a 1.8 MB description in the inline cell editor and expand it, then
+/// redraw the expanded editor in place, type into it and scroll it. Opening
+/// each editor is timed like a keystroke, and so is the frame drawn after it.
+async fn measure_large_cell_edit(
+    editor_panel: &Entity<EditorPanel>,
+    cx: &mut AsyncWindowContext,
+) -> anyhow::Result<()> {
+    hide_sql_log(editor_panel, cx)?;
+    for statement in LARGE_CELL_EDIT_STATEMENTS {
+        editor_panel.update_in(cx, |panel, window, cx| {
+            if let Some(tab) = panel.active_query_tab() {
+                tab.editor.update(cx, |editor, cx| {
+                    editor.set_value(statement, window, cx);
+                });
+            }
+        })?;
+        run_active_tab(editor_panel, cx).await?;
+    }
+    settle(cx, 1000).await;
+    let results_panel = editor_panel
+        .read_with(cx, |panel, _| panel.active_results_panel())
+        .ok_or_else(|| anyhow::anyhow!("no results panel"))?;
+    let table_state = results_panel.read_with(cx, |panel, _| panel.table_state().clone());
+    let (row, column) = (0, 2);
+    let value_length = table_state.read_with(cx, |state, _| {
+        state
+            .delegate()
+            .stored_cell_value(row, column)
+            .map_or(0, |value| value.len())
+    });
+    let (columns, row_count) = table_state.read_with(cx, |state, _| {
+        let delegate = state.delegate();
+        (
+            delegate
+                .columns
+                .iter()
+                .map(|column| column.name.to_string())
+                .collect::<Vec<_>>(),
+            delegate.rows.len(),
+        )
+    });
+    tracing::info!(
+        "large cell edit: {row_count} rows of {columns:?}, the description holds {value_length} bytes"
+    );
+
+    tracing::info!("cell measurement: open-inline");
+    let started = std::time::Instant::now();
+    results_panel.update_in(cx, |panel, window, cx| {
+        panel.start_cell_edit(row, column, window, cx);
+    })?;
+    log_step_duration("edit", started);
+    settle(cx, 1000).await;
+    tracing::info!("cell measurement: done");
+
+    tracing::info!("cell measurement: open-expanded");
+    let started = std::time::Instant::now();
+    table_state.update_in(cx, |state, window, cx| {
+        ResultsTableDelegate::handle_maximize(state, row, column, false, window, cx);
+    })?;
+    log_step_duration("edit", started);
+    settle(cx, 2000).await;
+    tracing::info!("cell measurement: done");
+
+    tracing::info!("cell measurement: redraw");
+    for _ in 0..50 {
+        cx.update(|window, _| window.refresh())?;
+        settle(cx, 16).await;
+    }
+    tracing::info!("cell measurement: done");
+
+    tracing::info!("cell measurement: typing");
+    for ix in 0..30 {
+        let key = if ix % 2 == 0 { "x" } else { "backspace" };
+        let keystroke = gpui::Keystroke::parse(key)?;
+        let started = std::time::Instant::now();
+        cx.update(|window, cx| window.dispatch_keystroke(keystroke, cx))?;
+        log_step_duration("edit", started);
+        settle(cx, 50).await;
+    }
+    tracing::info!("cell measurement: done");
+
+    let Some(CellInput::Expanded(editor)) = table_state.read_with(cx, |state, _| {
+        state.delegate().edit_state.editing_input.clone()
+    }) else {
+        anyhow::bail!("the cell did not expand");
+    };
+    tracing::info!("cell measurement: scroll");
+    for step in 1..=50 {
+        editor.update_in(cx, |editor, _, cx| {
+            editor.set_scroll_offset(gpui::point(gpui::px(0.), gpui::px(-60. * step as f32)), cx)
+        })?;
+        settle(cx, 16).await;
+    }
+    tracing::info!("cell measurement: done");
     Ok(())
 }
 

@@ -130,6 +130,21 @@ impl MysqlConnectionKey {
 }
 
 impl MysqlConnection {
+    /// The names `query` lists for the connection's database, which it takes
+    /// as its one parameter.
+    pub(crate) async fn list_database_names(&self, query: &str) -> Result<Vec<String>> {
+        let database = self
+            .initial_database
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!(t!("mysql.no_database")))?;
+        let pool = self.get_or_create_pool(database).await?;
+        let rows = sqlx::query(query).bind(database).fetch_all(&pool).await?;
+        Ok(rows
+            .iter()
+            .filter_map(|row| row.try_get::<String, _>(0).ok())
+            .collect())
+    }
+
     /// Map MySQL type name to ColumnType enum
     fn map_mysql_type(type_name: &str) -> ColumnType {
         blanco_core::DatabaseType::MySQL

@@ -12,7 +12,9 @@ use gpui_component::{
 use app_database::{ConnectionData, EnvironmentType};
 
 use super::NewConnectionModal;
-use super::shared::{make_input, render_ssh_section, secret_field, validate_ssh_section};
+use super::shared::{
+    make_input, optional_value, render_ssh_section, secret_field, validate_ssh_section,
+};
 use database::SecretKind;
 
 pub(super) struct RedisForm {
@@ -216,9 +218,9 @@ impl RedisForm {
             } else {
                 ssh_port_str.parse::<i32>().ok()?
             };
-            let ssh_password = optional_path(&self.ssh_password_input, cx);
-            let ssh_private_key_path = optional_path(&self.ssh_private_key_input, cx);
-            let ssh_private_key_password = optional_path(&self.ssh_private_key_password_input, cx);
+            let ssh_password = optional_value(&self.ssh_password_input, cx);
+            let ssh_private_key_path = optional_value(&self.ssh_private_key_input, cx);
+            let ssh_private_key_password = optional_value(&self.ssh_private_key_password_input, cx);
 
             ConnectionData::new_redis(name, host, port, database, username, password).with_ssh(
                 ssh_host.to_string(),
@@ -242,17 +244,8 @@ impl RedisForm {
             )
             .filter(|hosts| !hosts.is_empty());
         }
-        connection.client_name = optional_path(&self.client_name_input, cx);
+        connection.client_name = optional_value(&self.client_name_input, cx);
         Some(connection)
-    }
-}
-
-fn optional_path(input: &Entity<InputState>, cx: &App) -> Option<String> {
-    let value = input.read(cx).value();
-    if value.is_empty() {
-        None
-    } else {
-        Some(value.to_string())
     }
 }
 

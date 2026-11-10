@@ -349,9 +349,9 @@ statement behind an open string. `editor/bracket_colors.rs` scans each
 document version on a background thread (debounced for large documents),
 picks the statement from the cursor, and gives the editor text decorations
 only for the rows around the visible ones, because the editor moves every
-decoration it holds on each edit. The fork's `overlay_highlights` lays
-decorations over the syntax colors: `gpui::combine_highlights` folds
-overlapping styles in hash set order, so it cannot give one precedence.
+decoration it holds on each edit. gpui-base's own `combine_highlights` lays
+decorations over the syntax colors in layer order: `gpui::combine_highlights`
+folds overlapping styles in hash set order, so it cannot give one precedence.
 Measure changes with `scripts/measure-frames large-insert`, which types into
 and scrolls a 100,000 row INSERT with colors off and on and times each
 keystroke's main thread work beside the frames.

@@ -257,3 +257,44 @@ pub(super) fn validate_ssh_section(
     }
     database::ssh_config::parse_jump_hosts(&jump_hosts).err()
 }
+
+/// What is wrong with the host, port, database and user fields of a server
+/// connection, if anything. `port_optional` says, given the host, whether
+/// the port may be left empty.
+pub(super) fn validate_server_fields(
+    host_input: &Entity<InputState>,
+    port_input: &Entity<InputState>,
+    database_input: &Entity<InputState>,
+    username_input: &Entity<InputState>,
+    port_optional: impl Fn(&str) -> bool,
+    cx: &App,
+) -> Option<String> {
+    let host = host_input.read(cx).value();
+    let port = port_input.read(cx).value();
+    if host.is_empty() {
+        return Some(t!("connection_dialog.errors.host_required").into_owned());
+    }
+    if port.is_empty() && !port_optional(&host) {
+        return Some(t!("connection_dialog.errors.port_required").into_owned());
+    }
+    if !port.is_empty() && port.parse::<u16>().is_err() {
+        return Some(t!("connection_dialog.errors.port_invalid").into_owned());
+    }
+    if database_input.read(cx).value().is_empty() {
+        return Some(t!("connection_dialog.errors.database_name_required").into_owned());
+    }
+    if username_input.read(cx).value().is_empty() {
+        return Some(t!("connection_dialog.errors.username_required").into_owned());
+    }
+    None
+}
+
+/// The text of an optional field, `None` when it is left empty.
+pub(super) fn optional_value(input: &Entity<InputState>, cx: &App) -> Option<String> {
+    let value = input.read(cx).value();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_string())
+    }
+}

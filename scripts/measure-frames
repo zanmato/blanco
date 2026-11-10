@@ -15,6 +15,10 @@
 #   large-insert  the SQL editor with a 4 MB INSERT of 100,000 rows: typing
 #                 and scrolling with bracket colors off and on, timing each
 #                 keystroke's main thread work ("edit") beside the frames
+#   large-cell-edit  an editable table of 1.8 MB one line HTML descriptions,
+#                 one opened inline and then in the expanded cell editor,
+#                 redrawn, typed into and scrolled, timing each step's main
+#                 thread work ("edit") beside the frames
 #
 # Needs Xvfb, xdpyinfo, sqlite3 and dbus-run-session, plus Mesa's lavapipe
 # Vulkan driver when there is no GPU. Set BLANCO_BIN to measure an existing

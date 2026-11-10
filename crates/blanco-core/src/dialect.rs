@@ -896,6 +896,37 @@ impl Dialect {
         )
     }
 
+    /// The rows shown for following a foreign key to `value` in `table`'s
+    /// `column`, at most `limit` of them. With `whole_table` that is every
+    /// row, the referenced one first, for a table small enough to show
+    /// whole. Otherwise only the rows that match.
+    pub fn foreign_key_lookup_query(
+        &self,
+        table: &str,
+        column: &str,
+        value: &str,
+        whole_table: bool,
+        limit: Option<usize>,
+    ) -> String {
+        let sql = if whole_table {
+            // A `CASE` rather than `ORDER BY column = value DESC`: PostgreSQL
+            // sorts the NULL of a NULL column before true, and SQL Server
+            // cannot order by a comparison.
+            format!(
+                "SELECT * FROM {} ORDER BY CASE WHEN {} = {} THEN 0 ELSE 1 END",
+                self.quote_path(table),
+                self.quote_identifier(column),
+                self.string_literal(value)
+            )
+        } else {
+            self.referenced_row_query(table, column, value, false, false)
+        };
+        match limit {
+            Some(limit) => self.add_row_limit(&sql, limit),
+            None => sql,
+        }
+    }
+
     /// Row limiting for a `SELECT`: SQL Server has no `LIMIT`, so the limit
     /// becomes `TOP n` right after `SELECT` (or `SELECT DISTINCT`); every other
     /// backend gets a trailing `LIMIT n`. `sql` is returned unchanged when it
@@ -904,6 +935,13 @@ impl Dialect {
         if self.has_row_limit(sql) {
             return sql.to_string();
         }
+        self.add_row_limit(sql, limit)
+    }
+
+    /// [`Self::apply_row_limit`] without asking whether `sql` is already
+    /// limited, for statements built here, whose string literals could hold
+    /// the word `LIMIT`.
+    fn add_row_limit(&self, sql: &str, limit: usize) -> String {
         let trimmed = sql.trim_end().trim_end_matches(';').trim_end();
         match self.0 {
             DatabaseType::MsSql => {
@@ -1121,6 +1159,52 @@ mod tests {
         assert_eq!(
             dialect(DatabaseType::MySQL).referenced_row_query("t", "id", "0xCAFE", false, true),
             "SELECT * FROM `t` WHERE `id` = X'cafe'"
+        );
+    }
+
+    #[test]
+    fn foreign_key_lookup_query_escapes_for_the_dialect() {
+        assert_eq!(
+            dialect(DatabaseType::MySQL).foreign_key_lookup_query(
+                "shop.users",
+                "code",
+                "a\\' OR 1=1 -- ",
+                false,
+                None
+            ),
+            "SELECT * FROM `shop`.`users` WHERE `code` = 'a\\\\'' OR 1=1 -- '"
+        );
+        assert_eq!(
+            dialect(DatabaseType::PostgreSQL).foreign_key_lookup_query(
+                "public.users",
+                "id",
+                "O'Brien",
+                true,
+                Some(100)
+            ),
+            "SELECT * FROM \"public\".\"users\" ORDER BY CASE WHEN \"id\" = 'O''Brien' \
+             THEN 0 ELSE 1 END\nLIMIT 100"
+        );
+        // A value holding the word LIMIT still gets the limit.
+        assert_eq!(
+            dialect(DatabaseType::ClickHouse).foreign_key_lookup_query(
+                "t",
+                "plan",
+                "NO LIMIT",
+                false,
+                Some(100)
+            ),
+            "SELECT * FROM `t` WHERE `plan` = 'NO LIMIT'\nLIMIT 100"
+        );
+        assert_eq!(
+            dialect(DatabaseType::MsSql).foreign_key_lookup_query(
+                "dbo.users",
+                "id",
+                "7",
+                false,
+                Some(100)
+            ),
+            "SELECT TOP 100 * FROM [dbo].[users] WHERE [id] = '7'"
         );
     }
 

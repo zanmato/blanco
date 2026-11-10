@@ -408,6 +408,24 @@ impl Clone for MssqlConnection {
 }
 
 impl MssqlConnection {
+    /// The names listed by the query `query` builds from the schema (`dbo`
+    /// when none is given) written as a string literal. The client takes no
+    /// bind parameters, hence the literal.
+    async fn list_schema_names(
+        &self,
+        schema: Option<&str>,
+        query: impl FnOnce(&str) -> String,
+    ) -> Result<Vec<String>> {
+        let schema = self
+            .database_type()
+            .dialect()
+            .string_literal(schema.unwrap_or("dbo"));
+        Ok(self
+            .execute_query(&query(&schema), self.initial_database.as_deref(), None)
+            .await?
+            .into_first_column())
+    }
+
     async fn fetch_inbound_foreign_keys(
         &self,
         database_name: Option<&str>,
@@ -1291,37 +1309,25 @@ impl Connection for MssqlConnection {
     }
 
     async fn list_procedures(&self, schema: Option<&str>) -> Result<Vec<String>> {
-        let schema_filter = schema.unwrap_or("dbo").replace('\'', "''");
-        let sql = format!(
-            "SELECT ROUTINE_NAME FROM INFORMATION_SCHEMA.ROUTINES \
-             WHERE ROUTINE_TYPE = 'PROCEDURE' AND ROUTINE_SCHEMA = '{schema_filter}' \
-             ORDER BY ROUTINE_NAME"
-        );
-        let result = self
-            .execute_query(&sql, self.initial_database.as_deref(), None)
-            .await?;
-        Ok(result
-            .rows
-            .into_iter()
-            .filter_map(|r| r.into_iter().next().flatten())
-            .collect())
+        self.list_schema_names(schema, |schema| {
+            format!(
+                "SELECT ROUTINE_NAME FROM INFORMATION_SCHEMA.ROUTINES \
+                 WHERE ROUTINE_TYPE = 'PROCEDURE' AND ROUTINE_SCHEMA = {schema} \
+                 ORDER BY ROUTINE_NAME"
+            )
+        })
+        .await
     }
 
     async fn list_functions(&self, schema: Option<&str>) -> Result<Vec<String>> {
-        let schema_filter = schema.unwrap_or("dbo").replace('\'', "''");
-        let sql = format!(
-            "SELECT ROUTINE_NAME FROM INFORMATION_SCHEMA.ROUTINES \
-             WHERE ROUTINE_TYPE = 'FUNCTION' AND ROUTINE_SCHEMA = '{schema_filter}' \
-             ORDER BY ROUTINE_NAME"
-        );
-        let result = self
-            .execute_query(&sql, self.initial_database.as_deref(), None)
-            .await?;
-        Ok(result
-            .rows
-            .into_iter()
-            .filter_map(|r| r.into_iter().next().flatten())
-            .collect())
+        self.list_schema_names(schema, |schema| {
+            format!(
+                "SELECT ROUTINE_NAME FROM INFORMATION_SCHEMA.ROUTINES \
+                 WHERE ROUTINE_TYPE = 'FUNCTION' AND ROUTINE_SCHEMA = {schema} \
+                 ORDER BY ROUTINE_NAME"
+            )
+        })
+        .await
     }
 
     async fn list_function_signatures(
@@ -1389,23 +1395,17 @@ impl Connection for MssqlConnection {
     async fn list_triggers(&self, schema: Option<&str>) -> Result<Vec<String>> {
         // DML triggers belong to a parent table/view; resolve the parent's
         // schema. `is_ms_shipped` filters out system triggers.
-        let schema_filter = schema.unwrap_or("dbo").replace('\'', "''");
-        let sql = format!(
-            "SELECT tr.name \
-             FROM sys.triggers tr \
-             JOIN sys.objects o ON o.object_id = tr.parent_id \
-             JOIN sys.schemas s ON s.schema_id = o.schema_id \
-             WHERE s.name = '{schema_filter}' AND tr.is_ms_shipped = 0 \
-             ORDER BY tr.name"
-        );
-        let result = self
-            .execute_query(&sql, self.initial_database.as_deref(), None)
-            .await?;
-        Ok(result
-            .rows
-            .into_iter()
-            .filter_map(|r| r.into_iter().next().flatten())
-            .collect())
+        self.list_schema_names(schema, |schema| {
+            format!(
+                "SELECT tr.name \
+                 FROM sys.triggers tr \
+                 JOIN sys.objects o ON o.object_id = tr.parent_id \
+                 JOIN sys.schemas s ON s.schema_id = o.schema_id \
+                 WHERE s.name = {schema} AND tr.is_ms_shipped = 0 \
+                 ORDER BY tr.name"
+            )
+        })
+        .await
     }
 
     async fn object_ddl(
@@ -1450,25 +1450,12 @@ impl Connection for MssqlConnection {
         column_name: &str,
         reference_value: &str,
     ) -> Result<QueryResult> {
-        let quote_identifier = |identifier: &str| {
-            identifier
-                .split('.')
-                .map(|part| {
-                    let part = part.trim();
-                    let unquoted = part
-                        .strip_prefix('[')
-                        .and_then(|value| value.strip_suffix(']'))
-                        .unwrap_or(part);
-                    format!("[{}]", unquoted.replace(']', "]]"))
-                })
-                .collect::<Vec<_>>()
-                .join(".")
-        };
-        let sql = format!(
-            "SELECT TOP 100 * FROM {} WHERE {} = '{}'",
-            quote_identifier(table_name),
-            quote_identifier(column_name),
-            reference_value.replace('\'', "''")
+        let sql = self.database_type().dialect().foreign_key_lookup_query(
+            table_name,
+            column_name,
+            reference_value,
+            false,
+            Some(100),
         );
         self.execute_query(&sql, None, None).await
     }

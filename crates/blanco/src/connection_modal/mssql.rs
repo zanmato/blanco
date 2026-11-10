@@ -13,7 +13,10 @@ use gpui_component::{
 use app_database::{ConnectionData, EnvironmentType};
 
 use super::NewConnectionModal;
-use super::shared::{make_input, render_ssh_section, secret_field, validate_ssh_section};
+use super::shared::{
+    make_input, optional_value, render_ssh_section, secret_field, validate_server_fields,
+    validate_ssh_section,
+};
 use database::SecretKind;
 
 /// An encryption level as stored in the connection (`Off`, `On`, `Required`)
@@ -211,27 +214,14 @@ impl MssqlForm {
         {
             return Some(error);
         }
-        let host = self.host_input.read(cx).value();
-        let port_str = self.port_input.read(cx).value();
-        let database = self.database_input.read(cx).value();
-        let username = self.username_input.read(cx).value();
-
-        if host.is_empty() {
-            return Some(t!("connection_dialog.errors.host_required").into_owned());
-        }
-        if port_str.is_empty() {
-            return Some(t!("connection_dialog.errors.port_required").into_owned());
-        }
-        if port_str.parse::<u16>().is_err() {
-            return Some(t!("connection_dialog.errors.port_invalid").into_owned());
-        }
-        if database.is_empty() {
-            return Some(t!("connection_dialog.errors.database_name_required").into_owned());
-        }
-        if username.is_empty() {
-            return Some(t!("connection_dialog.errors.username_required").into_owned());
-        }
-        None
+        validate_server_fields(
+            &self.host_input,
+            &self.port_input,
+            &self.database_input,
+            &self.username_input,
+            |_| false,
+            cx,
+        )
     }
 
     pub fn get_connection_data(
@@ -266,9 +256,9 @@ impl MssqlForm {
             } else {
                 ssh_port_str.parse::<i32>().ok()?
             };
-            let ssh_password = optional_path(&self.ssh_password_input, cx);
-            let ssh_private_key_path = optional_path(&self.ssh_private_key_input, cx);
-            let ssh_private_key_password = optional_path(&self.ssh_private_key_password_input, cx);
+            let ssh_password = optional_value(&self.ssh_password_input, cx);
+            let ssh_private_key_path = optional_value(&self.ssh_private_key_input, cx);
+            let ssh_private_key_password = optional_value(&self.ssh_private_key_password_input, cx);
 
             ConnectionData::new_mssql(name, host, port, database, username, password).with_ssh(
                 ssh_host.to_string(),
@@ -295,15 +285,6 @@ impl MssqlForm {
         connection.ssl_mode = encrypt;
         connection.trust_server_certificate = self.trust_server_certificate;
         Some(connection)
-    }
-}
-
-fn optional_path(input: &Entity<InputState>, cx: &App) -> Option<String> {
-    let value = input.read(cx).value();
-    if value.is_empty() {
-        None
-    } else {
-        Some(value.to_string())
     }
 }
 

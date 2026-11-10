@@ -223,43 +223,39 @@ impl Connection for PostgresConnection {
     }
 
     async fn get_databases(&self) -> Result<Vec<String>> {
-        let result = self
+        Ok(self
             .execute_query(
                 "SELECT datname FROM pg_database WHERE datistemplate = false ORDER BY datname",
                 self.initial_database.as_deref(),
                 None,
             )
-            .await?;
-        let databases: Vec<String> = result
-            .rows
-            .into_iter()
-            .filter_map(|row| row.into_iter().next().flatten())
-            .collect();
-        Ok(databases)
+            .await?
+            .into_first_column())
     }
 
     async fn get_schemas(&self) -> Result<Vec<String>> {
-        let result = self
+        Ok(self
             .execute_query(
                 "SELECT schema_name FROM information_schema.schemata WHERE schema_name NOT LIKE 'pg_temp%' AND schema_name NOT LIKE 'pg_toast%' ORDER BY schema_name",
                 self.initial_database.as_deref(),
                 None,
             )
-            .await?;
-        let schemas: Vec<String> = result
-            .rows
-            .into_iter()
-            .filter_map(|row| row.into_iter().next().flatten())
-            .collect();
-        Ok(schemas)
+            .await?
+            .into_first_column())
     }
 
     async fn get_tables(&self, schema: Option<&str>) -> Result<Vec<String>> {
-        self.fetch_postgres_tables(schema).await
+        let query = "
+            SELECT table_name
+            FROM information_schema.tables
+            WHERE table_schema = $1
+            AND table_type = 'BASE TABLE'
+            ORDER BY table_name
+        ";
+        self.list_schema_names(query, schema).await
     }
 
     async fn get_views(&self, schema: Option<&str>) -> Result<Vec<String>> {
-        let schema_filter = schema.unwrap_or("public");
         let query = "
             SELECT table_name
             FROM information_schema.views
@@ -268,50 +264,20 @@ impl Connection for PostgresConnection {
             AND table_name NOT IN (SELECT matviewname FROM pg_matviews WHERE schemaname = $1)
             ORDER BY table_name
         ";
-
-        let result = self
-            .execute_query(
-                query,
-                self.initial_database.as_deref(),
-                Some(&[schema_filter.to_string()]),
-            )
-            .await?;
-        let views: Vec<String> = result
-            .rows
-            .into_iter()
-            .filter_map(|row| row.into_iter().next().flatten())
-            .collect();
-
-        Ok(views)
+        self.list_schema_names(query, schema).await
     }
 
     async fn get_materialized_views(&self, schema: Option<&str>) -> Result<Vec<String>> {
-        let schema_filter = schema.unwrap_or("public");
         let query = "
             SELECT matviewname
             FROM pg_matviews
             WHERE schemaname = $1
             ORDER BY matviewname
         ";
-
-        let result = self
-            .execute_query(
-                query,
-                self.initial_database.as_deref(),
-                Some(&[schema_filter.to_string()]),
-            )
-            .await?;
-        let matviews: Vec<String> = result
-            .rows
-            .into_iter()
-            .filter_map(|row| row.into_iter().next().flatten())
-            .collect();
-
-        Ok(matviews)
+        self.list_schema_names(query, schema).await
     }
 
     async fn list_procedures(&self, schema: Option<&str>) -> Result<Vec<String>> {
-        let schema_filter = schema.unwrap_or("public");
         let query = "
             SELECT p.proname
             FROM pg_proc p
@@ -319,22 +285,10 @@ impl Connection for PostgresConnection {
             WHERE n.nspname = $1 AND p.prokind = 'p'
             ORDER BY p.proname
         ";
-        let result = self
-            .execute_query(
-                query,
-                self.initial_database.as_deref(),
-                Some(&[schema_filter.to_string()]),
-            )
-            .await?;
-        Ok(result
-            .rows
-            .into_iter()
-            .filter_map(|r| r.into_iter().next().flatten())
-            .collect())
+        self.list_schema_names(query, schema).await
     }
 
     async fn list_functions(&self, schema: Option<&str>) -> Result<Vec<String>> {
-        let schema_filter = schema.unwrap_or("public");
         let query = "
             SELECT p.proname
             FROM pg_proc p
@@ -342,18 +296,7 @@ impl Connection for PostgresConnection {
             WHERE n.nspname = $1 AND p.prokind = 'f'
             ORDER BY p.proname
         ";
-        let result = self
-            .execute_query(
-                query,
-                self.initial_database.as_deref(),
-                Some(&[schema_filter.to_string()]),
-            )
-            .await?;
-        Ok(result
-            .rows
-            .into_iter()
-            .filter_map(|r| r.into_iter().next().flatten())
-            .collect())
+        self.list_schema_names(query, schema).await
     }
 
     async fn list_types(&self, schema: Option<&str>) -> Result<Vec<(String, ObjectKind)>> {
@@ -395,7 +338,6 @@ impl Connection for PostgresConnection {
     }
 
     async fn list_sequences(&self, schema: Option<&str>) -> Result<Vec<String>> {
-        let schema_filter = schema.unwrap_or("public");
         let query = "
             SELECT c.relname
             FROM pg_class c
@@ -403,18 +345,7 @@ impl Connection for PostgresConnection {
             WHERE n.nspname = $1 AND c.relkind = 'S'
             ORDER BY c.relname
         ";
-        let result = self
-            .execute_query(
-                query,
-                self.initial_database.as_deref(),
-                Some(&[schema_filter.to_string()]),
-            )
-            .await?;
-        Ok(result
-            .rows
-            .into_iter()
-            .filter_map(|row| row.into_iter().next().flatten())
-            .collect())
+        self.list_schema_names(query, schema).await
     }
 
     async fn list_function_signatures(
@@ -462,7 +393,6 @@ impl Connection for PostgresConnection {
     }
 
     async fn list_triggers(&self, schema: Option<&str>) -> Result<Vec<String>> {
-        let schema_filter = schema.unwrap_or("public");
         let query = "
             SELECT DISTINCT t.tgname
             FROM pg_trigger t
@@ -471,18 +401,7 @@ impl Connection for PostgresConnection {
             WHERE n.nspname = $1 AND NOT t.tgisinternal
             ORDER BY t.tgname
         ";
-        let result = self
-            .execute_query(
-                query,
-                self.initial_database.as_deref(),
-                Some(&[schema_filter.to_string()]),
-            )
-            .await?;
-        Ok(result
-            .rows
-            .into_iter()
-            .filter_map(|r| r.into_iter().next().flatten())
-            .collect())
+        self.list_schema_names(query, schema).await
     }
 
     async fn get_object_sizes(
@@ -1297,13 +1216,9 @@ impl Connection for PostgresConnection {
         reference_value: &str,
     ) -> Result<QueryResult, anyhow::Error> {
         const ROW_ESTIMATE_THRESHOLD: i64 = 20;
-        const LIMIT_THRESHOLD: i64 = 100;
+        const LIMIT_THRESHOLD: usize = 100;
         let dialect = self.database_type.dialect();
-        let table_identifier = dialect.quote_path(table_name);
-        let column_identifier = dialect.quote_identifier(column_name);
-        let reference_value = reference_value.replace('\'', "''");
 
-        // Get row estimate from pg_class
         // By the table's own oid: a name alone matches every schema's
         // namesake.
         let estimate_query =
@@ -1312,35 +1227,23 @@ impl Connection for PostgresConnection {
             .execute_query(
                 estimate_query,
                 self.initial_database.as_deref(),
-                Some(std::slice::from_ref(&table_identifier)),
+                Some(&[dialect.quote_path(table_name)]),
             )
             .await?;
-
-        let row_count = estimate_result
+        let small_table = estimate_result
             .rows
             .first()
             .and_then(|row| row.first())
             .and_then(|val| val.as_ref())
             .and_then(|val| val.parse::<i64>().ok())
-            .filter(|n| *n >= 0);
+            .is_some_and(|count| (0..=ROW_ESTIMATE_THRESHOLD).contains(&count));
 
-        if let Some(count) = row_count
-            && count <= ROW_ESTIMATE_THRESHOLD
-        {
-            // Small table: fetch all rows with referenced row first
-            let query = format!(
-                "SELECT * FROM {} ORDER BY {} = '{}' DESC LIMIT {}",
-                table_identifier, column_identifier, reference_value, LIMIT_THRESHOLD
-            );
-            return self
-                .execute_query(&query, self.initial_database.as_deref(), None)
-                .await;
-        }
-
-        // Large table or estimate unavailable: fetch only referenced row
-        let query = format!(
-            "SELECT * FROM {} WHERE {} = '{}'",
-            table_identifier, column_identifier, reference_value
+        let query = dialect.foreign_key_lookup_query(
+            table_name,
+            column_name,
+            reference_value,
+            small_table,
+            small_table.then_some(LIMIT_THRESHOLD),
         );
         self.execute_query(&query, self.initial_database.as_deref(), None)
             .await

@@ -46,8 +46,8 @@ tree-sitter-sql-polyglot = { git = "https://github.com/zanmato/Tree-sitter-sql-p
 # `gpui-fast` feature, so these must name the same gpui-fast packages or cargo
 # builds two copies of gpui. Keep the version requirement in step with the one
 # in gpui-component's workspace Cargo.toml.
-gpui = { package = "gpui-fast", version = "0.1.13" }
-gpui_platform = { package = "gpui-fast-platform", version = "0.1.13", features = [
+gpui = { package = "gpui-fast", version = "0.1.14" }
+gpui_platform = { package = "gpui-fast-platform", version = "0.1.14", features = [
     "font-kit",
     "x11",
     "wayland",

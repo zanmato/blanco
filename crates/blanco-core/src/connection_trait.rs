@@ -433,6 +433,34 @@ pub struct InboundForeignKey {
     pub constraint_name: Option<String>,
 }
 
+impl InboundForeignKey {
+    /// The keys in the `referenced_by` array of a table's JSON summary, as
+    /// the MySQL and PostgreSQL schema queries build it. Entries missing a
+    /// table or column are left out.
+    pub fn list_from_json(table_info: &serde_json::Value) -> Vec<Self> {
+        let Some(entries) = table_info
+            .get("referenced_by")
+            .and_then(|value| value.as_array())
+        else {
+            return Vec::new();
+        };
+        entries
+            .iter()
+            .filter_map(|entry| {
+                let text = |key: &str| entry.get(key).and_then(|value| value.as_str());
+                Some(Self {
+                    from_table: text("from_table")?.to_string(),
+                    from_column: text("from_column")?.to_string(),
+                    to_column: text("to_column")?.to_string(),
+                    constraint_name: text("constraint_name")
+                        .filter(|name| !name.is_empty())
+                        .map(str::to_string),
+                })
+            })
+            .collect()
+    }
+}
+
 /// One foreign key constraint declared on a table, as listed in the structure
 /// tab. Unlike [`ForeignKeyInfo`], which describes a single column, this keeps
 /// composite keys together and carries the referential actions.
@@ -663,6 +691,15 @@ impl TableMetadata {
 }
 
 impl QueryResult {
+    /// The values of the first column, leaving out rows where it is NULL, as
+    /// for a query that lists names.
+    pub fn into_first_column(self) -> Vec<String> {
+        self.rows
+            .into_iter()
+            .filter_map(|row| row.into_iter().next().flatten())
+            .collect()
+    }
+
     pub fn is_empty(&self) -> bool {
         self.rows.is_empty() && self.rows_affected == 0
     }
@@ -1278,9 +1315,38 @@ pub trait ConnectionFactory: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::{
-        ColumnInfo, ForeignKeyConstraint, ForeignKeyInfo, QueryTiming, StatementTimer,
-        sizes_from_rows,
+        ColumnInfo, ForeignKeyConstraint, ForeignKeyInfo, InboundForeignKey, QueryTiming,
+        StatementTimer, sizes_from_rows,
     };
+
+    #[test]
+    fn inbound_foreign_keys_read_from_json_leave_out_incomplete_entries() {
+        let table_info = serde_json::json!({
+            "referenced_by": [
+                {"from_table": "orders", "from_column": "user_id", "to_column": "id", "constraint_name": "orders_user_fk"},
+                {"from_table": "notes", "from_column": "user_id", "to_column": "id", "constraint_name": ""},
+                {"from_table": "broken", "to_column": "id"}
+            ]
+        });
+        assert_eq!(
+            InboundForeignKey::list_from_json(&table_info),
+            vec![
+                InboundForeignKey {
+                    from_table: "orders".to_string(),
+                    from_column: "user_id".to_string(),
+                    to_column: "id".to_string(),
+                    constraint_name: Some("orders_user_fk".to_string()),
+                },
+                InboundForeignKey {
+                    from_table: "notes".to_string(),
+                    from_column: "user_id".to_string(),
+                    to_column: "id".to_string(),
+                    constraint_name: None,
+                },
+            ]
+        );
+        assert!(InboundForeignKey::list_from_json(&serde_json::json!({})).is_empty());
+    }
 
     #[test]
     fn sizes_from_rows_skips_rows_without_a_size() {
